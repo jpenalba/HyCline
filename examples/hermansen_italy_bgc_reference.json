@@ -1,0 +1,310 @@
+{
+  "ND2": {
+    "bgc_alpha": -1.570394,
+    "bgc_beta": 2.68951
+  },
+  "LNPEP": {
+    "bgc_alpha": -0.890533,
+    "bgc_beta": -0.172212
+  },
+  "CLTA": {
+    "bgc_alpha": -0.879445,
+    "bgc_beta": -0.002427
+  },
+  "NFIL3": {
+    "bgc_alpha": -0.644895,
+    "bgc_beta": -0.235306
+  },
+  "SECISBP2": {
+    "bgc_alpha": -0.333848,
+    "bgc_beta": 0.547515
+  },
+  "ZCCHC6": {
+    "bgc_alpha": 0.038055,
+    "bgc_beta": -0.112899
+  },
+  "CETN3": {
+    "bgc_alpha": 1.121535,
+    "bgc_beta": 0.917022
+  },
+  "ZFAND5": {
+    "bgc_alpha": 0.190207,
+    "bgc_beta": 0.350886
+  },
+  "APC_2": {
+    "bgc_alpha": 0.132584,
+    "bgc_beta": 0.102184
+  },
+  "APC_6": {
+    "bgc_alpha": 0.14971,
+    "bgc_beta": -0.221883
+  },
+  "REEP5": {
+    "bgc_alpha": 0.090111,
+    "bgc_beta": 0.062718
+  },
+  "SNX2": {
+    "bgc_alpha": 0.346372,
+    "bgc_beta": 0.207962
+  },
+  "CHD1Z_1": {
+    "bgc_alpha": 1.144867,
+    "bgc_beta": 0.91572
+  },
+  "HSDL2_1": {
+    "bgc_alpha": -1.609943,
+    "bgc_beta": 1.895772
+  },
+  "ACO1": {
+    "bgc_alpha": -0.752426,
+    "bgc_beta": -0.508888
+  },
+  "MCCC2": {
+    "bgc_alpha": -1.014123,
+    "bgc_beta": 0.893836
+  },
+  "GTF2H2_2": {
+    "bgc_alpha": -0.992239,
+    "bgc_beta": 0.985426
+  },
+  "PIK3C3": {
+    "bgc_alpha": -0.083055,
+    "bgc_beta": 0.075608
+  },
+  "TJP2_2": {
+    "bgc_alpha": 0.086779,
+    "bgc_beta": -0.238944
+  },
+  "ADFP": {
+    "bgc_alpha": -0.436372,
+    "bgc_beta": 0.263773
+  },
+  "MAP1B": {
+    "bgc_alpha": 0.503027,
+    "bgc_beta": -0.078855
+  },
+  "TNPO1_1": {
+    "bgc_alpha": 0.246392,
+    "bgc_beta": -0.337508
+  },
+  "CNKSR2": {
+    "bgc_alpha": 0.017687,
+    "bgc_beta": -0.404266
+  },
+  "MYCBP2": {
+    "bgc_alpha": -0.325719,
+    "bgc_beta": 0.071978
+  },
+  "NDFIP2_1": {
+    "bgc_alpha": -0.283957,
+    "bgc_beta": -0.055696
+  },
+  "TMEM135": {
+    "bgc_alpha": -0.351745,
+    "bgc_beta": -0.586427
+  },
+  "RSF1": {
+    "bgc_alpha": 0.330185,
+    "bgc_beta": 0.125523
+  },
+  "A2M_1": {
+    "bgc_alpha": 0.248764,
+    "bgc_beta": 0.210359
+  },
+  "A2ML1_1": {
+    "bgc_alpha": 0.332298,
+    "bgc_beta": 0.757945
+  },
+  "A2ML1_6": {
+    "bgc_alpha": 0.356824,
+    "bgc_beta": -0.027758
+  },
+  "GSTK1": {
+    "bgc_alpha": 0.060669,
+    "bgc_beta": 0.447457
+  },
+  "SLC38A2": {
+    "bgc_alpha": -0.146292,
+    "bgc_beta": -0.511625
+  },
+  "VWF_2": {
+    "bgc_alpha": 0.468253,
+    "bgc_beta": -0.010751
+  },
+  "DYRK4": {
+    "bgc_alpha": 0.011483,
+    "bgc_beta": -0.029882
+  },
+  "LANCL2": {
+    "bgc_alpha": 0.00332,
+    "bgc_beta": -0.578477
+  },
+  "HypC2": {
+    "bgc_alpha": 0.345876,
+    "bgc_beta": -0.132229
+  },
+  "CDC2l5_2": {
+    "bgc_alpha": 0.606848,
+    "bgc_beta": 0.088548
+  },
+  "PTPRM": {
+    "bgc_alpha": -0.27756,
+    "bgc_beta": -0.662838
+  },
+  "RB1CC1": {
+    "bgc_alpha": 0.502004,
+    "bgc_beta": -0.856988
+  },
+  "WDR92": {
+    "bgc_alpha": 0.321175,
+    "bgc_beta": -0.16488
+  },
+  "PPP3R1": {
+    "bgc_alpha": 0.113599,
+    "bgc_beta": 0.112655
+  },
+  "MIA3": {
+    "bgc_alpha": 0.014817,
+    "bgc_beta": 0.581336
+  },
+  "RRP15": {
+    "bgc_alpha": 0.493604,
+    "bgc_beta": -0.012138
+  },
+  "GNPAT_3": {
+    "bgc_alpha": 0.475434,
+    "bgc_beta": 0.570711
+  },
+  "Vps20_1": {
+    "bgc_alpha": -0.112535,
+    "bgc_beta": -0.65817
+  },
+  "PHF3": {
+    "bgc_alpha": -0.656897,
+    "bgc_beta": -0.148654
+  },
+  "YWHAQ": {
+    "bgc_alpha": 0.58476,
+    "bgc_beta": -0.813772
+  },
+  "G3BP2": {
+    "bgc_alpha": -0.276249,
+    "bgc_beta": -0.120051
+  },
+  "ANKRD17_2": {
+    "bgc_alpha": -0.183847,
+    "bgc_beta": -0.37625
+  },
+  "FAM13A1": {
+    "bgc_alpha": -0.020431,
+    "bgc_beta": -0.240282
+  },
+  "EFHA2": {
+    "bgc_alpha": -0.31177,
+    "bgc_beta": -0.346199
+  },
+  "STIM2": {
+    "bgc_alpha": -0.456449,
+    "bgc_beta": -0.330831
+  },
+  "RPS4_1": {
+    "bgc_alpha": 1.726202,
+    "bgc_beta": 0.21442
+  },
+  "TFIID1": {
+    "bgc_alpha": -0.355504,
+    "bgc_beta": -0.244144
+  },
+  "RASGRP1": {
+    "bgc_alpha": -0.263763,
+    "bgc_beta": 0.304387
+  },
+  "HECTD1": {
+    "bgc_alpha": -0.227033,
+    "bgc_beta": 0.000478
+  },
+  "ARHGAP5": {
+    "bgc_alpha": -0.635553,
+    "bgc_beta": -0.201302
+  },
+  "SMEK1": {
+    "bgc_alpha": 0.245581,
+    "bgc_beta": 0.435885
+  },
+  "USP47": {
+    "bgc_alpha": 0.34171,
+    "bgc_beta": -0.463034
+  },
+  "CCAR1": {
+    "bgc_alpha": -0.044556,
+    "bgc_beta": 0.436328
+  },
+  "GSTO2": {
+    "bgc_alpha": -0.038856,
+    "bgc_beta": -0.070536
+  },
+  "OSBPL6": {
+    "bgc_alpha": 0.170017,
+    "bgc_beta": -0.166133
+  },
+  "RABGAP1l_2": {
+    "bgc_alpha": 0.371195,
+    "bgc_beta": -0.403324
+  },
+  "UnTrC8": {
+    "bgc_alpha": 0.023227,
+    "bgc_beta": -0.338524
+  },
+  "LPPR1": {
+    "bgc_alpha": -0.37166,
+    "bgc_beta": -0.121083
+  },
+  "EPS15": {
+    "bgc_alpha": 0.272889,
+    "bgc_beta": -0.179268
+  },
+  "PRRC2C_1": {
+    "bgc_alpha": 0.168771,
+    "bgc_beta": -0.002716
+  },
+  "ILKAP": {
+    "bgc_alpha": -0.264736,
+    "bgc_beta": -0.135565
+  },
+  "KIAA1370": {
+    "bgc_alpha": -0.56019,
+    "bgc_beta": -0.452178
+  },
+  "COPS2": {
+    "bgc_alpha": -0.13946,
+    "bgc_beta": 0.325947
+  },
+  "ETFA_1": {
+    "bgc_alpha": 0.344032,
+    "bgc_beta": -0.287834
+  },
+  "MTMR14": {
+    "bgc_alpha": 0.283419,
+    "bgc_beta": 0.140041
+  },
+  "EGR1": {
+    "bgc_alpha": 0.003442,
+    "bgc_beta": -0.110841
+  },
+  "PITPNC1": {
+    "bgc_alpha": 0.183846,
+    "bgc_beta": -0.553362
+  },
+  "PECAM1": {
+    "bgc_alpha": 0.440567,
+    "bgc_beta": -0.340369
+  },
+  "CLIP2": {
+    "bgc_alpha": 0.621687,
+    "bgc_beta": -0.805046
+  },
+  "NCOA3": {
+    "bgc_alpha": 0.978212,
+    "bgc_beta": -0.879586
+  }
+}

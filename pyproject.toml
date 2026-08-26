@@ -1,0 +1,27 @@
+[project]
+name = "hycline"
+version = "0.1.0-dev"
+description = "Geographic and genomic cline analysis for hybrid zones (HZAR successor)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=2.0",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+bayes = ["numpyro>=0.14", "arviz>=0.16", "jax>=0.4", "pymc>=5.0"]
+
+[project.scripts]
+hycline = "hycline.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["hycline"]

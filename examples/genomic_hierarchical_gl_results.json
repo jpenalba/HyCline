@@ -1,0 +1,38 @@
+{
+  "moderate": [
+    {
+      "rep": 0,
+      "true_v": 1.5473148538377572,
+      "v_cov_gl": true,
+      "v_cov_hard": true,
+      "v_point_gl": 2.526946929947653,
+      "v_point_hard": 1.5831204299165356
+    },
+    {
+      "rep": 1,
+      "true_v": 1.211022193940952,
+      "v_cov_gl": true,
+      "v_cov_hard": true,
+      "v_point_gl": 1.2043505120440434,
+      "v_point_hard": 1.2043892832282914
+    }
+  ],
+  "extreme": [
+    {
+      "rep": 0,
+      "true_v": 2.2072258144146804,
+      "v_cov_gl": true,
+      "v_cov_hard": true,
+      "v_point_gl": 4.116754426362686,
+      "v_point_hard": 1.865461524363821
+    },
+    {
+      "rep": 1,
+      "true_v": 0.7918567233137167,
+      "v_cov_gl": true,
+      "v_cov_hard": true,
+      "v_point_gl": 0.7024912135715953,
+      "v_point_hard": 0.641530043242989
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+# Core requirements (Phase 1: classic MLE fitting, CLI, plotting)
+numpy>=1.24
+scipy>=1.10
+pandas>=2.0
+matplotlib>=3.7
+
+# For --method bayesian (Phase 2), also install requirements-bayes.txt:
+#   pip install -r requirements.txt -r requirements-bayes.txt
+
+# For running the test suite
+# pytest>=7.0

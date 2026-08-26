@@ -1,0 +1,68 @@
+[
+  {
+    "locationID": "A",
+    "distance": "0",
+    "ada_A": "0.1",
+    "ada_nSamples": "10"
+  },
+  {
+    "locationID": "B",
+    "distance": "138.25",
+    "ada_A": "0.357",
+    "ada_nSamples": "14"
+  },
+  {
+    "locationID": "C",
+    "distance": "151.75",
+    "ada_A": "0.2",
+    "ada_nSamples": "40"
+  },
+  {
+    "locationID": "D",
+    "distance": "159.5",
+    "ada_A": "0.45",
+    "ada_nSamples": "40"
+  },
+  {
+    "locationID": "E",
+    "distance": "182.25",
+    "ada_A": "0.31",
+    "ada_nSamples": "42"
+  },
+  {
+    "locationID": "G",
+    "distance": "198.5",
+    "ada_A": "0.545",
+    "ada_nSamples": "22"
+  },
+  {
+    "locationID": "H",
+    "distance": "201.25",
+    "ada_A": "0.568",
+    "ada_nSamples": "44"
+  },
+  {
+    "locationID": "I",
+    "distance": "210",
+    "ada_A": "0.442",
+    "ada_nSamples": "52"
+  },
+  {
+    "locationID": "J",
+    "distance": "230.75",
+    "ada_A": "0.625",
+    "ada_nSamples": "40"
+  },
+  {
+    "locationID": "K",
+    "distance": "319.5",
+    "ada_A": "0.425",
+    "ada_nSamples": "40"
+  },
+  {
+    "locationID": "L",
+    "distance": "569.5",
+    "ada_A": "0.675",
+    "ada_nSamples": "40"
+  }
+]

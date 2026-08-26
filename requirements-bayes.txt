@@ -1,0 +1,9 @@
+# Additional requirements for --method bayesian (Phase 2). Install both
+# files together for the full feature set:
+#
+#   pip install -r requirements.txt -r requirements-bayes.txt
+
+numpyro>=0.14
+arviz>=0.16
+jax>=0.4
+pymc>=5.0

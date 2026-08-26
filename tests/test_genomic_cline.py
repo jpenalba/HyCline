@@ -1,0 +1,54 @@
+import numpy as np
+import pytest
+
+from hycline.models.genomic_cline import GenomicClineParams, genomic_cline_function
+
+
+def test_neutral_locus_reproduces_identity_line():
+    """u=0, v=1 should give phi(h) = h exactly -- the neutral null
+    expectation where a locus tracks genome-wide admixture exactly."""
+    params = GenomicClineParams(u=0.0, v=1.0)
+    h = np.array([0.1, 0.25, 0.5, 0.75, 0.9])
+    phi = genomic_cline_function(h, params)
+    np.testing.assert_allclose(phi, h, atol=1e-9)
+
+
+def test_phi_at_half_hybrid_index_equals_inv_logit_u():
+    """At h=0.5, logit(h)=0, so phi(0.5) should equal inv_logit(u)
+    regardless of v."""
+    for v in [0.1, 1.0, 5.0]:
+        params = GenomicClineParams(u=2.0, v=v)
+        phi = genomic_cline_function(np.array([0.5]), params)
+        expected = 1.0 / (1.0 + np.exp(-2.0))
+        assert phi[0] == pytest.approx(expected, abs=1e-9)
+
+
+def test_high_v_gives_steeper_transition_than_low_v():
+    """Higher v should mean a steeper (more barrier-like) transition:
+    phi should be closer to 0 below h=0.5 and closer to 1 above it."""
+    h = np.array([0.3, 0.7])
+    steep = genomic_cline_function(h, GenomicClineParams(u=0.0, v=5.0))
+    shallow = genomic_cline_function(h, GenomicClineParams(u=0.0, v=0.3))
+    assert steep[0] < shallow[0]  # steeper cline is further from 0.5 below midpoint
+    assert steep[1] > shallow[1]  # and further from 0.5 above midpoint
+
+
+def test_positive_u_shifts_cline_toward_higher_ancestry():
+    h = np.array([0.5])
+    baseline = genomic_cline_function(h, GenomicClineParams(u=0.0, v=1.0))
+    shifted = genomic_cline_function(h, GenomicClineParams(u=3.0, v=1.0))
+    assert shifted[0] > baseline[0]
+
+
+def test_phi_bounded_in_unit_interval():
+    h = np.linspace(0.001, 0.999, 50)
+    for u in [-10, 0, 10]:
+        for v in [0.01, 1, 10]:
+            phi = genomic_cline_function(h, GenomicClineParams(u=u, v=v))
+            assert np.all(phi >= 0) and np.all(phi <= 1)
+
+
+def test_monotonic_in_h_for_positive_v():
+    h = np.linspace(0.01, 0.99, 100)
+    phi = genomic_cline_function(h, GenomicClineParams(u=1.0, v=2.0))
+    assert np.all(np.diff(phi) > 0)
