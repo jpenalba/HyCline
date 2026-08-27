@@ -19,6 +19,7 @@ requested and more broadly useful next increment.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Optional
 
@@ -184,6 +185,72 @@ class HierarchicalGenomicFitResult:
         return "\n".join(lines)
 
 
+def _warn_if_hybrid_index_distribution_uneven(hybrid_index, locus_names, u_mean, v_mean,
+                                                v_steep_threshold: float = 20.0,
+                                                gap_threshold: float = 0.05) -> None:
+    """Bailey (2024, the gghybrid paper, *Mol Ecol Resour* 24:e13910) found,
+    via direct simulation (their section 2.3.4, Figure 7, Figure S3), that
+    an uneven distribution of hybrid index values specifically degrades
+    genomic-cline estimation accuracy for STEEP clines -- fitted cline
+    centers become highly clustered and v estimates less accurate, with
+    higher posterior uncertainty, specifically for loci whose true steep
+    transition falls in a gap of hybrid-index sampling. Their own null/
+    shallow-cline simulation (v=1) showed little impact from the same
+    uneven sampling (their Figure 7a,b) -- this is not a generic "check
+    your sampling" warning, it targets exactly the condition their
+    simulations showed matters, not sparse sampling in general.
+
+    `v_steep_threshold=20.0` matches Bailey's own reported criterion
+    directly (their Figure S3 identifies the clustering effect among loci
+    passing p<=.05 and v>20), not an arbitrary round number.
+
+    `gap_threshold=0.05` (5% of the full [0,1] hybrid-index range) is
+    this project's own choice, stated explicitly rather than left
+    implicit: Bailey's paper illustrates the effect visually (Figure 7/
+    S3) rather than stating a specific gap-size criterion, so there is no
+    "correct" published number to match here. See BACKEND_PHASE4.md
+    section 16 for the full account, including why this check runs
+    post-fit (needs each locus's own fitted v/center) rather than as a
+    pre-fit data check.
+    """
+    hybrid_index = np.asarray(hybrid_index, dtype=float)
+    u_mean = np.asarray(u_mean, dtype=float)
+    v_mean = np.asarray(v_mean, dtype=float)
+    logit_center = u_mean / v_mean
+    center = 1.0 / (1.0 + np.exp(-logit_center))
+    sorted_hi = np.sort(hybrid_index)
+
+    flagged = []
+    for name, v_i, c_i in zip(locus_names, v_mean, center):
+        if v_i <= v_steep_threshold:
+            continue
+        nearest_dist = float(np.min(np.abs(sorted_hi - c_i)))
+        if nearest_dist > gap_threshold:
+            flagged.append((name, v_i, c_i, nearest_dist))
+
+    if flagged:
+        detail = "; ".join(
+            f"{name} (v={v_i:.1f}, center={c_i:.3f}, nearest sampled hybrid "
+            f"index {nearest_dist:.3f} away)"
+            for name, v_i, c_i, nearest_dist in flagged)
+        warnings.warn(
+            f"{len(flagged)} locus/loci have a steep fitted cline (v > "
+            f"{v_steep_threshold:g}) centered in a sparsely-sampled region of "
+            f"hybrid-index space (nearest sampled individual more than "
+            f"{gap_threshold:g} away): {detail}. Bailey (2024, gghybrid paper) "
+            "found this specific combination -- a steep cline whose transition "
+            "falls in a gap of hybrid-index sampling -- degrades cline-parameter "
+            "accuracy (v estimates less accurate, cline centers artificially "
+            "clustered, higher posterior uncertainty), while null/shallow clines "
+            "were largely unaffected by the same uneven sampling. Treat these "
+            "loci's fitted parameters with extra caution, and consider whether "
+            "denser hybrid-index sampling near their fitted center is feasible "
+            "before drawing conclusions from them. See BACKEND_PHASE4.md "
+            "section 16 for the full investigation.",
+            UserWarning, stacklevel=3,
+        )
+
+
 def fit_hierarchical_genomic_batch(hybrid_index: np.ndarray, n_alleles: np.ndarray,
                                     n_focal: np.ndarray,
                                     locus_names: Optional[list] = None,
@@ -281,4 +348,10 @@ def fit_hierarchical_genomic_batch(hybrid_index: np.ndarray, n_alleles: np.ndarr
     else:
         dims = {"u": ["locus"], "log_v": ["locus"]}
     idata = az.from_numpyro(mcmc, coords={"locus": locus_names}, dims=dims)
-    return HierarchicalGenomicFitResult(idata=idata, locus_names=locus_names)
+    result = HierarchicalGenomicFitResult(idata=idata, locus_names=locus_names)
+
+    locus_df = result.locus_summary()
+    _warn_if_hybrid_index_distribution_uneven(
+        hybrid_index, locus_df["locus"], locus_df["u_mean"], locus_df["v_mean"])
+
+    return result

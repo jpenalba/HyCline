@@ -1461,3 +1461,166 @@ caveat lines are skipped cleanly and the data rows parse correctly.
   input CSV conventions actually agree in practice, not just on paper.
 - Full test suite reconciled against `--collect-only`'s total after this
   feature landed: 455 tests collected, all passing in batched runs.
+
+## 16. Two small, independent items surfaced by section 15's work but not part of it
+
+README.md's Tier 1 backlog named these as "two genuinely separate items
+surfaced during that same design process" while section 15 was being
+specified -- both from Bailey (2024), read directly, not the paper
+section 15 itself is built on (Fitzpatrick 2013).
+
+### 16.1 A real documentation inaccuracy found and corrected before implementing either item
+
+Before starting, README.md's own spec text for the first item described
+it as "distinct from the existing near-invariant-locus warning" in
+`hycline/inference/mle.py`. Checked directly rather than trusted (per
+this project's own standing practice, and the recent precedent of a
+fabricated `arviz==1.2.0` version claim in section 8): `grep -rn
+"invariant" hycline/` across the entire package, including tests and
+examples, returns nothing except two unrelated statistical usages of the
+word "invariant" in `examples/validate_gghybrid_italy.py`. No such
+warning function exists, and none ever did in this codebase's git
+history searched for the string. An earlier session's spec-writing
+apparently assumed this warning existed (plausibly because a *pattern*
+like it was being planned elsewhere, or by analogy with the T-cline
+work's own boundary warning in `hycline/inference/mle.py`) without
+verifying against the actual code. Corrected directly in README.md
+rather than left standing, matching this project's stated principle that
+a wrong claim gets corrected in place, not quietly dropped.
+
+### 16.2 `_warn_if_hybrid_index_distribution_uneven`: read Bailey's own numbers directly, not the secondhand summary already in this project's docs
+
+Bailey (2024)'s section 2.3.4, read directly from the PDF rather than
+trusted from `references/README.md`'s own prior summary of it (which
+turned out accurate, but was checked rather than assumed): simulated
+1000 diploid loci twice, once at `v=1` (null) and once at `v=30` (very
+steep), both with evenly spaced true cline centres across [0.0001,
+0.9999] but an uneven distribution of 1000 simulated individuals'
+hybrid indices. Their finding, precisely: "For null cline steepness
+(v=1) clustering of hybrid indices had little impact on prediction
+accuracy [...] but for a steep cline (v=30) both parameters were
+affected. Estimated cline centres were highly clustered and v estimates
+were less accurate and with higher uncertainty for loci whose steep
+clines were centred in gaps in hybrid index." Their own Figure S3
+identifies the affected loci as those passing `p<=.05` and `v>20`.
+
+**Implementation** (`hycline.inference.mcmc_genomic_hierarchical.
+_warn_if_hybrid_index_distribution_uneven`, called automatically at the
+end of `fit_hierarchical_genomic_batch`): for each locus whose fitted
+posterior-mean `v > 20` (Bailey's own reported threshold, not invented),
+compute the distance from its fitted center (`sigmoid(u/v)`, on the
+natural [0,1] hybrid-index scale) to the nearest actually-sampled
+hybrid-index value. If that distance exceeds `0.05` (5% of the full
+[0,1] range), warn, naming the specific locus/loci, their fitted `v`/
+center, and how far the nearest sample actually is.
+
+**Two design decisions Bailey's own paper doesn't specify, made
+explicit rather than left implicit:**
+- The `v>20` steepness threshold is Bailey's own number, directly
+  matched. The `0.05` gap-size threshold is **not** from the paper --
+  Bailey illustrates the effect visually (Figure 7, Figure S3) rather
+  than stating a specific gap-size criterion, so there is no "correct"
+  published number to match. Stated as this project's own choice,
+  clearly labeled as such in the function's own docstring, not presented
+  as if it came from the paper.
+- The check runs **post-fit**, not as a pre-fit data-quality check on
+  `hybrid_index` alone. This is deliberate: Bailey's own finding is
+  specifically about steep clines centered in a hybrid-index gap, not
+  about uneven sampling in the abstract (their own null-cline simulation
+  showed the same uneven sampling was largely harmless) -- so the check
+  genuinely needs each locus's own fitted `v` and center, which don't
+  exist until after the hierarchical fit completes. A pre-fit check could
+  only ever flag "your sampling has gaps," which isn't the actual,
+  narrower finding worth surfacing.
+
+**Verification, not just a mocked unit test:** confirmed the helper
+function fires correctly in isolation (a locus with `v>20` centered
+exactly in a constructed gap fires; the same gap with a well-sampled
+center, or with `v<=20`, does not; evenly-sampled hybrid index never
+fires) *and* end-to-end through the real `fit_hierarchical_genomic_batch`
+pipeline on genuinely simulated data with a real gap. The end-to-end
+case needed real iteration, not just writing the test once: a
+`true_v=30` locus's posterior-mean `v` shrank to ~16-18 under the
+default hierarchical prior (`sigma_log_v_scale=1.0`) with only 2 loci to
+estimate population-level spread from -- below the warning's own
+threshold, a real demonstration that hierarchical partial pooling can
+itself mask exactly the kind of extreme, poorly-identified locus this
+warning exists to catch. Fixed for the test by loosening
+`sigma_log_v_scale` to 3.0 and raising the true `v` to 80, at which point
+the fitted locus's own posterior for `v` became extremely large and
+poorly constrained (posterior mean in the millions) -- not a test
+artifact, but a genuine demonstration of Bailey's underlying point: a
+steep cline with no individuals sampled near its transition has a
+genuinely unidentifiable rate parameter.
+
+### 16.3 `null_model_aicc_delta`: the simpler comparison Bailey's own richer one was scoped down from
+
+Bailey (2024) section 3.2, also read directly: "Running the full model
+and both one-parameter models (with each of v or centre fixed at the
+null value) and ranking loci by delta-AIC or delta-waic for each
+parameter comparison is preferred [to raw p-values], with waic
+performing best in simulations." This describes three models per locus
+(full; centre-fixed-at-null; rate-fixed-at-null) and two separate
+delta-AIC/delta-WAIC comparisons, telling you not just *whether* a locus
+deviates from null but *which* parameter drives it.
+
+**What's implemented is the simpler comparison README.md's Tier 1 backlog
+actually scoped**: one full-vs-fully-null (`u=0`, `v=1`, zero free
+parameters) delta-AICc, not Bailey's three-model decomposition, and not
+delta-WAIC (which needs Bayesian posterior samples this classic-MLE-only
+path doesn't produce). This is a stated scoping choice specific to
+`fit-genomic`/`fit-genomic`'s GL variant being classic-MLE, not a
+misreading of the paper -- the richer three-model version, and a
+delta-WAIC equivalent for `fit-hierarchical-genomic`'s Bayesian path, are
+real, distinct further extensions, not implemented here.
+
+`hycline.inference.mle_genomic.null_model_aicc_delta(data, fit,
+log_likelihood_fn=...)` evaluates the null model's log-likelihood at
+fixed `(u=0, v=1)` -- no optimization, just one likelihood evaluation --
+computes its AICc with `k=0` free parameters (which correctly reduces to
+plain AIC, since the small-sample correction term `2k(k+1)/(n-k-1)` is
+zero when `k=0`), and returns `delta_aicc_from_null = aicc_null -
+aicc_full`. Positive means the fitted model is favored; the higher, the
+stronger the evidence against a neutral origin for that locus. A generic
+`log_likelihood_fn` parameter (default: the hard-count binomial
+likelihood) lets the same function serve both `fit-genomic`'s hard-count
+path and its genotype-likelihood path (passing
+`hycline.likelihoods.genotype_likelihood.log_likelihood_genomic`)
+without `mle_genomic.py` needing to import GL-specific code it otherwise
+has no dependency on.
+
+Wired into both `_fit_genomic_hard_count` and `_fit_genomic_gl` in
+`cli.py`: three new columns (`log_likelihood_null`, `aicc_null`,
+`delta_aicc_from_null`) added to `*_summary.csv`, and a ranked table
+(descending `delta_aicc_from_null`) printed to stdout whenever more than
+one locus was fit -- skipped for single-locus runs, where a ranking has
+nothing to rank.
+
+**Verification, on real synthetic data with known ground truth**
+(`examples/synthetic_genomic_clines.csv`, the same 5-locus dataset
+section 15's own coupling/candidate-flagging examples and the genomic
+user guide's hierarchical-fitting example already use): the three
+genuinely non-null loci (`biased1`, `barrier1`, `permeable1`) rank at
+the top with `delta_aicc_from_null` of 242.16, 101.64, and 65.06
+respectively; the two genuinely neutral loci (`neutral1`, `neutral2`)
+correctly land near zero (-0.70, -1.52) -- the two extra free parameters
+weren't worth their AICc penalty for either. Also verified directly on
+synthetic data spanning the range from clearly-null through weakly- to
+strongly-non-null that `delta_aicc_from_null` orders them correctly
+(`tests/test_mle_genomic.py::
+test_null_model_aicc_delta_ranks_multiple_loci_sensibly`), and that the
+formula matches a from-scratch manual AICc computation exactly, not just
+approximately.
+
+### 16.4 Verification
+
+Full test suite re-run in batches after both items landed: 24 new tests
+across `tests/test_mle_genomic.py` (delta-AICc formula correctness,
+ranking direction, real-data recovery), `tests/test_cli.py` (both
+`fit-genomic` code paths -- hard-count and genotype-likelihood -- writing
+the new summary columns and printing the ranked table; single-locus runs
+correctly skip the ranking table), and
+`tests/test_mcmc_genomic_hierarchical.py` (the unevenness-warning helper
+in isolation across four constructed cases, plus one real end-to-end
+fit that triggers it). Every collected test reconciled against
+`--collect-only`'s total, per this project's own standing practice.

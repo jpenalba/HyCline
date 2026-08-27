@@ -641,6 +641,17 @@ catching a real problem on real data.
   same approach as Phase 1's geographic MLE. `GenomicFitResult.summary()`
   includes a plain-language interpretation of the fitted rate parameter
   (barrier locus / elevated introgression / ~neutral).
+- `hycline.inference.mle_genomic.null_model_aicc_delta` -- ranks loci by
+  delta-AICc against the fixed neutral null (`u=0`, `v=1`), Bailey
+  (2024, the gghybrid paper)'s own recommended alternative to raw
+  p-values for choosing candidate loci (their simulations found the
+  p-value's relationship to true effect size non-monotonic). Wired into
+  `fit-genomic`'s CLI (both hard-count and genotype-likelihood input):
+  three new summary-CSV columns and a ranked table printed to stdout
+  whenever more than one locus is fit. Implements the simpler full-vs-
+  fully-null comparison, not Bailey's own richer three-model
+  decomposition or a delta-WAIC equivalent -- a stated scoping choice,
+  not an oversight; see BACKEND_PHASE4.md section 16.
 - `hycline.viz.plotting.plot_genomic_cline_fit` /
   `plot_genomic_multi_locus_grid` -- observed genotypes vs. hybrid index,
   with the neutral (v=1, u=0) expectation shown as a reference line.
@@ -702,6 +713,18 @@ command:**
   known ground truth (15 simulated loci, true sigma_center=0.8, clean
   convergence, per-locus center/v recovery correlation 0.965/0.940). See
   BACKEND_PHASE4.md section 7.4.
+- `_warn_if_hybrid_index_distribution_uneven` -- called automatically at
+  the end of `fit_hierarchical_genomic_batch`, warns when a steep-fitted
+  locus (`v>20`, Bailey 2024's own reported threshold) has its center
+  sitting in a gap of the sampled hybrid-index distribution (no sampled
+  individual within 5% of it). Bailey's own simulations found this
+  specific combination -- not uneven sampling generally, and not steep
+  clines generally -- degrades accuracy (clustered centers, less
+  accurate/higher-uncertainty `v`); their null/shallow-cline simulations
+  were largely unaffected by the same uneven sampling, which is why the
+  check is steepness-gated rather than a generic sampling-quality check.
+  Runs post-fit by necessity -- it needs each locus's own fitted center,
+  which doesn't exist before fitting. See BACKEND_PHASE4.md section 16.
 
 **Phase 4, Component C (coupling/concordance analysis) -- now with a CLI
 command:**
@@ -1022,33 +1045,36 @@ geographic-cline toolchain (`Analyse`/ClineFit, Barton & Baird 1995) never
 offered a ranked per-locus candidate list, and HZAR has no cross-locus
 flagging at all.
 
-Two genuinely separate items surfaced during that same design process,
-still open and not part of what shipped above:
+Two genuinely separate items surfaced during that same design process --
+both now done, not backlog. `hycline.inference.mcmc_genomic_hierarchical.
+_warn_if_hybrid_index_distribution_uneven` (called automatically by
+`fit-hierarchical-genomic`) warns when a steep-fitted locus (`v>20`,
+Bailey 2024's own reported threshold) has its center sitting in a gap of
+the sampled hybrid-index distribution -- the specific combination Bailey
+found degrades accuracy, not uneven sampling in general. Checked
+directly while scoping this: an earlier draft of this spec claimed a
+comparable "existing near-invariant-locus warning" already lived in
+`hycline/inference/mle.py` to be "distinct from" -- that was never
+verified against the actual codebase, and no such warning exists;
+corrected in this pass rather than left standing.
+`hycline.inference.mle_genomic.null_model_aicc_delta` (wired into
+`fit-genomic`'s CLI, both hard-count and genotype-likelihood paths) ranks
+loci by delta-AICc against the fixed neutral null (`u=0`, `v=1`) --
+Bailey's own recommended alternative to raw p-values, which their
+simulations found non-monotonic with true effect size. This implements
+the simpler full-vs-fully-null comparison, not Bailey's own richer
+three-model decomposition (separate delta-AIC for centre-only and
+rate-only one-parameter models, which would additionally identify *which*
+parameter drives a deviation) or a delta-WAIC equivalent for the Bayesian
+hierarchical path (WAIC needs posterior samples classic MLE doesn't
+produce) -- both real, stated-as-such scoping choices, not oversights.
+See BACKEND_PHASE4.md section 16 for the full design writeup on both,
+including the real MCMC-shrinkage finding surfaced while building the
+end-to-end test for the first one (a hierarchical fit's own partial
+pooling can shrink a genuinely steep, poorly-identified locus's posterior
+mean back under the warning's own threshold with too few loci to
+estimate population-level spread from).
 
-- **A separate, genuinely new warning candidate for the fitting step this
-  feature depends on**, distinct from the existing near-invariant-locus
-  warning: Bailey (2024) found that an *uneven distribution of hybrid
-  index values* specifically degrades accuracy for steep genomic clines
-  (`v` estimates less accurate, cline centers artificially clustered,
-  higher uncertainty for loci whose true steep transition falls in a
-  sparsely-sampled region of hybrid-index space) -- worth its own
-  `_warn_if_hybrid_index_distribution_uneven`-style check in
-  `fit-hierarchical-genomic` itself (upstream of this feature, not inside
-  it), likely checking for large gaps in the empirical hybrid-index
-  distribution relative to the fitted cline's steepness.
-- **Ranking, not just binary flagging, for the classic-MLE genomic path
-  specifically**: independent of the hierarchical-only flagging feature
-  above, `fit-genomic`/`fit-hierarchical-genomic` already produce enough
-  (log-likelihood, parameter count) to rank loci by delta-AIC against the
-  fixed neutral null (`u=0`, `v=1`) -- Bailey (2024)'s own simulations
-  found the reported Bayesian p-value's relationship to true deviation is
-  non-monotonic and states directly that "use of Bayesian posterior
-  distributions and p values to select candidate non-null loci is
-  problematic and should be avoided," with WAIC performing best in their
-  comparison. This is a smaller, complementary addition for users working
-  from classic-MLE independent fits rather than the hierarchical models --
-  worth keeping as its own small item since it doesn't require the
-  hierarchical-fit prerequisite the categorized flagging above does.
 - **Two related items, read about but deliberately out of scope for this
   pass, named so they aren't lost**: Payseur (2010)'s reproductive-
   barrier-strength formula (`B = delta-p_center / (dp/dx)_edge`, Nagylaki

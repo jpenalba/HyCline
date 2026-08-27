@@ -2493,8 +2493,26 @@ def cmd_fit_genomic(args) -> int:
     return _fit_genomic_hard_count(args, out_dir, prefix)
 
 
+def _print_delta_aicc_ranking(summary_rows) -> None:
+    """Print loci ranked by delta-AICc against the fixed neutral null
+    (u=0, v=1), Bailey (2024)'s own recommended alternative to raw
+    p-values for ranking candidate loci -- see
+    hycline.inference.mle_genomic.null_model_aicc_delta's docstring for
+    the full methodology and BACKEND_PHASE4.md section 16."""
+    ranked = sorted(summary_rows, key=lambda r: r["delta_aicc_from_null"], reverse=True)
+    print("\nLoci ranked by delta-AICc against the fixed neutral null (u=0, v=1) "
+          "(Bailey 2024's recommended alternative to raw p-values for ranking "
+          "candidate loci -- higher delta-AICc = stronger evidence against null):")
+    for r in ranked:
+        print(f"  {r['locus']:<20s} delta_AICc={r['delta_aicc_from_null']:8.2f}  "
+              f"(u={r['u']:.3f}, v={r['v']:.3f})")
+    print("  NOTE: delta-AICc near 0 or negative means no meaningful evidence of "
+          "deviation from null -- the two extra free parameters (u, v) weren't "
+          "worth their AICc penalty for that locus.")
+
+
 def _fit_genomic_hard_count(args, out_dir, prefix) -> int:
-    from hycline.inference.mle_genomic import fit_genomic_cline_mle
+    from hycline.inference.mle_genomic import fit_genomic_cline_mle, null_model_aicc_delta
     from hycline.models.genomic_cline import genomic_cline_function
     from hycline.viz.plotting import plot_multi_locus_overlay
 
@@ -2524,10 +2542,12 @@ def _fit_genomic_hard_count(args, out_dir, prefix) -> int:
         for h, phi in zip(h_smooth, phi_smooth):
             curve_rows.append({"locus": locus_name, "hybrid_index": h, "fitted_freq": phi})
 
+        null_comparison = null_model_aicc_delta(data, fit)
         row = {
             "locus": locus_name, "n_obs": fit.n_obs, "converged": fit.success,
             "log_likelihood": fit.log_likelihood, "aicc": fit.aicc,
             "u": fit.params.u, "v": fit.params.v,
+            **null_comparison,
         }
         if fit.std_errors is not None:
             for i, name in enumerate(["u", "v"]):
@@ -2538,6 +2558,9 @@ def _fit_genomic_hard_count(args, out_dir, prefix) -> int:
     if not summary_rows:
         print("\nERROR: no loci fit successfully.", file=sys.stderr)
         return 1
+
+    if len(summary_rows) > 1:
+        _print_delta_aicc_ranking(summary_rows)
 
     pd.DataFrame(summary_rows).to_csv(out_dir / f"{prefix}_summary.csv", index=False)
     curve_df = pd.DataFrame(curve_rows)
@@ -3161,6 +3184,8 @@ def cmd_flag_candidates_genomic(args) -> int:
 
 def _fit_genomic_gl(args, out_dir, prefix) -> int:
     from hycline.inference.mle_genotype_likelihood import fit_mle_genomic_gl
+    from hycline.inference.mle_genomic import null_model_aicc_delta
+    from hycline.likelihoods.genotype_likelihood import log_likelihood_genomic
     from hycline.models.genomic_cline import genomic_cline_function
     from hycline.viz.plotting import plot_multi_locus_overlay
 
@@ -3189,10 +3214,12 @@ def _fit_genomic_gl(args, out_dir, prefix) -> int:
         for h, phi in zip(h_smooth, phi_smooth):
             curve_rows.append({"locus": locus_name, "hybrid_index": h, "fitted_freq": phi})
 
+        null_comparison = null_model_aicc_delta(data, fit, log_likelihood_fn=log_likelihood_genomic)
         row = {
             "locus": locus_name, "n_obs": fit.n_obs, "converged": fit.success,
             "log_likelihood": fit.log_likelihood, "aicc": fit.aicc,
             "u": fit.params.u, "v": fit.params.v,
+            **null_comparison,
         }
         if fit.std_errors is not None:
             for i, name in enumerate(["u", "v"]):
@@ -3203,6 +3230,9 @@ def _fit_genomic_gl(args, out_dir, prefix) -> int:
     if not summary_rows:
         print("\nERROR: no loci fit successfully.", file=sys.stderr)
         return 1
+
+    if len(summary_rows) > 1:
+        _print_delta_aicc_ranking(summary_rows)
 
     pd.DataFrame(summary_rows).to_csv(out_dir / f"{prefix}_summary.csv", index=False)
     curve_df = pd.DataFrame(curve_rows)

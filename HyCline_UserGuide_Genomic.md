@@ -280,6 +280,51 @@ genotype-likelihood input -- there's no Bayesian backend for independent
 per-locus genomic-cline fitting. The one Bayesian genomic-cline path is
 hierarchical fitting, below.
 
+### Ranking candidate loci by delta-AICc, not raw p-values
+
+Whenever `fit-genomic` fits more than one locus, it also ranks every
+locus by **delta-AICc against the fixed neutral null** (`u=0`, `v=1` --
+no free parameters, not fit): Bailey (2024, the gghybrid paper)'s own
+recommended alternative to using the reported significance/p-value to
+pick candidate loci, since that value's relationship to true effect size
+turned out non-monotonic in their own simulations ("use of [...] p
+values to select candidate non-null loci is problematic and should be
+avoided").
+
+Real output, on the same 5-locus dataset used above for hierarchical
+fitting:
+
+```
+Loci ranked by delta-AICc against the fixed neutral null (u=0, v=1) (Bailey 2024's recommended alternative to raw p-values for ranking candidate loci -- higher delta-AICc = stronger evidence against null):
+  biased1              delta_AICc=  242.16  (u=2.766, v=1.264)
+  barrier1             delta_AICc=  101.64  (u=-0.093, v=5.129)
+  permeable1           delta_AICc=   65.06  (u=-0.076, v=0.218)
+  neutral1             delta_AICc=   -0.70  (u=0.214, v=0.904)
+  neutral2             delta_AICc=   -1.52  (u=-0.137, v=0.852)
+  NOTE: delta-AICc near 0 or negative means no meaningful evidence of deviation from null -- the two extra free parameters (u, v) weren't worth their AICc penalty for that locus.
+```
+
+The three genuinely non-null loci (`biased1`, `barrier1`, `permeable1`)
+land at the top with large positive `delta_aicc_from_null`; the two
+truly neutral loci (`neutral1`, `neutral2`) correctly show values near
+zero or slightly negative -- the simpler null model wasn't worth
+improving on for those two. The same three columns
+(`log_likelihood_null`, `aicc_null`, `delta_aicc_from_null`) are also
+written into `*_summary.csv`, so you can re-sort or re-threshold without
+re-running anything.
+
+**What this doesn't do, stated plainly rather than left implicit:**
+Bailey's own recommendation is a richer three-model comparison --
+ranking separately by delta-AIC for a centre-only one-parameter model
+and a rate-only one-parameter model, which additionally tells you
+*which* parameter is driving a locus's deviation -- and found delta-WAIC
+(needing Bayesian posterior samples) outperforms delta-AIC in their own
+simulations. This ranking implements the simpler full-vs-fully-null
+comparison, available from classic MLE alone with no Bayesian fit
+required; it tells you *whether* a locus deviates from null, not
+specifically *which* parameter drives it. See BACKEND_PHASE4.md
+section 16 for the full account.
+
 ---
 
 ## Fitting hierarchically
@@ -326,6 +371,25 @@ loci or use `fit-genomic` (independent fitting) instead.
 Requires every locus to have data for exactly the same individuals -- no
 per-locus missing data. If your loci don't share individuals exactly, use
 `fit-genomic` instead.
+
+**A warning worth understanding, not dismissing, if it fires:**
+`fit-hierarchical-genomic` checks, after fitting, whether any locus with
+a steep fitted cline (`v > 20`) has its center sitting in a gap of your
+sampled hybrid-index distribution (no sampled individual within 5% of
+that center). Bailey (2024) found this specific combination -- not
+uneven sampling generally, and not steep clines generally, but the two
+together -- degrades genomic-cline accuracy: fitted centers become
+artificially clustered and `v` estimates less accurate with higher
+posterior uncertainty. Their own null/shallow-cline simulations (`v=1`)
+were largely unaffected by the same uneven sampling, which is why this
+check only fires for steep loci specifically. If you see it, the fitted
+`v` for that locus is genuinely less trustworthy than its reported
+credible interval alone would suggest -- denser sampling near its fitted
+center, if you can get it, is the real fix; treating the point estimate
+with extra caution is the fallback if you can't. See BACKEND_PHASE4.md
+section 16 for the full investigation, including why this can't be
+caught before fitting (it needs each locus's own fitted center, which
+you don't have until after the fit).
 
 Model-specific flags: `--mu-u-scale`/`--sigma-u-scale` (bias
 hyperpriors), `--mu-log-v-loc`/`--mu-log-v-scale`/`--sigma-log-v-scale`

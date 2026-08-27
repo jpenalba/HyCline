@@ -10,6 +10,8 @@ tests are a faster/stricter version of, and BACKEND_PHASE4.md for the
 full design writeup.
 """
 
+import warnings
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -18,6 +20,7 @@ from hycline.data.schema import HybridIndexLocusData
 from hycline.inference.mle_genomic import fit_genomic_cline_mle
 from hycline.inference.mcmc_genomic_hierarchical import (
     fit_hierarchical_genomic_batch, _genomic_cline_core_jax,
+    _warn_if_hybrid_index_distribution_uneven,
 )
 from hycline.models.genomic_cline import GenomicClineParams, genomic_cline_function
 
@@ -278,3 +281,90 @@ def test_pool_center_jax_and_numpy_reparameterization_are_exact():
 
     np.testing.assert_allclose(phi_direct, phi_derived, atol=1e-12)
     assert u_derived == pytest.approx(u_true)
+
+
+# ---------------------------------------------------------------------------
+# Hybrid-index-distribution-unevenness warning (Bailey 2024, section 2.3.4)
+# ---------------------------------------------------------------------------
+
+def test_warn_if_hybrid_index_uneven_fires_for_steep_locus_centered_in_a_gap():
+    hybrid_index = np.concatenate([np.linspace(0.0, 0.3, 20), np.linspace(0.7, 1.0, 20)])
+    names = ["gap_locus"]
+    u_mean = np.array([0.0])  # logit(center)=0 -> center=0.5, squarely in the 0.3-0.7 gap
+    v_mean = np.array([30.0])  # steep, matching Bailey's own simulated v=30
+
+    with pytest.warns(UserWarning, match="sparsely-sampled region of hybrid-index space"):
+        _warn_if_hybrid_index_distribution_uneven(hybrid_index, names, u_mean, v_mean)
+
+
+def test_warn_if_hybrid_index_uneven_silent_for_well_sampled_steep_locus():
+    hybrid_index = np.concatenate([np.linspace(0.0, 0.3, 20), np.linspace(0.7, 1.0, 20)])
+    names = ["well_sampled_locus"]
+    logit_c = np.log(0.15 / 0.85)  # center=0.15, well inside the sampled 0.0-0.3 region
+    u_mean = np.array([logit_c * 30.0])
+    v_mean = np.array([30.0])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _warn_if_hybrid_index_distribution_uneven(hybrid_index, names, u_mean, v_mean)
+
+
+def test_warn_if_hybrid_index_uneven_silent_for_shallow_locus_in_the_same_gap():
+    # matches Bailey's own finding: null/shallow clines (v=1) were largely
+    # unaffected by the same uneven sampling that degrades steep ones
+    hybrid_index = np.concatenate([np.linspace(0.0, 0.3, 20), np.linspace(0.7, 1.0, 20)])
+    names = ["shallow_in_gap"]
+    u_mean = np.array([0.0])
+    v_mean = np.array([1.0])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _warn_if_hybrid_index_distribution_uneven(hybrid_index, names, u_mean, v_mean)
+
+
+def test_warn_if_hybrid_index_uneven_silent_for_evenly_sampled_hybrid_index():
+    hybrid_index = np.linspace(0.0, 1.0, 40)
+    names = ["a", "b"]
+    u_mean = np.array([0.0, 0.0])
+    v_mean = np.array([30.0, 30.0])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _warn_if_hybrid_index_distribution_uneven(hybrid_index, names, u_mean, v_mean)
+
+
+def test_fit_hierarchical_genomic_batch_warns_end_to_end_on_real_uneven_sampling():
+    # A real (not mocked) fit: genuinely uneven hybrid-index sampling with
+    # a gap, and a locus simulated with a steep true cline centered in
+    # that gap -- confirms the warning fires through the actual fitting
+    # pipeline, not just the isolated helper function. sigma_log_v_scale
+    # is loosened from its default (1.0 -> 3.0) because with only 2 loci
+    # to estimate population-level spread from, the default hierarchical
+    # prior's shrinkage otherwise pulls the steep locus's posterior mean
+    # v below the warning's own v>20 threshold -- confirmed directly
+    # (default settings gave v_mean~=17-18 across two tried seeds, just
+    # under threshold) before loosening the prior for this test
+    # specifically. The resulting v posterior for the gap-centered locus
+    # is itself extremely poorly constrained (very large, high-variance)
+    # -- a real demonstration of Bailey's own finding, not a test
+    # artifact: a locus whose steep transition has no nearby sampled
+    # individuals genuinely has an unidentifiable rate parameter.
+    rng = np.random.default_rng(42)
+    hybrid_index = np.concatenate([
+        rng.uniform(0.0, 0.25, 60), rng.uniform(0.75, 1.0, 60),
+    ])
+    n_loci = 2
+    true_u = [0.0, 0.0]
+    true_v = [80.0, 1.0]  # locus 0: steep, centered at h=0.5 (in the gap); locus 1: null
+    n_alleles = np.full((n_loci, 120), 2.0)
+    n_focal = np.zeros((n_loci, 120))
+    for j in range(n_loci):
+        params = GenomicClineParams(u=true_u[j], v=true_v[j])
+        phi = genomic_cline_function(hybrid_index, params)
+        n_focal[j, :] = rng.binomial(2, phi)
+
+    with pytest.warns(UserWarning, match="sparsely-sampled region of hybrid-index space"):
+        fit_hierarchical_genomic_batch(
+            hybrid_index, n_alleles, n_focal, locus_names=["steep_in_gap", "null_locus"],
+            sigma_log_v_scale=3.0,
+            num_warmup=600, num_samples=600, num_chains=2, seed=1)

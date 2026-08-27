@@ -2,7 +2,7 @@
 
 A Python successor to the R package HZAR (Derryberry et al. 2014) for hybrid
 zone cline analysis, extended to genomic clines, quantitative trait clines,
-and coupling/concordance analysis. 455 tests, all passing as of this file's
+and coupling/concordance analysis. 467 tests, all passing as of this file's
 last update. CLI entry point: `hycline` (or `python run_hycline.py`).
 
 **Before doing anything else, read `README.md` in full** -- particularly the
@@ -26,25 +26,28 @@ the time this section was first written -- have since been read directly
 too (commit `b83afc0`), with every specific claim checked against the PDF
 text rather than trusted secondhand.
 
-What's actually next, in order, per README.md's Tier 1 section:
+**The two small items surfaced by that same candidate-flagging work are
+also now done**: `_warn_if_hybrid_index_distribution_uneven` (called
+automatically by `fit-hierarchical-genomic`, Bailey 2024's finding that
+uneven hybrid-index sampling specifically degrades accuracy for steep
+genomic clines) and `null_model_aicc_delta` (wired into `fit-genomic`,
+ranking loci by delta-AICc against the fixed neutral null). See
+BACKEND_PHASE4.md section 16 for the full writeup, including a second
+real documentation inaccuracy found and corrected while scoping the
+first item (README had claimed an "existing near-invariant-locus
+warning" that, checked directly, never existed in this codebase).
 
-1. **Two small, genuinely separate items surfaced by the candidate-flagging
-   work but not part of it**: a `fit-hierarchical-genomic` warning for
-   uneven hybrid-index sampling (Bailey 2024's own finding that this
-   degrades accuracy specifically for steep genomic clines), and a
-   delta-AIC/WAIC ranking addition for the classic-MLE genomic path
-   (`fit-genomic`/`fit-hierarchical-genomic`), independent of the
-   hierarchical-only flagging feature already built.
-2. Several older Tier 1 items already investigated and scoped, not
-   freshly discovered: a `TailType.MIRROR` parameter-naming inconsistency
-   between classic and Bayesian output; missing HZAR-tail support in
-   `fit_mle_fixed_extremes` and in Components A/D (Phase 4's hierarchical
-   geographic models); real-world input-compatibility gaps found against
-   HZAR's own bundled datasets (semicolon-delimited CSVs, multiallelic-
-   locus handling, no STRUCTURE/PLINK reader); and unbuffered stdout on
-   long multi-locus/Bayesian runs. See README.md's Tier 1 section for the
-   full detail on each -- all are scoped, none require further
-   investigation before picking up.
+What's actually next, per README.md's Tier 1 section -- older items
+already investigated and scoped, not freshly discovered: a
+`TailType.MIRROR` parameter-naming inconsistency between classic and
+Bayesian output; missing HZAR-tail support in `fit_mle_fixed_extremes`
+and in Components A/D (Phase 4's hierarchical geographic models);
+real-world input-compatibility gaps found against HZAR's own bundled
+datasets (semicolon-delimited CSVs, multiallelic-locus handling, no
+STRUCTURE/PLINK reader); and unbuffered stdout on long multi-locus/
+Bayesian runs. See README.md's Tier 1 section for the full detail on
+each -- all are scoped, none require further investigation before
+picking up.
 
 ## References folder
 
@@ -67,7 +70,7 @@ to hold itself to throughout (see "Key principles" below).
   `mcmc_genomic_hierarchical.py`, `mcmc_pymc.py`).
 - `hycline/data/` -- readers/writers, VCF/beagle handling, AIM filtering.
 - `hycline/viz/` -- plotting.
-- `tests/` -- 455 tests. `test_cli.py` and the MCMC test files are the
+- `tests/` -- 467 tests. `test_cli.py` and the MCMC test files are the
   slowest; if the environment has tight per-command timeouts, split large
   test runs into batches rather than assuming a single `pytest tests/` call
   will complete.

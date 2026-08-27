@@ -647,6 +647,48 @@ def test_cli_fit_genomic_multi_fits_all_synthetic_loci(tmp_path):
     assert (out_dir / "all_overlay.png").exists()
 
 
+def test_cli_fit_genomic_multi_prints_delta_aicc_ranking_and_writes_columns(tmp_path):
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "fit-genomic", "--input", str(SYNTHETIC_GENOMIC_CSV),
+        "--hybrid-index-col", "hybrid_index", "--individual-col", "individual",
+        "--output-dir", str(out_dir), "--prefix", "ranked",
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "ranked by delta-aicc against the fixed neutral null" in result.stdout.lower()
+    assert "Bailey 2024" in result.stdout
+
+    summary_df = pd.read_csv(out_dir / "ranked_summary.csv")
+    for col in ["log_likelihood_null", "aicc_null", "delta_aicc_from_null"]:
+        assert col in summary_df.columns
+    by_locus = summary_df.set_index("locus")
+    # true non-null loci should show clearly positive evidence against
+    # null; the two named "neutral" loci should not
+    assert by_locus.loc["barrier1", "delta_aicc_from_null"] > 10.0
+    assert by_locus.loc["biased1", "delta_aicc_from_null"] > 10.0
+    assert by_locus.loc["neutral1", "delta_aicc_from_null"] < 10.0
+    assert by_locus.loc["neutral2", "delta_aicc_from_null"] < 10.0
+    # ranking output orders loci by descending delta_aicc_from_null --
+    # barrier1 (clearly non-null) should be printed before neutral1
+    ranking_start = result.stdout.lower().index("ranked by delta-aicc")
+    ranking_text = result.stdout[ranking_start:]
+    assert ranking_text.index("barrier1") < ranking_text.index("neutral1")
+
+
+def test_cli_fit_genomic_single_locus_skips_ranking_table(tmp_path):
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "fit-genomic", "--input", str(SYNTHETIC_GENOMIC_CSV),
+        "--hybrid-index-col", "hybrid_index", "--individual-col", "individual",
+        "--loci", "barrier1",
+        "--output-dir", str(out_dir), "--prefix", "single",
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "ranked by delta-aicc" not in result.stdout.lower()
+    summary_df = pd.read_csv(out_dir / "single_summary.csv")
+    assert "delta_aicc_from_null" in summary_df.columns
+
+
 def test_cli_fit_genomic_multi_restricts_to_requested_loci(tmp_path):
     out_dir = tmp_path / "out"
     result = _run_cli([
@@ -1366,6 +1408,13 @@ def test_cli_fit_genomic_gl_multi_runs_end_to_end(tmp_path):
         rows = {r["locus"]: r for r in csv_module.DictReader(f)}
     assert float(rows["barrierX"]["v"]) > 1.5  # true v=4.0
     assert (out_dir / "test_overlay.png").exists()
+
+    assert "delta_aicc_from_null" in rows["barrierX"]
+    assert "ranked by delta-aicc against the fixed neutral null" in result.stdout.lower()
+    # barrierX (true v=4.0, clearly non-null) should show real evidence
+    # against the null; neutralX (true u=0, v=1) shouldn't
+    assert float(rows["barrierX"]["delta_aicc_from_null"]) > 5.0
+    assert float(rows["neutralX"]["delta_aicc_from_null"]) < 5.0
 
 
 def test_cli_fit_gl_phred_matches_non_phred(tmp_path):
