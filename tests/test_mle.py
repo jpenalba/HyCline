@@ -265,3 +265,92 @@ def test_compare_models_includes_t_cline_candidate():
         transect, candidates=[TailType.NONE, TailType.MIRROR, TailType.T_CLINE])
     assert TailType.T_CLINE in comparison.results
     assert comparison.best_model == TailType.T_CLINE
+
+
+# ---------------------------------------------------------------------------
+# Asymmetric T-cline (T(v, alpha)) classic-MLE fitting.
+# ---------------------------------------------------------------------------
+
+def test_fit_mle_t_cline_asymmetric_recovers_well_identified_parameters():
+    """A REAL, VERIFIED FINDING SHAPES THIS TEST'S EXPECTATIONS: t_skew
+    itself can be weakly identified (confirmed directly -- a fit whose
+    negative log-likelihood was *better* than the true parameters' own
+    landed at t_skew=13-20 against a true value of 2.5, because the
+    resulting curve shape is barely distinguishable over the sampled
+    range), mirroring the tripartite tail model's own already-documented
+    delta/tau weak identifiability. So this test checks the
+    well-identified parameters (center/width/pmin/pmax) recover well and
+    that the fit's log-likelihood is genuinely competitive with the truth
+    (not worse by more than sampling noise would explain) -- not that
+    t_skew itself matches truth, which `test_fit_mle_t_cline_asymmetric_
+    never_worse_than_symmetric` below checks a different, more robust way."""
+    true_params = ClineParams(center=50.0, width=20.0, pmin=0.02, pmax=0.98,
+                               t_shape=3.0, t_skew=2.5)
+    transect = _simulate_t_cline(true_params, n_sites=200, n_alleles=150, seed=42)
+
+    fit = fit_mle(transect, tail_type=TailType.T_CLINE, t_cline_asymmetric=True)
+
+    assert fit.success
+    assert fit.params.t_skew is not None
+    assert fit.params.center == pytest.approx(50.0, abs=2.0)
+    assert fit.params.width == pytest.approx(20.0, abs=4.0)
+    assert fit.params.pmin == pytest.approx(0.02, abs=0.03)
+    assert fit.params.pmax == pytest.approx(0.98, abs=0.03)
+
+    from hycline.likelihoods.binomial import log_likelihood as _cline_log_likelihood
+    true_ll = _cline_log_likelihood(transect, true_params, TailType.T_CLINE)
+    assert fit.log_likelihood > true_ll - 5.0  # genuinely competitive, not just "ran"
+
+
+def test_fit_mle_t_cline_asymmetric_never_worse_than_symmetric():
+    """Since t_skew=0 is an exact point within the asymmetric family, the
+    asymmetric fit's log-likelihood must never be worse than the
+    symmetric-only fit's on the same data -- guaranteed by construction
+    (`_fit_t_cline_multistart` always includes the symmetric optimum,
+    extended with t_skew=0.0, as a literal candidate), not just usually
+    true. Checked across several (t_shape, t_skew) combinations,
+    including a genuinely hard one (very thick-tailed, strongly skewed)
+    where the search doesn't fully converge to the true optimum -- the
+    guarantee should hold there too, which is the whole point of testing
+    it explicitly rather than only on easy cases."""
+    cases = [
+        (3.0, 2.5, 42), (1.5, -3.0, 7), (0.8, 5.0, 13),
+    ]
+    for true_v, true_alpha, seed in cases:
+        true_params = ClineParams(center=50.0, width=20.0, pmin=0.02, pmax=0.98,
+                                   t_shape=true_v, t_skew=true_alpha)
+        transect = _simulate_t_cline(true_params, n_sites=200, n_alleles=150, seed=seed)
+        fit_asym = fit_mle(transect, tail_type=TailType.T_CLINE, t_cline_asymmetric=True)
+        fit_sym = fit_mle(transect, tail_type=TailType.T_CLINE, t_cline_asymmetric=False)
+        assert fit_asym.log_likelihood >= fit_sym.log_likelihood - 1e-6, \
+            f"asymmetric fit worse than symmetric for true_v={true_v}, true_alpha={true_alpha}"
+
+
+def test_fit_mle_t_cline_asymmetric_only_meaningful_with_t_cline_tail_type():
+    true_params = ClineParams(center=50.0, width=20.0, pmin=0.1, pmax=0.9)
+    transect = _simulate(true_params, n_sites=30, seed=9)
+    with pytest.raises(ValueError):
+        fit_mle(transect, tail_type=TailType.NONE, t_cline_asymmetric=True)
+
+
+def test_fit_mle_t_cline_asymmetric_warns_when_t_skew_hits_bound():
+    """Checked directly with a forced boundary result (not left to
+    stochastic luck) that the warning actually fires when it should --
+    see hycline.inference.mle.fit_mle's own multi-start docstring for
+    why hitting this bound is a real, expected-to-occur-sometimes outcome
+    (weak identifiability), not something that should be silent."""
+    from unittest.mock import patch
+    import hycline.inference.mle as mle_mod
+
+    true_params = ClineParams(center=50.0, width=20.0, pmin=0.02, pmax=0.98,
+                               t_shape=3.0, t_skew=2.5)
+    transect = _simulate_t_cline(true_params, n_sites=50, n_alleles=100, seed=1)
+
+    class _FakeResult:
+        x = np.array([50.0, 20.0, 0.02, 0.98, 3.0, 19.999])
+        fun = 100.0
+        success = True
+
+    with patch.object(mle_mod, "_fit_t_cline_multistart", return_value=_FakeResult()):
+        with pytest.warns(UserWarning, match="landed at the search bound"):
+            mle_mod.fit_mle(transect, tail_type=TailType.T_CLINE, t_cline_asymmetric=True)

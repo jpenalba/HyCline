@@ -158,6 +158,16 @@ def _build_parser() -> argparse.ArgumentParser:
                              "tail model defines it -- delta_l/tau_l/delta_r/tau_r mean "
                              "something different with this flag than without it. See "
                              "BACKEND_TRAIT.md sections 1-2.")
+        g.add_argument("--t-cline-asymmetric", action="store_true",
+                        help="[--tail t-cline only] Fit the fully general asymmetric "
+                             "T(v,alpha) T-cline family (adds a 't_skew' parameter) "
+                             "instead of the symmetric-only T(v) (the default). Slower "
+                             "and needs more restarts to converge reliably (a real, "
+                             "verified finding, not a theoretical worry -- see "
+                             "hycline.inference.mle._fit_t_cline_multistart's "
+                             "docstring), but never returns a worse fit than the "
+                             "symmetric case by construction. Ignored (with a clear "
+                             "error) for any --tail other than t-cline.")
 
     def add_output_args(p):
         g = p.add_argument_group("output")
@@ -1556,6 +1566,10 @@ def _fit_single_locus_core(transect, args, tail_type, use_fixed, pmin_fixed, pma
     if args.method == "classic":
         from hycline.inference.mle import fit_mle, fit_mle_fixed_extremes
         from hycline.models.cline import TailType
+        if getattr(args, "t_cline_asymmetric", False) and tail_type != TailType.T_CLINE:
+            raise UnsupportedFitConfiguration(
+                "--t-cline-asymmetric is only meaningful with --tail t-cline."
+            )
         if use_fixed:
             if getattr(args, "hzar_tail", False) and tail_type != TailType.NONE:
                 raise UnsupportedFitConfiguration(
@@ -1570,7 +1584,8 @@ def _fit_single_locus_core(transect, args, tail_type, use_fixed, pmin_fixed, pma
                                            pmin=pmin_fixed, pmax=pmax_fixed,
                                            n_edge_sites=args.n_edge_sites)
         return fit_mle(transect, tail_type=tail_type,
-                        hzar_tail=getattr(args, "hzar_tail", False))
+                        hzar_tail=getattr(args, "hzar_tail", False),
+                        t_cline_asymmetric=getattr(args, "t_cline_asymmetric", False))
 
     from hycline.models.cline import TailType
     if tail_type == TailType.T_CLINE:
@@ -1999,6 +2014,11 @@ def cmd_fit_geographic(args) -> int:
     print(f"Reading input data from '{args.input}' ...")
     data_type = _detect_geographic_input_type(args)
 
+    if getattr(args, "t_cline_asymmetric", False) and args.tail != "t-cline":
+        print("\nERROR: --t-cline-asymmetric is only meaningful with --tail t-cline.\n",
+              file=sys.stderr)
+        return 2
+
     if data_type == "gl":
         if args.method == "bayesian":
             print("\nERROR: genotype-likelihood input has no Bayesian backend yet -- "
@@ -2015,6 +2035,12 @@ def cmd_fit_geographic(args) -> int:
             print("\nERROR: genotype-likelihood input does not support --hzar-tail -- "
                   "only the default tail parameterization is available for this "
                   "input type.\n", file=sys.stderr)
+            return 2
+        if args.tail == "t-cline":
+            print("\nERROR: genotype-likelihood input does not support --tail t-cline "
+                  "yet -- the T-cline model is currently wired into the hard-count "
+                  "classic-MLE path only (hycline.inference.mle.fit_mle). Use "
+                  "hard-count input for T-cline fitting.\n", file=sys.stderr)
             return 2
 
     out_dir = Path(args.output_dir)
@@ -2113,9 +2139,13 @@ def _fit_geographic_hard_count(args, out_dir, prefix) -> int:
                     row["delta_r"], row["tau_r"] = fit.params.delta_r, fit.params.tau_r
                 if tail_type == TailType.T_CLINE:
                     row["t_shape"] = fit.params.t_shape
+                    if fit.params.t_skew is not None:
+                        row["t_skew"] = fit.params.t_skew
                 if fit.std_errors is not None:
                     names = (["center", "width"] if use_fixed
-                             else _cline_param_names(tail_type)[:len(fit.std_errors)])
+                             else _cline_param_names(
+                                 tail_type, asymmetric=fit.params.t_skew is not None
+                             )[:len(fit.std_errors)])
                     for i, name in enumerate(names):
                         if np.isfinite(fit.std_errors[i]):
                             row[f"{name}_se"] = float(fit.std_errors[i])

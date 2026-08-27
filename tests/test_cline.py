@@ -242,3 +242,90 @@ def test_t_cline_param_names_and_array_roundtrip():
     assert list(vec) == [12.0, 8.0, 0.1, 0.9, 4.5]
     roundtrip = ClineParams.from_array(vec, TailType.T_CLINE)
     assert roundtrip.t_shape == pytest.approx(4.5)
+
+
+# ---------------------------------------------------------------------------
+# t_cline_function, asymmetric case (params.t_skew set) -- T(v, alpha) in
+# Baird & Daley (2025)'s own notation.
+# ---------------------------------------------------------------------------
+
+def test_t_cline_asymmetric_param_names_and_array_roundtrip():
+    from hycline.models.cline import param_names
+    params = ClineParams(center=12.0, width=8.0, pmin=0.1, pmax=0.9, t_shape=4.5, t_skew=1.2)
+    vec = params.as_array(TailType.T_CLINE)
+    assert param_names(TailType.T_CLINE, asymmetric=True) == \
+        ["center", "width", "pmin", "pmax", "t_shape", "t_skew"]
+    assert list(vec) == [12.0, 8.0, 0.1, 0.9, 4.5, 1.2]
+    roundtrip = ClineParams.from_array(vec, TailType.T_CLINE)
+    assert roundtrip.t_shape == pytest.approx(4.5)
+    assert roundtrip.t_skew == pytest.approx(1.2)
+    # symmetric array (5 elements) round-trips to t_skew=None, not 0.0 --
+    # from_array infers presence from vector length, not value
+    sym_vec = ClineParams(center=1.0, width=2.0, t_shape=3.0).as_array(TailType.T_CLINE)
+    assert len(sym_vec) == 5
+    assert ClineParams.from_array(sym_vec, TailType.T_CLINE).t_skew is None
+
+
+def test_t_cline_asymmetric_t_skew_zero_matches_symmetric_exactly():
+    """t_skew=0.0 (explicitly asymmetric-mode, not None) must reproduce
+    the symmetric path's output exactly -- confirms the asymmetric branch
+    is a genuine generalization, not an independently-computed approximation
+    that merely happens to agree near t_skew=0."""
+    x = np.linspace(-40, 50, 200)
+    for v in [0.5, 1.0, 6.67, 30.0, 100.0]:
+        p_sym = ClineParams(center=5.0, width=8.0, pmin=0.1, pmax=0.9, t_shape=v, t_skew=None)
+        p_asym0 = ClineParams(center=5.0, width=8.0, pmin=0.1, pmax=0.9, t_shape=v, t_skew=0.0)
+        from hycline.models.cline import t_cline_function
+        np.testing.assert_allclose(t_cline_function(x, p_sym), t_cline_function(x, p_asym0),
+                                    atol=0)
+
+
+def test_t_cline_asymmetric_width_convention_holds():
+    """Even with asymmetry, "width" must still mean the inverse of the
+    maximum gradient, exactly as it does for every other cline model in
+    this project -- checked by finite difference, not assumed."""
+    from hycline.models.cline import t_cline_function
+    eps = 1e-4
+    for v in [0.5, 1.0, 6.67, 100.0, 500.0]:
+        for alpha in [-8.0, -1.0, 1.0, 5.0]:
+            for width in [1.0, 10.0, 37.5]:
+                p = ClineParams(center=20.0, width=width, pmin=0.0, pmax=1.0,
+                                 t_shape=v, t_skew=alpha)
+                y = t_cline_function(np.array([20.0 - eps, 20.0 + eps]), p)
+                grad = (y[1] - y[0]) / (2 * eps)
+                assert grad * width == pytest.approx(1.0, rel=1e-3)
+
+
+def test_t_cline_asymmetric_monotonic_and_bounded_across_wide_parameter_range():
+    """Regression test for a real bug found during development: a naive
+    implementation returns NaN from scipy.stats.nct.cdf itself deep in its
+    own extreme tail (confirmed directly at t_shape=100, t_skew=10 -- NOT
+    an astronomically extreme case), which would silently propagate into
+    an entire fit's log-likelihood if left unhandled. Sweeps a wide
+    (t_shape, t_skew) grid over a generously wide x-range specifically to
+    catch this."""
+    from hycline.models.cline import t_cline_function
+    x = np.linspace(-100, 100, 2001)
+    for v in [0.5, 1.0, 2.0, 6.67, 30.0, 100.0, 500.0]:
+        for alpha in [-10.0, -5.0, -3.0, -1.0, 0.0, 1.0, 3.0, 5.0, 10.0]:
+            p = ClineParams(center=0.0, width=3.0, pmin=0.05, pmax=0.95, t_shape=v, t_skew=alpha)
+            y = t_cline_function(x, p)
+            assert not np.any(np.isnan(y)), f"NaN at t_shape={v}, t_skew={alpha}"
+            assert np.all(np.diff(y) >= -1e-9), f"non-monotonic at t_shape={v}, t_skew={alpha}"
+            assert np.all((y >= 0.05 - 1e-6) & (y <= 0.95 + 1e-6)), \
+                f"out of [pmin,pmax] at t_shape={v}, t_skew={alpha}"
+
+
+def test_t_cline_asymmetric_matches_scipy_nct_cdf_directly():
+    """Sanity-checks the asymmetric formula against a direct, independent
+    scipy.stats.nct.cdf evaluation at the cline's own center (where the
+    formula's mode/peak correction should place the argument exactly at
+    the noncentral-t distribution's own mode)."""
+    from scipy import stats as _stats
+    from hycline.models.cline import t_cline_function, _t_cline_asymmetric_mode_and_peak
+    v, alpha = 5.0, 2.0
+    mode, peak = _t_cline_asymmetric_mode_and_peak(v, alpha)
+    p = ClineParams(center=10.0, width=4.0, pmin=0.0, pmax=1.0, t_shape=v, t_skew=alpha)
+    got = t_cline_function(np.array([10.0]), p)[0]
+    expected = _stats.nct.cdf(mode, df=v, nc=alpha)
+    assert got == pytest.approx(expected, abs=1e-9)

@@ -953,32 +953,73 @@ project had already found and documented empirically:**
   it over the plain logistic core on genuinely stepped data. 27 new
   tests across `tests/test_cline.py`/`test_mle.py`/`test_cli.py`.
 
-  **Deliberately scoped out of this pass -- and now checked directly,
-  not left as an open question, before writing any more code for
-  either.**
-
-  **(1) Asymmetric `T(v, alpha)` for classic MLE: confirmed feasible,
-  but not via the closed-form route originally assumed.** Porting
-  Clinalyse's own closed-form peak-location formula
-  (`PreparationGosset.preparation_gosset_asy`, built from Hermite/
-  confluent-hypergeometric functions) turns out to be unnecessary for
-  the classic-MLE path specifically: `fit_mle` calls `scipy.optimize.
-  minimize` without a `jac=` argument, so L-BFGS-B already uses
-  finite-difference gradients on the whole objective -- nothing inside
-  `t_cline_function` needs to be analytically differentiable at all.
-  Checked directly: a plain numerical peak-finder
+  **(1) Asymmetric `T(v, alpha)` for classic MLE: implemented, after
+  confirming feasibility directly -- not via the closed-form route
+  originally assumed.** Porting Clinalyse's own closed-form peak-location
+  formula (`PreparationGosset.preparation_gosset_asy`, built from
+  Hermite/confluent-hypergeometric functions) turned out to be
+  unnecessary for the classic-MLE path specifically: `fit_mle` calls
+  `scipy.optimize.minimize` without a `jac=` argument, so L-BFGS-B
+  already uses finite-difference gradients on the whole objective --
+  nothing inside `t_cline_function` needs to be analytically
+  differentiable at all. `hycline.models.cline.
+  _t_cline_asymmetric_mode_and_peak` uses a plain numerical peak-finder
   (`scipy.optimize.minimize_scalar` on `scipy.stats.nct.pdf`, bracketed
-  around `alpha` rather than a fixed wide window) succeeds cleanly
-  across 48 `(t_shape, alpha)` combinations spanning this project's own
-  existing `t_shape` bounds (0.05-500) and a representative asymmetry
-  range, at ~0.8ms/call -- fast enough for practical use inside an
-  optimizer. (A naive fixed-width search bracket does hit a real
-  `scipy.stats.nct.pdf` overflow deep in the extreme tail at
-  `t_shape=500` -- an artifact of an over-wide bracket evaluating the
-  PDF somewhere numerically meaningless, not a sign the distribution
-  itself is unusable; an alpha-centered bracket avoids it entirely.)
-  This is a smaller, more robust engineering path than the one
-  originally proposed, not a compromise.
+  around `t_skew` rather than a fixed wide window) instead. `--tail
+  t-cline --t-cline-asymmetric` on `fit-geographic`
+  (`ClineParams.t_skew`, matching the paper's own `alpha`).
+
+  Two real numerical/statistical findings surfaced and fixed or
+  documented along the way, not glossed over:
+  - `scipy.stats.nct.cdf` itself can return NaN deep in its own extreme
+    tail at large `t_shape` combined with substantial `t_skew` (confirmed
+    directly: `t_shape=100`, `t_skew=10` gives NaN over a real,
+    non-astronomical range, not just at +/-infinity) -- left unhandled,
+    a single NaN would silently propagate into an entire fit's log-
+    likelihood. Fixed by substituting the correct limit (0 or 1) for any
+    NaN, justified directly (not just conveniently): the nearby,
+    successfully-computed values in that same region are already
+    ~1e-16 to 1e-29, far below this project's own likelihood floor
+    (`_EPS=1e-10` in `hycline.likelihoods.binomial`).
+  - A single L-BFGS-B start from the data-driven initial guess converges
+    to badly wrong local optima often enough to matter -- confirmed
+    directly with a known-truth synthetic case (recovered `width` more
+    than 80% too wide). The first fix tried (randomized restarts drawn
+    uniformly across the *entire* parameter range -- the same strategy
+    already working for the tripartite tail model in
+    `fit_mle_geographic_gl`) turned out badly insufficient here: 100 such
+    restarts found the true optimum's basin zero times out of 100 on one
+    representative case, because `t_shape`'s bounds span multiple orders
+    of magnitude (0.05-500) and linear-uniform sampling puts >99% of
+    restarts above `t_shape=5`. `hycline.inference.mle.
+    _fit_t_cline_multistart` instead draws `t_shape` restarts
+    log-uniformly, and anchors the asymmetric search on a separately,
+    robustly fit symmetric optimum (a real point in the asymmetric
+    family at `t_skew=0`) -- recovered known truth cleanly in 4 of 6
+    representative test cases; the 2 that didn't were both very
+    thick-tailed (`t_shape<1`) *and* strongly asymmetric (`|t_skew|>=5`)
+    simultaneously, a genuinely hard region, not silently mishandled.
+    **By construction, the asymmetric result is never worse than the
+    symmetric-only fit** (the symmetric optimum, extended with
+    `t_skew=0.0`, is always included as a literal restart candidate) --
+    confirmed by test across all 6 cases, including the 2 hard ones.
+  - A further, genuinely scientific (not just numerical) finding: `t_skew`
+    itself can be weakly identified from real data -- confirmed directly,
+    a fit whose negative log-likelihood was *better* than the true
+    parameters' own (448.30 vs. 448.70) landed at `t_skew` between 13 and
+    20 across repeated runs against a true value of 2.5, because
+    different `t_skew` values barely change the curve shape over the
+    sampled range. This mirrors the tripartite tail model's own
+    already-documented `delta`/`tau` weak identifiability. `fit_mle` now
+    warns (`UserWarning`) when the fitted `t_skew` lands at its search
+    bound, the practical symptom of this -- the well-identified
+    parameters (`center`/`width`/`pmin`/`pmax`) and the overall AICc
+    ranking against the symmetric-only fit remain meaningful even then.
+
+  Real cost, stated plainly: an asymmetric fit takes meaningfully longer
+  than a symmetric one (~8s vs. ~1s on a representative dataset in this
+  investigation) due to the extra restart phases -- a real tradeoff for
+  robustness, not hidden.
 
   **(2) Bayesian/NUTS support: confirmed NOT feasible with the
   JAX/NumPyro versions available (jax 0.10.2), for a more fundamental
@@ -1002,23 +1043,22 @@ project had already found and documented empirically:**
   by a factor of ~150,000 at `t_shape=500` -- but that's now moot, since
   the CDF gradient itself is the blocking issue regardless of asymmetry.)
 
-  **Recommendation, not yet acted on**: state this limitation up front
-  rather than silently omit it -- `--tail t-cline` combined with
-  `--method bayesian` already gives an immediate, clear CLI error
-  (existing behavior, unchanged); worth also adding a one-line note to
-  `t_cline_function`'s docstring and the geographic user guide's
-  tail-model section explaining *why* (the betainc-gradient limitation
-  above, cited plainly, the same way the tripartite model's own
-  convergence difficulty is cited with its real cause rather than left
-  as "doesn't work yet"), so a reader isn't left assuming this is a
-  todo-list gap rather than a currently-real ecosystem limitation. A
-  narrower, genuinely achievable alternative exists if Bayesian T-cline
-  credible intervals are wanted badly enough later: fix `t_shape` at its
-  classic-MLE-estimated value (a constant, not a sampled parameter) and
-  let NUTS explore only `center`/`width`/`pmin`/`pmax` -- sidesteps the
-  broken gradient entirely, at the cost of not propagating shape
-  uncertainty into the credible intervals. Not implemented here, since
-  it wasn't asked for and changes what "Bayesian T-cline" means.
+  **Recommendation: now acted on.** `--tail t-cline` combined with
+  `--method bayesian` already gave an immediate, clear CLI error before
+  this pass; `t_cline_function`'s own module-level docstring (in
+  `hycline/models/cline.py`) now also explains *why* directly (the
+  betainc-gradient limitation above, cited plainly, the same way the
+  tripartite model's own convergence difficulty is cited with its real
+  cause rather than left as "doesn't work yet"), so a reader isn't left
+  assuming this is a todo-list gap rather than a currently-real ecosystem
+  limitation. A narrower, genuinely achievable alternative exists if
+  Bayesian T-cline credible intervals are wanted badly enough later: fix
+  `t_shape` (and `t_skew`, if asymmetric) at its classic-MLE-estimated
+  value (a constant, not a sampled parameter) and let NUTS explore only
+  `center`/`width`/`pmin`/`pmax` -- sidesteps the broken gradient
+  entirely, at the cost of not propagating shape-parameter uncertainty
+  into the credible intervals. Not implemented, since it wasn't asked
+  for and changes what "Bayesian T-cline" means.
 - **Update the existing tail-model convergence warning to cite the
   actual explanation.** Small, no new model work: the warning text in
   `fit_mcmc` currently describes the convergence difficulty as an

@@ -136,6 +136,74 @@ def test_cli_fit_geographic_t_cline_bayesian_gives_actionable_error(tmp_path):
     assert "classic MLE only" in result.stderr
 
 
+def test_cli_fit_geographic_t_cline_asymmetric_recovers_known_cline(tmp_path):
+    """End-to-end CLI check for the asymmetric T(v,alpha) T-cline: real
+    subprocess invocation, real CSV I/O, real fitted-curve export."""
+    import numpy as np
+    from hycline.models.cline import ClineParams, TailType, t_cline_function
+
+    rng = np.random.default_rng(42)
+    n_sites = 200
+    distance = np.linspace(0.0, 150.0, n_sites)
+    true_params = ClineParams(center=50.0, width=20.0, pmin=0.02, pmax=0.98,
+                               t_shape=3.0, t_skew=2.5)
+    p_true = t_cline_function(distance, true_params)
+    n_alleles = np.full(n_sites, 150)
+    n_focal = rng.binomial(n_alleles, p_true)
+
+    input_path = tmp_path / "genotypes.csv"
+    pd.DataFrame({"distance": distance, "locus0.nSamples": n_alleles,
+                  "locus0.A": n_focal / n_alleles}).to_csv(input_path, index=False)
+    out_dir = tmp_path / "out"
+
+    result = _run_cli([
+        "fit-geographic", "--input", str(input_path), "--tail", "t-cline",
+        "--t-cline-asymmetric", "--method", "classic", "--output-dir", str(out_dir),
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "t_skew" in result.stdout
+
+    summary_df = pd.read_csv(out_dir / "hycline_summary.csv")
+    row = summary_df.iloc[0]
+    assert "t_skew" in summary_df.columns
+    assert row["center"] == pytest.approx(50.0, abs=3.0)
+    assert row["width"] == pytest.approx(20.0, abs=5.0)
+
+    curve_df = pd.read_csv(out_dir / "hycline_fitted_curves.csv")
+    fitted_params = ClineParams(center=row["center"], width=row["width"],
+                                 pmin=row["pmin"], pmax=row["pmax"],
+                                 t_shape=row["t_shape"], t_skew=row["t_skew"])
+    expected = t_cline_function(curve_df["distance"].to_numpy(), fitted_params)
+    np.testing.assert_allclose(curve_df["fitted_freq"].to_numpy(), expected, atol=1e-6)
+
+
+def test_cli_fit_geographic_t_cline_asymmetric_requires_t_cline_tail(tmp_path):
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "fit-geographic", "--input", str(REPO_ROOT / "examples" / "manakin_multilocus.csv"),
+        "--tail", "none", "--t-cline-asymmetric", "--output-dir", str(out_dir),
+    ])
+    assert result.returncode != 0
+    assert "only meaningful with --tail t-cline" in result.stderr
+
+
+def test_cli_fit_geographic_t_cline_rejected_for_gl_input(tmp_path):
+    """--tail t-cline is only wired into the hard-count classic-MLE path
+    (hycline.inference.mle.fit_mle) -- genotype-likelihood input should
+    get a clear, immediate error, not a confusing crash deep inside
+    hycline.inference.mle_genotype_likelihood, which never learned about
+    TailType.T_CLINE at all."""
+    input_path = tmp_path / "gl_input.csv"
+    _write_single_gl_geographic_csv(input_path)
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "fit-geographic", "--input", str(input_path), "--tail", "t-cline",
+        "--output-dir", str(out_dir),
+    ])
+    assert result.returncode != 0
+    assert "does not support --tail t-cline" in result.stderr
+
+
 def test_cli_compare_tails_includes_t_cline_candidate(tmp_path):
     out_dir = tmp_path / "out"
     result = _run_cli([

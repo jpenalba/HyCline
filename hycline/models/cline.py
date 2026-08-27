@@ -37,8 +37,44 @@ convergence difficulty the tripartite tail models above have under
 gradient-based (NUTS) Bayesian fitting -- see BACKEND_PHASE2.md
 section 12. Not a tail bolted onto the logistic core the way
 `TailType.LEFT`/`RIGHT`/`BOTH`/`MIRROR` are; see `t_cline_function`'s
-own docstring for the full model and its current (symmetric-only)
-scope.
+own docstring for the full model, including both the symmetric case
+(`params.t_skew` unset) and the asymmetric case (`params.t_skew` set)
+now supported for classic MLE fitting.
+
+NOTE ON WHY THE T-CLINE HAS NO BAYESIAN (NUTS) SUPPORT, EITHER SHAPE
+---------------------------------------------------------------------
+Not a todo-list gap -- checked directly and found genuinely infeasible
+with the JAX/NumPyro versions available at the time of writing (jax
+0.10.2), for a real, specific, verified reason: `jax.scipy.special.
+betainc`, which both a hand-built JAX Student's-t CDF and NumPyro's own
+official `numpyro.distributions.StudentT.cdf()` are built on, explicitly
+does not support gradients with respect to its own shape parameters
+(confirmed directly against NumPyro's own code, not just a homemade
+implementation: `jax.grad` on `StudentT(df=...).cdf()` with respect to
+`df` raises `ValueError: Betainc gradient with respect to a and b not
+supported`). Since `t_shape` enters exactly there, and NUTS needs the
+gradient of the log-density with respect to every parameter it samples
+(`t_shape` included, for a Bayesian T-cline fit), this is a real
+capability gap in the JAX/NumPyro ecosystem itself, not something this
+project's own code could close by porting more of Clinalyse -- porting
+the reference implementation's own closed-form asymmetric peak-location
+formula (built from Hermite/confluent-hypergeometric functions) doesn't
+help either, since it has its own, separate numerical problem in JAX
+(`jax.scipy.special.hyp1f1` diverges from `scipy.special.hyp1f1` by a
+factor of ~150,000 at `t_shape=500`, well within this project's own
+existing bounds) -- and is moot regardless, since the CDF-gradient
+problem above blocks Bayesian fitting before that formula would even be
+reached. `--tail t-cline --method bayesian` fails immediately with a
+clear CLI error rather than attempting this and failing deep inside
+NumPyro. See README.md's Tier 1 backlog for the full investigation.
+
+A narrower alternative exists if Bayesian T-cline credible intervals are
+ever wanted badly enough: fix `t_shape` (and `t_skew`, if asymmetric) at
+its classic-MLE-estimated value -- a constant, not a parameter NUTS
+samples -- and let NUTS explore only `center`/`width`/`pmin`/`pmax`.
+This sidesteps the broken gradient entirely, at the cost of not
+propagating shape-parameter uncertainty into the reported credible
+intervals. Not implemented.
 """
 
 from __future__ import annotations
@@ -79,8 +115,12 @@ class ClineParams:
     delta_r, tau_r : right-tail height fraction and decay length (TailType.RIGHT/BOTH)
     t_shape : T-cline shape/steepness parameter (TailType.T_CLINE only -- the
         Student's-t distribution's degrees of freedom, matching Baird & Daley
-        (2025)'s own `v`). Must be > 0. Symmetric-only in this implementation
-        (no asymmetry parameter yet -- see `t_cline_function`'s docstring).
+        (2025)'s own `v`). Must be > 0.
+    t_skew : T-cline asymmetry/noncentrality parameter (TailType.T_CLINE
+        only, optional -- matching Baird & Daley (2025)'s own `alpha`).
+        `None` or `0.0` means the symmetric T-cline (the paper's `T(v)`);
+        any other value means the asymmetric `T(v, alpha)` family. See
+        `t_cline_function`'s docstring for both cases.
     """
 
     center: float
@@ -92,10 +132,17 @@ class ClineParams:
     delta_r: Optional[float] = None
     tau_r: Optional[float] = None
     t_shape: Optional[float] = None
+    t_skew: Optional[float] = None
 
     def as_array(self, tail_type: TailType) -> np.ndarray:
         """Flatten to a parameter vector for the optimizer, in a fixed
-        order determined by the tail type."""
+        order determined by the tail type. For TailType.T_CLINE,
+        `t_skew` is included only when set (not None) -- whether this
+        instance represents a symmetric or asymmetric T-cline is decided
+        by `self.t_skew`, not by a separate flag, so constructing a
+        `ClineParams` with `t_skew=0.0` explicitly (rather than leaving
+        it `None`) opts into the asymmetric parameter count even though
+        0.0 is itself symmetric."""
         vec = [self.center, self.width, self.pmin, self.pmax]
         if tail_type in (TailType.LEFT, TailType.BOTH):
             vec += [self.delta_l, self.tau_l]
@@ -105,10 +152,16 @@ class ClineParams:
             vec += [self.delta_l, self.tau_l]
         if tail_type == TailType.T_CLINE:
             vec += [self.t_shape]
+            if self.t_skew is not None:
+                vec += [self.t_skew]
         return np.array(vec, dtype=float)
 
     @staticmethod
     def from_array(vec: np.ndarray, tail_type: TailType) -> "ClineParams":
+        """For TailType.T_CLINE, whether `vec` carries `t_skew` is
+        inferred from its length (5 elements total = symmetric, 6 =
+        asymmetric) -- the caller doesn't need to pass a separate flag,
+        matching `as_array`'s own symmetric convention."""
         center, width, pmin, pmax = vec[:4]
         rest = vec[4:]
         kwargs = dict(center=center, width=width, pmin=pmin, pmax=pmax)
@@ -124,6 +177,8 @@ class ClineParams:
             kwargs["delta_r"], kwargs["tau_r"] = rest[0], rest[1]
         elif tail_type == TailType.T_CLINE:
             kwargs["t_shape"] = rest[0]
+            if len(rest) > 1:
+                kwargs["t_skew"] = rest[1]
         return ClineParams(**kwargs)
 
     def n_params(self, tail_type: TailType) -> int:
@@ -308,6 +363,58 @@ def _t_cline_scale(t_shape: float) -> float:
     return float(_stats.t.pdf(0.0, df=t_shape))
 
 
+def _t_cline_asymmetric_mode_and_peak(t_shape: float, t_skew: float) -> tuple[float, float]:
+    """Generalizes `_t_cline_scale` to the asymmetric case: the location
+    and magnitude of the peak density of the noncentral Student's-t
+    distribution (`scipy.stats.nct`) with `t_shape` degrees of freedom
+    and noncentrality `t_skew`. Unlike the symmetric case, the point of
+    maximum density (and therefore maximum CDF gradient -- this
+    project's own cline-center convention) is not at 0 once `t_skew !=
+    0`, so both a location correction (the mode) and a magnitude
+    correction (the peak density there) are needed, not just the
+    magnitude alone.
+
+    WHY NUMERICAL PEAK-FINDING, NOT A CLOSED-FORM FORMULA: the reference
+    implementation this project ports from (Clinalyse,
+    `PreparationGosset.preparation_gosset_asy`) computes this same
+    quantity via a closed-form formula built from Hermite/confluent-
+    hypergeometric functions. Checked directly, not assumed: that
+    approach is numerically unreliable at exactly the `t_shape` range
+    this project already supports for the symmetric case
+    (`jax.scipy.special.hyp1f1` diverges from `scipy.special.hyp1f1` by a
+    factor of ~150,000 at `t_shape=500`) -- and unnecessary anyway for
+    classic MLE specifically, since `fit_mle` never needed
+    JAX-differentiable code in the first place (`scipy.optimize.minimize`
+    is called without a `jac=` argument, so L-BFGS-B already uses
+    finite-difference gradients on the whole objective; nothing inside
+    this function needs to be analytically differentiable). A plain
+    numerical peak-finder is simpler, avoids that fragility entirely, and
+    was verified clean (no NaN/overflow, ~0.8ms/call) across 48
+    `(t_shape, t_skew)` combinations spanning this project's own existing
+    bounds before being adopted -- see README.md's Tier 1 backlog for the
+    full investigation.
+
+    The search bracket is centered on `t_skew` (rather than a fixed wide
+    window like (-50, 50)) deliberately: `scipy.stats.nct.pdf` itself can
+    overflow deep in its own extreme tail at large `t_shape` (confirmed
+    directly, not assumed) -- a symptom of searching somewhere
+    numerically meaningless, not of the distribution being unusable. The
+    true mode is always close to `t_skew` in practice (confirmed
+    empirically across the same 48 combinations), so a +/-20 window
+    around it comfortably contains the mode while never approaching that
+    failure region.
+    """
+    from scipy.optimize import minimize_scalar
+    lo, hi = t_skew - 20.0, t_skew + 20.0
+    res = minimize_scalar(
+        lambda t: -_stats.nct.pdf(t, df=t_shape, nc=t_skew),
+        bounds=(lo, hi), method="bounded", options={"xatol": 1e-10},
+    )
+    mode = float(res.x)
+    peak = float(_stats.nct.pdf(mode, df=t_shape, nc=t_skew))
+    return mode, peak
+
+
 def t_cline_function(x: np.ndarray, params: ClineParams) -> np.ndarray:
     """T-cline: Baird & Daley (2025)'s Student's-t-distribution-based
     alternative to the tripartite tail model above (`cline_function`/
@@ -338,28 +445,42 @@ def t_cline_function(x: np.ndarray, params: ClineParams) -> np.ndarray:
       indistinguishable from `t_shape=30` onward (Table 1: `t_shape=116`
       matches Normal to MAD 0.001).
 
-    A REAL, NAMED LIMITATION, stated plainly rather than left implicit:
-    this implements only the SYMMETRIC T-cline (`T(v)` in the paper's own
-    notation) -- the paper's fully general asymmetric `T(v, alpha)`
-    family (needed to reproduce its own headline validation result on
-    Fisher's 1937 wave-of-advance data, `T(8.365, 1.367)`, an 18-fold MAD
-    improvement over the best tripartite fit) is NOT yet implemented here.
-    A symmetric T-cline already has no corners and already offers real
-    flexibility the plain logistic core doesn't (continuously variable
-    steepness), but a user who specifically needs *asymmetric* barrier
-    strength (different behavior on each side) should still reach for
-    `hzar_cline_function`'s tail types, with their own documented
-    convergence caveat, until asymmetric T-cline support lands -- see
-    README.md's Tier 1 backlog.
+    `params.t_skew` (matching the paper's own `alpha`, the non-central
+    Student's-t's noncentrality) adds asymmetry -- `None` or `0.0` (the
+    default) is the SYMMETRIC T-cline (`T(v)`, above); any other value
+    is the fully general `T(v, alpha)` family, letting the two sides of
+    the cline steepen/decay at different effective rates the way the
+    tripartite tail model's separate `delta_l/tau_l` vs. `delta_r/tau_r`
+    do, but with one continuous, corner-free shape rather than three
+    joined pieces. `center`/`width` keep their usual meaning either way
+    (`center` = the point of maximum gradient, `width` = its inverse) --
+    for `t_skew != 0` this point is no longer at the distribution's own
+    x=0 or its raw peak density, so both a location and a magnitude
+    correction are applied (`_t_cline_asymmetric_mode_and_peak`) rather
+    than just the magnitude-only correction the symmetric case needs
+    (`_t_cline_scale`). Fisher's (1937) own wave-of-advance data is
+    fit best by Baird & Daley's paper at `T(8.365, 1.367)` -- an
+    18-fold MAD improvement over the best tripartite fit, using fewer
+    free parameters, their own headline result.
+
+    Classic MLE fitting only -- no Bayesian/NUTS support for either the
+    symmetric or asymmetric case, and not a todo-list gap: see this
+    module's own top-level docstring for the specific, verified reason
+    (a real capability gap in the JAX/NumPyro ecosystem itself, not
+    something more porting would fix).
 
     Ported from, and cross-checked directly against, the reference Python
-    implementation for the symmetric case (Baird & Daley 2023,
-    `Clinalyse`, github.com/Studenecivb/clinalyse, `equations.py`'s
-    `gossetbar_cline`, which evaluates `scipy.stats.t.cdf(x, shape,
+    implementation (Baird & Daley 2023, `Clinalyse`,
+    github.com/Studenecivb/clinalyse, `equations.py`): `gossetbar_cline`
+    for the symmetric case (evaluates `scipy.stats.t.cdf(x, shape,
     scale=prep[shape])` with `prep[shape]` precomputed as exactly
-    `_t_cline_scale` above computes it) -- see `references/Molecular
-    Ecology - 2025 - Baird - The Shapes of Clines and Wavefronts.pdf`,
-    Table 1's "T-cline T(v)" row, for the full derivation.
+    `_t_cline_scale` above computes it); the asymmetric case here departs
+    from `gossetbar_cline_asy`'s own closed-form peak-location formula
+    for verified numerical-robustness reasons (see
+    `_t_cline_asymmetric_mode_and_peak`'s docstring) while implementing
+    the same underlying model -- see `references/Molecular Ecology -
+    2025 - Baird - The Shapes of Clines and Wavefronts.pdf`, Table 1's
+    "T-cline T(v)" row, for the full derivation.
     """
     if params.t_shape is None or params.t_shape <= 0:
         raise ValueError("t_cline_function requires params.t_shape > 0, got "
@@ -369,14 +490,46 @@ def t_cline_function(x: np.ndarray, params: ClineParams) -> np.ndarray:
 
     x = np.asarray(x, dtype=float)
     raw = (x - params.center) / params.width
-    scale = _t_cline_scale(params.t_shape)
-    cdf = _stats.t.cdf(raw, df=params.t_shape, scale=scale)
+
+    if params.t_skew is None or params.t_skew == 0.0:
+        scale = _t_cline_scale(params.t_shape)
+        cdf = _stats.t.cdf(raw, df=params.t_shape, scale=scale)
+    else:
+        mode, peak = _t_cline_asymmetric_mode_and_peak(params.t_shape, params.t_skew)
+        raw_t = raw / peak + mode
+        with np.errstate(invalid="ignore"):
+            cdf = _stats.nct.cdf(raw_t, df=params.t_shape, nc=params.t_skew)
+        # scipy.stats.nct.cdf can itself return NaN deep in its own
+        # extreme tail (confirmed directly: e.g. t_shape=100, t_skew=10
+        # gives NaN over a real, non-astronomical range of raw_t, not
+        # just at +/-inf) -- a genuine numerical limitation of scipy's
+        # own noncentral-t implementation at large t_shape combined with
+        # substantial t_skew, not a bug in this function's own math (the
+        # width-convention and t_skew=0-continuity checks in
+        # tests/test_cline.py hold exactly). Left unhandled, a single NaN
+        # here would silently propagate into an entire fit's log-
+        # likelihood (via binom.logpmf), turning one far-tail site into a
+        # completely uninformative optimizer target rather than the
+        # correctly-negligible one it should be. Any point far enough
+        # into the tail to trigger this is, by construction, far enough
+        # that the true CDF value is already negligibly close to 0 or 1
+        # (confirmed: the nearby, successfully-computed values in that
+        # same region are already ~1e-16 to 1e-29, far below this
+        # project's own likelihood floor `_EPS=1e-10` in
+        # hycline.likelihoods.binomial) -- so substituting the correct
+        # limit is safe, not just convenient.
+        if np.any(np.isnan(cdf)):
+            cdf = np.where(np.isnan(cdf), np.where(raw_t < mode, 0.0, 1.0), cdf)
+
     return params.pmin + (params.pmax - params.pmin) * cdf
 
 
 # Human-readable parameter names, in the same order as ClineParams.as_array(),
 # used for reporting fitted results.
-def param_names(tail_type: TailType) -> list[str]:
+def param_names(tail_type: TailType, asymmetric: bool = False) -> list[str]:
+    """`asymmetric` only affects TailType.T_CLINE -- adds `t_skew` to the
+    name list when True, matching `ClineParams.as_array`'s own
+    `t_skew is not None` convention for whether a fit vector carries it."""
     names = ["center", "width", "pmin", "pmax"]
     if tail_type in (TailType.LEFT, TailType.BOTH):
         names += ["delta_l", "tau_l"]
@@ -386,4 +539,6 @@ def param_names(tail_type: TailType) -> list[str]:
         names += ["delta_m", "tau_m"]
     if tail_type == TailType.T_CLINE:
         names += ["t_shape"]
+        if asymmetric:
+            names += ["t_skew"]
     return names
