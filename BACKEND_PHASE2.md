@@ -767,6 +767,12 @@ pass needed to re-derive.
 
 ### 13.4 Known rough edges
 
+(Note: `fit-geographic-multi`, `fit-genomic-multi`, `fit-geographic-gl-multi`,
+`fit-genomic-gl-multi` below are this feature's original command names
+and no longer exist in the CLI -- see BACKEND_PHASE5.md section 6's
+correction note for the full account of the later merge into
+`fit-geographic`/`fit-genomic`.)
+
 - **No partial-failure granularity in the batched path.** The original
   per-locus loop catches exceptions per locus and continues (a
   problematic locus gets skipped, recorded in

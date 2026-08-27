@@ -7,7 +7,17 @@ morphological index) that vary smoothly across a hybrid zone, using a
 Gaussian likelihood in place of the binomial one. This document covers
 that capability: `hycline.data.schema.TraitTransect`,
 `hycline.likelihoods.gaussian`, `hycline.inference.mle_trait`, and the
-`fit-trait`/`fit-trait-multi` CLI commands.
+`fit-trait`/`fit-trait-multi` CLI commands (both still real, current
+command names -- unlike the geographic-cline comparison point this
+document repeatedly draws below).
+
+**Correction, found during a later doc-consistency sweep: `fit-geographic-multi`,
+referenced throughout this document as the geographic-cline comparison
+point, no longer exists as a separate command** -- it was later merged
+into `fit-geographic` itself, which handles any locus count with the
+same command. See BACKEND_PHASE5.md section 6's correction note for the
+full account. The structural comparisons below (this document was
+written when `fit-geographic-multi` was the real name) are unaffected.
 
 This is the project's second pass at this feature. The first pass built
 a principled but simpler model (a single shared variance, either

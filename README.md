@@ -181,7 +181,7 @@ Phase 4 (`hycline.inference.mcmc_hierarchical` for geographic clines,
 many loci at once with *partial pooling*: each locus's cline parameters
 are drawn from a shared population-level distribution, rather than fit
 completely independently the way `fit_mcmc_batch` (Phase 2) and
-`fit-genomic`/`fit-genomic-hierarchical` inputs otherwise would.
+`fit-genomic` (independent per-locus fitting) otherwise would.
 This isn't just a statistical refinement -- it's motivated by a specific,
 long-standing prediction from hybrid zone theory, and it exists to answer
 a question independent per-locus fitting is bad at answering.
@@ -559,7 +559,7 @@ frequencies) -- classic MLE, full HZAR parity including tail models:**
   `left`/`right` choices) found and fixed during that verification.
 - **Full HZAR-parity tail construction is also available for allele-
   frequency fitting, for both classic MLE and Bayesian (NUTS) fitting**
-  (`fit-geographic`/`fit-multi --hzar-tail`, opt-in, default behavior unchanged) --
+  (`fit-geographic --hzar-tail`, opt-in, default behavior unchanged) --
   `hycline.models.cline.hzar_cline_function`, ported directly from the
   verified trait-cline tail formula rather than re-derived, closing a
   real, precisely-named divergence this pass found between this
@@ -1997,10 +1997,11 @@ rather than a misleadingly precise number -- the same honest behavior
 built into the Python API, now confirmed to survive the CLI's own summary
 formatting and JSON output.
 
-**`fit-hierarchical-geographic-gl`/`fit-hierarchical-genomic-gl`** needed real new
-plumbing to test at all: no CSV reader for genotype-likelihood data
-existed anywhere in the project before this -- Phase 5 itself only ever
-took Python-constructed data containers. Both commands were run on freshly
+**Genotype-likelihood input for `fit-hierarchical-geographic`/
+`fit-hierarchical-genomic`** (Components D/E) needed real new plumbing to
+test at all: no CSV reader for genotype-likelihood data existed anywhere
+in the project before this -- Phase 5 itself only ever took
+Python-constructed data containers. Both commands were run on freshly
 generated synthetic multi-locus genotype-likelihood data with genuine
 sparse/rich depth contrasts among loci (mirroring how Components D/E
 themselves were validated), producing correctly-shaped grid plots (clear
@@ -2010,59 +2011,77 @@ low-iteration test settings (a `barrierX` locus with true `v=4.0`
 recovered as `v_mean=5.34`). The `--phred` flag (for the Phred-scaled `PL`
 format GATK/bcftools/ANGSD actually output) was verified as an exact
 round-trip against the natural-log-encoded equivalent of the same data,
-not just "runs without erroring."
+not just "runs without erroring." (At the time this validation ran, GL
+input for these two commands was reached via separate `-gl`-suffixed
+command names; both were later merged into `fit-hierarchical-geographic`/
+`fit-hierarchical-genomic` themselves, which auto-detect hard-count vs.
+genotype-likelihood input from the column names present -- the findings
+below are unaffected, only the command names used to reach them.)
 
-**The dense-data requirement's error handling was tested for all four new
-fitting commands** (`fit-hierarchical-geographic-gl`/`fit-hierarchical-genomic-gl`,
-reusing the exact same `_stack_for_hierarchical` enforcement built for
-Components A/B) by constructing real CSVs with a deliberately missing
-value in one locus's data and confirming a clean, actionable error rather
-than a crash.
+**The dense-data requirement's error handling was tested for both
+fitting commands' genotype-likelihood path** (reusing the exact same
+`_stack_for_hierarchical` enforcement built for Components A/B) by
+constructing real CSVs with a deliberately missing value in one locus's
+data and confirming a clean, actionable error rather than a crash.
 
 Covered by `tests/test_data_io.py` (7 new tests for the GL readers) and
-`tests/test_cli.py` (11 new tests spanning all four new command groups).
-See BACKEND_PHASE4.md section 14 for the full design writeup.
+`tests/test_cli.py` (11 new tests spanning all four command/input-type
+combinations, before the later CLI merge). See BACKEND_PHASE4.md
+section 14 for the full design writeup.
 
 ## Validation: CLI wiring for Phase 5's own standalone fitting
 
 Same spirit as the Components C/D/E CLI validation above -- confirming
-the plumbing, not re-deriving the underlying Phase 5 findings. All four
-commands (`fit-geographic-gl`, `fit-genomic-gl`, `fit-geographic-gl-multi`, `fit-genomic-gl-multi`)
-were run end-to-end on freshly generated synthetic data.
+the plumbing, not re-deriving the underlying Phase 5 findings. At the
+time this validation ran, Phase 5's genotype-likelihood-aware fitting was
+reached via four separate commands (`fit-geographic-gl`, `fit-genomic-gl`,
+`fit-geographic-gl-multi`, `fit-genomic-gl-multi`); all four were later
+merged into `fit-geographic`/`fit-genomic` themselves, which auto-detect
+both hard-count vs. genotype-likelihood input *and* single- vs.
+multi-locus input (any locus count, one command) from the input file
+alone. The findings below are unaffected by that later merge, only the
+command names used to reach them -- described here as `fit-geographic`/
+`fit-genomic` throughout, their current names.
 
-**Single-locus commands correctly recovered known true parameters**:
-`fit-geographic-gl` on a `center=50` geographic cline recovered a sensible fit;
-`fit-genomic-gl` on a `v=4.0` genomic barrier locus recovered `v=4.56`.
+All four input/locus-count combinations were run end-to-end on freshly
+generated synthetic data.
 
-**Multi-locus commands needed real new plotting code, not a shortcut
-reuse of Components D/E's.** Independent multi-locus fitting has no
-dense-data requirement (unlike Components D/E's hierarchical batch
-models) -- different loci can freely have different numbers of
-individuals, since each is fit on its own. This was caught mid-build: an
-initial version of `fit-geographic-gl-multi` left dead code (unused variables, a
-no-op conditional) where the grid-plot logic should have been, rather
-than either building it correctly or leaving the feature out cleanly.
-Fixed by building two new, correctly-scoped plotting functions that
-handle each locus's own independent array, mirroring the *original*
-Phase 1/3 small-multiples plotters' shape rather than the newer
-hierarchical-specific ones. Both multi-locus commands were then run
-end-to-end and produced correctly-shaped grid plots for three
-independent loci each, including `fit-geographic-gl-multi` surfacing a real,
-legitimate edge case (one locus's Hessian-based standard errors coming
-back unavailable -- the existing correct fallback for a non-invertible
-Hessian, reported plainly rather than papered over).
+**Single-locus, genotype-likelihood input correctly recovered known true
+parameters**: `fit-geographic` on a `center=50` geographic cline
+recovered a sensible fit; `fit-genomic` on a `v=4.0` genomic barrier
+locus recovered `v=4.56`.
+
+**Multi-locus genotype-likelihood fitting needed real new plotting code,
+not a shortcut reuse of Components D/E's.** Independent multi-locus
+fitting has no dense-data requirement (unlike Components D/E's
+hierarchical batch models) -- different loci can freely have different
+numbers of individuals, since each is fit on its own. This was caught
+mid-build: an initial version of the geographic multi-locus GL path left
+dead code (unused variables, a no-op conditional) where the grid-plot
+logic should have been, rather than either building it correctly or
+leaving the feature out cleanly. Fixed by building two new,
+correctly-scoped plotting functions that handle each locus's own
+independent array, mirroring the *original* Phase 1/3 small-multiples
+plotters' shape rather than the newer hierarchical-specific ones. Both
+multi-locus paths were then run end-to-end and produced correctly-shaped
+grid plots for three independent loci each, including the geographic
+path surfacing a real, legitimate edge case (one locus's Hessian-based
+standard errors coming back unavailable -- the existing correct fallback
+for a non-invertible Hessian, reported plainly rather than papered over).
 
 **The `--phred` flag was verified at the full CLI level, not just the
-reader level**: `fit-geographic-gl` was run twice on the same underlying data --
-once with natural-log GL columns, once with the same values re-encoded
-as Phred-scaled PL and read back in with `--phred` -- confirming the
-fitted parameters matched to `1e-4`, exercising the complete path
-(argument parsing, file reading, conversion, fitting) rather than only
-the conversion function in isolation.
+reader level**: `fit-geographic` (genotype-likelihood input) was run
+twice on the same underlying data -- once with natural-log GL columns,
+once with the same values re-encoded as Phred-scaled PL and read back in
+with `--phred` -- confirming the fitted parameters matched to `1e-4`,
+exercising the complete path (argument parsing, file reading,
+conversion, fitting) rather than only the conversion function in
+isolation.
 
 Covered by `tests/test_data_io.py` (5 new tests for the single-locus GL
 readers) and `tests/test_cli.py` (10 new tests spanning all four
-commands). See BACKEND_PHASE5.md section 6 for the full design writeup.
+input/locus-count combinations, before the later CLI merge). See
+BACKEND_PHASE5.md section 6 for the full design writeup.
 
 ## Validation: the VCF + metadata converter
 
@@ -2074,14 +2093,17 @@ ground truth.
 **Geographic**: a synthetic dataset (8 sites, 6 individuals each, true
 cline center=70, width=25) was written as a VCF, converted via `hycline
 generate-geographic-input` (site-aggregated hard counts), and fit via
-`hycline fit-geographic-multi` -- recovered center=75.0, in line with the same kind
+`hycline fit-geographic` -- recovered center=75.0, in line with the same kind
 of finite-sample width variability already documented throughout this
 project (BACKEND_PHASE1.md/BACKEND_PHASE2.md's own case studies on this
-exact theme).
+exact theme). (This validation ran when multi-locus fitting was reached
+via a separate `fit-geographic-multi` command; `fit-geographic` itself
+now handles any locus count -- see the earlier "Validation: CLI wiring
+for Phase 5's own standalone fitting" section's own note on this merge.)
 
 **Genomic**: a synthetic barrier locus (true `u=0, v=4.0`) was written as
 a VCF with per-individual hybrid index, converted via `hycline
-convert-vcf-genomic`, and fit via `hycline fit-genomic-multi` --
+generate-genomic-input`, and fit via `hycline fit-genomic` --
 recovered `v=3.99`, essentially exact.
 
 **Two real bugs were found and fixed while building this component, not

@@ -188,6 +188,16 @@ itself isn't being carried through to the genomic cline's reported CIs.
 
 ## 6. CLI: `fit-genomic` and `fit-genomic-multi`
 
+**Correction, found during a later doc-consistency sweep: `fit-genomic-multi`
+(and its geographic counterpart `fit-geographic-multi`, referenced below)
+no longer exist in the CLI as separate commands.** Both were later
+merged into `fit-genomic`/`fit-geographic` themselves, which handle any
+locus count (one or thousands) with the same command, auto-detecting
+input type from the columns present -- see BACKEND_PHASE5.md section 6's
+correction note for the full account. This section's single-vs-multi
+split describes the original CLI surface; the findings themselves are
+unaffected.
+
 Following the same `fit-geographic`/`fit-geographic-multi` split established for geographic
 clines (`BACKEND_PHASE1.md`, README's "Command-line usage" section):
 

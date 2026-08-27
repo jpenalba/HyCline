@@ -652,7 +652,12 @@ says so directly rather than treating the two output modes as
 interchangeable defaults.
 
 **Verified end to end against known ground truth, through the actual
-CLI commands, not just the Python API in isolation.** A synthetic
+CLI commands, not just the Python API in isolation.** (Command names
+below -- `fit-geographic-gl-multi`, `fit-geographic-multi`,
+`fit-genomic-gl-multi` -- are this feature's original ones and no longer
+exist in the CLI; see BACKEND_PHASE5.md section 6's correction note for
+the full account of the later merge into `fit-geographic`/`fit-genomic`.
+The recovery numbers below are unaffected.) A synthetic
 geographic cline (true center=70, width=25) was written as a beagle file
 and converted both ways: `--genotype-likelihoods` output, fit via
 `fit-geographic-gl-multi`, recovered center=70.4; site-aggregated hard-count output

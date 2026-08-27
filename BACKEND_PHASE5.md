@@ -271,6 +271,36 @@ any combination happens).
 
 ## 6. CLI wiring for Phase 5's own standalone fitting
 
+**Correction, found during a later doc-consistency sweep: none of the
+command names below (`fit-gl`, `fit-gl-multi`, `fit-geographic-gl`,
+`fit-geographic-gl-multi`, `fit-genomic-gl`, `fit-genomic-gl-multi`,
+`fit-geographic-multi`, `fit-genomic-multi` -- this section isn't even
+internally consistent about whether the geographic single-locus command
+was called `fit-gl` or `fit-geographic-gl`) exist in the CLI as it
+stands today. This is the canonical correction other BACKEND_PHASE*.md/
+BACKEND_SCALE.md/BACKEND_TRAIT.md files with the same stale names point
+back to.** Checked
+directly (`python3 run_hycline.py <name> --help` against the current
+parser, which only accepts `fit-geographic`, `compare-tails`,
+`fit-trait`, `fit-trait-multi`, `fit-genomic`, `fit-hierarchical-
+geographic`, `fit-hierarchical-genomic`, `coupling-geographic`,
+`coupling-genomic`, `flag-candidates-geographic`, `flag-candidates-
+genomic`, `estimate-hybrid-index`, `generate-geographic-input`,
+`generate-genomic-input`, `filter-aims`) -- genotype-likelihood input
+and single-vs-multi-locus handling for the independent-fitting path were
+both later merged into `fit-geographic`/`fit-genomic` themselves, which
+auto-detect input type from the column names present and handle any
+locus count with the same command. This section's own command names and
+its git-history-free "at the time" claims below describe this feature's
+original CLI surface, which never coexisted with git tracking (the whole
+repository's non-`hycline/` history is a single bulk "Add files via
+upload" commit, so there is no commit-by-commit record of exactly when
+or why the merge happened) -- read the specific command names in this
+section as historical, not current; the findings/validation numbers
+themselves are unaffected. See README.md's own "Validation: CLI wiring
+for Phase 5's own standalone fitting" section for the corrected,
+current-command-name version of this same validation narrative.
+
 `hycline fit-gl`/`fit-genomic-gl` (single-locus) and `hycline
 fit-gl-multi`/`fit-genomic-gl-multi` (independent multi-locus) expose
 `fit_mle_geographic_gl`/`fit_mle_genomic_gl` from the command line --

@@ -32,9 +32,9 @@ checked at scale, not just "did it finish."
 | VCF parsing | 10,000 loci, 60 samples | 0.83s | ~12,000 loci/sec |
 | `generate-geographic-input` (full CLI, parse+join+write; VCF input -- was `convert-vcf-geographic` at the time this was measured) | 3,000 loci | 4.91s | -- |
 | Wide-format CSV read/write (via the above) | 3,000 loci, 6,002 columns | (included above) | -- |
-| `fit-geographic-multi` classic MLE, hard counts, no plot | 3,000 loci | 162.8s | ~0.054s/locus |
-| `fit-geographic-gl-multi` classic MLE, genotype-likelihood-aware, no plot | 1,000 loci | 101.4s | ~0.101s/locus |
-| `fit-genomic-multi` classic MLE, genomic clines, no plot | 1,000 loci | 15.4s | ~0.015s/locus |
+| `fit-geographic-multi` classic MLE, hard counts, no plot (was `fit-geographic-multi` at the time this was measured, now the multi-locus path of `fit-geographic` itself) | 3,000 loci | 162.8s | ~0.054s/locus |
+| `fit-geographic-gl-multi` classic MLE, genotype-likelihood-aware, no plot (was `fit-geographic-gl-multi` at the time this was measured, now `fit-geographic` with genotype-likelihood input auto-detected) | 1,000 loci | 101.4s | ~0.101s/locus |
+| `fit-genomic-multi` classic MLE, genomic clines, no plot (was `fit-genomic-multi` at the time this was measured, now the multi-locus path of `fit-genomic` itself) | 1,000 loci | 15.4s | ~0.015s/locus |
 | `genotype-to-gl` conversion (a CLI command at the time this was measured; since removed from the CLI along with the CSV-genotype pipeline it served -- the underlying `hycline.data.converter.convert_genotype_csv_to_gl_csv` function this number reflects is unchanged, still available for direct Python use) | 1,000 loci | 3.6s | -- |
 | `estimate-hybrid-index` column detection/loading | 1,000 loci | 1.5s | -- |
 
@@ -84,7 +84,8 @@ checking against known ground truth at the same time closes that gap.
 
 This was flagged as a likely issue before testing (`README.md`'s Tier 2
 "scale-aware default outputs" item), but the actual severity was
-unknown. Now it is: at just **300 loci**, `fit-geographic-multi`'s default grid plot
+unknown. Now it is: at just **300 loci**, `fit-geographic`'s (called
+`fit-geographic-multi` at the time this was measured) default grid plot
 (one small-multiples panel per locus) is already **2,025 x 52,500
 pixels** (a 52,500-pixel-tall image), 9.3MB, and Pillow's own
 decompression-bomb heuristic (`DecompressionBombWarning`, intended to
@@ -146,7 +147,9 @@ seven functions is exactly what those two already did organically.
 
 ### 4.2 Every multi-locus CLI command dumped the full locus-name list to the console
 
-`fit-geographic-multi`/`fit-genomic-multi`/`fit-geographic-gl-multi`/`fit-genomic-gl-multi`/
+`fit-geographic-multi`/`fit-genomic-multi`/`fit-geographic-gl-multi`/`fit-genomic-gl-multi`
+(these four command names since merged into `fit-geographic`/
+`fit-genomic` -- see BACKEND_PHASE5.md section 6's correction note)/
 `genotype-to-gl`/`genotype-to-hard-counts` (the latter two since removed
 from the CLI entirely -- see BACKEND_PHASE1.md section 9.6's closing
 note) all printed something like

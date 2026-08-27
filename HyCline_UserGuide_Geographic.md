@@ -78,7 +78,7 @@ Reading vcf data from 'genomewide.vcf' ...
   20 loci checked, 3 retained (>= 0.9 in one population and <= 0.1 in the other, either direction)
 
 Wrote filtered.vcf
-Ready for: hycline generate-geographic-input / convert-vcf-genomic, using this file as --input.
+Ready for: hycline generate-geographic-input / generate-genomic-input, using this file as --input.
 ```
 
 For VCF specifically: **every retained line is copied byte-for-byte from the

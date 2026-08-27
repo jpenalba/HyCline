@@ -60,8 +60,8 @@ difference by around 15x.
 below roughly 15x, plan to sequence for genotype likelihoods (ANGSD,
 `-doGlf 2`) and use the beagle/GL fitting path
 (`generate-geographic-input` auto-detects this from beagle input; see
-the Geographic guide's "Why fitting isn't just estimate-a-frequency-
-then-fit" section for the full mechanism). This matters most exactly
+the Geographic guide's "Why fitting isn't just 'estimate a frequency,
+then fit'" section for the full mechanism). This matters most exactly
 where it's easy to overlook: parental reference individuals sitting near
 the frequency extremes, which is precisely where the bias above is
 worst. If your depth is reliably high (15x+), hard calls are simpler and
@@ -221,7 +221,7 @@ the real biological `var_h` signal the model is trying to detect.
 | Question | Where the evidence lives |
 |---|---|
 | How many parental reference individuals for `filter-aims`? | Geographic guide, Step 1 |
-| Hard calls or genotype likelihoods? | Geographic guide, "Why fitting isn't just estimate-a-frequency-then-fit" |
+| Hard calls or genotype likelihoods? | Geographic guide, "Why fitting isn't just 'estimate a frequency, then fit'" |
 | How to set `--width-upper-bound` for Bayesian fits? | Geographic guide, "Choosing MLE or Bayesian inference" |
 | Individuals per locus for genomic clines? | Genomic guide, Step 4 |
 | Loci needed for `fit-hierarchical-genomic` to converge? | Genomic guide, "Fitting hierarchically" |

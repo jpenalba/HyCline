@@ -1156,6 +1156,19 @@ clean convergence (R-hat=1.00, zero divergences).
 
 ## 14. CLI wiring for Components C, D, and E
 
+**Correction, found during a later doc-consistency sweep: `fit-
+hierarchical-geographic-gl`/`fit-hierarchical-genomic-gl` don't exist in
+the CLI as it stands today** -- checked directly against the current
+parser (only `fit-hierarchical-geographic`/`fit-hierarchical-genomic`
+exist, auto-detecting genotype-likelihood vs. hard-count input from the
+column names present, same command either way). Read this section's own
+command names as describing this feature's original CLI surface before
+that later merge -- the findings/validation numbers are unaffected. See
+BACKEND_PHASE5.md section 6's own correction note for the parallel issue
+on the independent-fitting path, and README.md's "Validation: CLI wiring
+for Components C, D, and E" section for the corrected, current-command-
+name version of the validation narrative below.
+
 `hycline coupling-geographic`/`coupling-genomic` (Component C),
 `hycline fit-hierarchical-geographic-gl` (Component D), and `hycline
 fit-hierarchical-genomic-gl` (Component E) close the remaining CLI gap
