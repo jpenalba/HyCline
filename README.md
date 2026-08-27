@@ -1041,14 +1041,46 @@ pointer to "go read the outlier-detection literature":
   automated in general (it requires a second dataset), but the study
   design guide should say so plainly rather than let a single-transect
   result read as more confident than it is.
-- **Worth reading before implementing, not yet reviewed by this
-  project**: Fitzpatrick (2013) itself (the original logit-logistic
-  paper HyCline's own model is built from -- referenced repeatedly by
-  every paper above but not yet read directly here) and Firneno et al.
-  2023 (already influencing HyCline's `--pool-center` reparameterization
-  and the `coupling-genomic` theta calibration, per BACKEND_PHASE4.md,
-  but likewise never read directly -- worth closing that gap before
-  building on top of it further).
+- **Now read directly, closing the gap noted above**: Fitzpatrick (2013)
+  and Firneno et al. (2023) have both been read in full (PDFs in
+  `references/`, notes in `references/README.md`). Neither changes the
+  design above -- if anything both reinforce it directly: Fitzpatrick's
+  own simulations found the logit-logistic model has the best precision/
+  sensitivity balance for outlier detection of the models he compared,
+  and that naive null-hypothesis testing (ignoring drift) is badly
+  miscalibrated, independently supporting the delta-AIC/delta-WAIC
+  ranking approach above over raw p-values. Firneno et al.'s own
+  robustness checks add one caveat not yet reflected in
+  `coupling-geographic`/`coupling-genomic`'s docs: their sigma-to-theta
+  calibration is sensitive to the migration rate and genetic map size
+  assumed in the underlying simulations, and can lose essentially all
+  predictive power (~0% out-of-bag variance explained in one of their own
+  checks) when applied outside those conditions -- worth folding into the
+  shape-mismatch caveat item below as a second, distinct reason the
+  calibration can mislead.
+- **A third primary source, read directly in the same pass, not
+  previously on this project's radar**: Payseur (2010), *Mol Ecol
+  Resour* 10:806-820, doi:10.1111/j.1755-0998.2010.02883.x -- a review of
+  differential-introgression methods that names confounds for outlier-
+  based candidate detection not yet listed above. Worth folding into the
+  adaptive-introgression flagging feature's caveat text alongside the
+  drift/epistasis caveats already specified:
+  - **Incomplete lineage sorting (ILS)** produces the same locus-level
+    signature as recent gene flow, and is a larger confound than drift
+    alone for recently diverged species or large effective population
+    sizes -- worth naming explicitly, not left implicit under "drift."
+  - **Marker ascertainment bias**: fixed-difference markers -- exactly
+    what `filter-aims` selects for -- systematically bias toward
+    *underestimating* introgression, and regions that actually carry
+    reproductive-isolation genes are, paradoxically, more likely to have
+    fixed differences in the first place, making reduced introgression
+    there specifically harder to detect by comparison to other loci.
+  - **A false-negative risk, not just false-positive**: citing the wider
+    genome-scan literature (Kelley et al. 2006; Teshima et al. 2006),
+    truly selected loci need not lie in the most extreme tail of the
+    empirical outlier distribution -- worth stating alongside the
+    existing false-positive-focused caveats so the mandatory caveat text
+    doesn't read as one-sided.
 
 Three real, small items surfaced while extending `--hzar-tail` to the
 Bayesian path (BACKEND_PHASE2.md section 14, BACKEND_TRAIT.md
