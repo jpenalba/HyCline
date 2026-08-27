@@ -72,9 +72,10 @@ README.md's Tier 1 backlog.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
+from scipy import stats
 
 
 # ---------------------------------------------------------------------------
@@ -424,3 +425,347 @@ def calibration_data_range() -> dict:
         "sigma_c_min": float(data[:, 0].min()), "sigma_c_max": float(data[:, 0].max()),
         "sigma_v_min": float(data[:, 1].min()), "sigma_v_max": float(data[:, 1].max()),
     }
+
+
+# ---------------------------------------------------------------------------
+# Candidate-locus flagging: adapts Fitzpatrick (2013)'s multivariate
+# outlier-detection method (his own D^2 vs. chi-squared(df=2) approach,
+# read directly from his "Outlier detection" section) to both geographic
+# and genomic hierarchical fits with one shared statistical core.
+#
+# CATEGORY NAMES NAME THE STATISTICAL PATTERN, NOT A CONFIRMED MECHANISM.
+# An earlier design used mechanism-flavored names ("barrier"/"speciation
+# candidate", "adaptive_introgression") for two of the four categories
+# while the third ("elevated_gene_flow") was already pattern-based --an
+# inconsistency, and a real risk: a column of confident-sounding category
+# labels in a CSV is exactly the kind of thing that gets copy-pasted into
+# a results table without the caveat text attached to it. All three
+# outlier categories are now named after the observed pattern alone
+# (restricted / elevated / asymmetric gene flow); which evolutionary
+# mechanism a given pattern is *most consistent with*, per Fitzpatrick's
+# own single-mechanism simulations, lives in this module's docstring and
+# in CANDIDATE_FLAGGING_CAVEAT below, not in the machine-readable value:
+#   - restricted_gene_flow (steep rate, not displaced): Fitzpatrick's
+#     heterozygote-disadvantage simulation produced exactly this signature
+#     ("cleanest, least ambiguous" of his single-mechanism cases) -- the
+#     pattern a genuine reproductive-isolation barrier locus is expected
+#     to show, resisting introgression from both directions symmetrically.
+#   - elevated_gene_flow (shallow rate, not displaced): Fitzpatrick's
+#     heterozygote-advantage simulation produced the mirror-image "inside-
+#     out" signature -- symmetric excess porosity, consistent with hybrid
+#     vigor at this locus specifically, but NOT reported as adaptive
+#     introgression, since there is no directional bias signal
+#     establishing which parent's allele is favored. A second, unrelated,
+#     equally real cause of this same pattern: recombination-rate
+#     heterogeneity (Payseur 2010) -- a neutral locus sitting in a region
+#     of elevated local recombination will show reduced linkage
+#     disequilibrium with nearby real barrier loci, mimicking this
+#     signature with zero heterozygote advantage at the locus itself.
+#   - asymmetric_gene_flow (center/bias displaced, rate not steep):
+#     Fitzpatrick's directional/environmental-selection simulation
+#     produced displacement without steepening -- the closest single-
+#     mechanism match to one-directional, selection-driven introgression.
+#     But displacement alone is also exactly what incomplete lineage
+#     sorting produces in recently diverged taxa (Payseur 2010) -- this
+#     category is a *candidate* for adaptive introgression, not a finding
+#     of it.
+#   - ambiguous (both dimensions triggered, or a joint-but-not-marginal
+#     deviation): not one of Fitzpatrick's simulated single-mechanism
+#     cases. Real, named scenarios that land here, not just "unclear":
+#     multiple physically linked selected loci with different individual
+#     effects (a true barrier locus in LD with a separately-favored one);
+#     a single locus under two selection pressures simultaneously
+#     (reduced heterozygote fitness AND a habitat-driven advantage); and,
+#     importantly, drift acting on top of an underdominant/DMI locus,
+#     which Jofre & Rosenthal (2021) show can narrow a cline's width AND
+#     shift its center as a statistical artifact ("spurious centre
+#     outliers") with no combined-selection scenario behind it at all --
+#     the single strongest reason this category is a real "reported, not
+#     force-categorized" bucket rather than always resolved one way.
+#
+# See README.md's Tier 1 backlog for the full design discussion this was
+# built from, and BACKEND_PHASE4.md section 15 for the implementation
+# notes (statistic derivation, Bonferroni-correction convention, and the
+# geographic/genomic sign-convention handling for "steep").
+# ---------------------------------------------------------------------------
+
+CANDIDATE_FLAGGING_CAVEAT = """\
+CAVEATS (read before interpreting these categories as findings):
+1. Cline-shape signatures alone cannot identify *which* evolutionary
+   mechanism produced an outlier. Quoting Gompert, Parchman & Buerkle
+   (2012) on their own genomic-cline model: "previous attempts (including
+   our own) to associate a specific form of selection... with a locus
+   based on the sign or magnitude of cline parameters were perhaps overly
+   simplistic and naive." These categories narrow *what pattern* was
+   observed, not *why* it occurred.
+2. This method is weak at detecting epistatic (Dobzhansky-Muller-style)
+   incompatibilities specifically -- Gompert & Buerkle (2011)'s own
+   simulations found a 0.81-0.95 false discovery rate for pairwise
+   epistasis (vs. <0.1 for underdominance/directional selection), and
+   Payseur (2010) confirms this is not genomic-cline-specific.
+3. Genetic drift alone generates real cross-locus variance, and
+   incomplete lineage sorting is a larger confound than drift for
+   recently diverged species or large effective population sizes
+   (Payseur 2010) -- named explicitly, not left implicit under "drift."
+4. Marker ascertainment bias: fixed-difference markers (exactly what
+   `filter-aims` selects for) systematically bias toward underestimating
+   introgression, and loci that actually carry reproductive-isolation
+   genes are, paradoxically, more likely to have fixed differences in the
+   first place -- making reduced introgression there specifically harder
+   to detect by comparison to other loci (Payseur 2010).
+5. A false-negative risk, not just false-positive: truly selected loci
+   need not lie in the most extreme tail of the empirical outlier
+   distribution (Kelley et al. 2006; Teshima et al. 2006, via Payseur
+   2010).
+6. Drift acting on an underdominant or Dobzhansky-Muller-incompatible
+   locus can narrow a cline's width *and* shift its center in a way that
+   specifically mimics a combined restricted-plus-asymmetric signal
+   ("spurious centre outliers," Jofre & Rosenthal 2021) -- not generic
+   noise, a false signal shaped like the thing being searched for, and
+   the specific reason the 'ambiguous' category exists rather than
+   forcing such loci into one of the other three.
+7. Outlier analysis on a single hybrid zone transect is only reliable
+   within a fairly narrow demographic window (Jofre & Rosenthal 2021:
+   their own false-positive rates ranged from 1.35% in the best case to
+   98.9% in the worst). Cross-validating candidates against independent
+   replicate transects of the same species pair, where available, is the
+   strongest available check, and cannot be automated in general.
+"""
+
+
+@dataclass
+class LocusCandidateFlag:
+    locus: str
+    d2: float
+    chi2_quantile: float
+    is_outlier: bool
+    center_outlier: bool
+    rate_outlier: bool
+    rate_direction: Optional[str]  # "steep" / "shallow" / None (not a rate outlier)
+    category: Optional[str]  # "restricted_gene_flow" / "elevated_gene_flow" /
+                              # "asymmetric_gene_flow" / "ambiguous" / None (not flagged)
+
+
+@dataclass
+class CandidateFlagResult:
+    flags: List[LocusCandidateFlag]
+    alpha: float
+    n_loci: int
+
+    def summary(self) -> str:
+        n_flagged = sum(1 for f in self.flags if f.is_outlier)
+        counts: dict = {}
+        for f in self.flags:
+            if f.category is not None:
+                counts[f.category] = counts.get(f.category, 0) + 1
+        lines = [f"Candidate-locus flagging across {self.n_loci} loci "
+                 f"(Bonferroni-adjusted alpha={self.alpha}/{self.n_loci} per test):",
+                 f"  {n_flagged}/{self.n_loci} loci flagged as statistical outliers"]
+        for cat in ("restricted_gene_flow", "elevated_gene_flow",
+                    "asymmetric_gene_flow", "ambiguous"):
+            if cat in counts:
+                lines.append(f"    {cat}: {counts[cat]}")
+        lines.append("")
+        lines.append(CANDIDATE_FLAGGING_CAVEAT)
+        return "\n".join(lines)
+
+
+def _flag_from_z_scores(locus_names, z_center, z_rate_steep_positive,
+                         alpha: float) -> CandidateFlagResult:
+    """Shared statistical core for both cline types: a diagonal-covariance
+    squared Mahalanobis distance D^2 = z_center^2 + z_rate^2, treated as a
+    chi-squared(df=2) random variable under the null (Fitzpatrick 2013's
+    own approach, read directly from his "Outlier detection" section --
+    the sum of two independent standardized-normal squares), with a
+    Bonferroni-adjusted critical value (alpha/n_loci, matching Fitzpatrick's
+    own convention of one correction factor for n tests, not a further
+    split across the two parameters).
+
+    Which single dimension individually exceeds its own per-parameter
+    threshold (same alpha/n_loci correction, applied as a two-sided
+    Normal test) determines `center_outlier`/`rate_outlier` -- D^2 alone
+    determines `is_outlier`. A locus can be a joint (D^2) outlier without
+    either marginal z exceeding its own stricter threshold; this lands in
+    'ambiguous' rather than silently going uncategorized, since it's a
+    real joint deviation the two single-parameter tests aren't positioned
+    to explain individually.
+
+    `z_rate_steep_positive` must already be signed so that positive means
+    steeper-than-population-average and negative means shallower -- this
+    helper is direction-agnostic; callers own the sign convention (see
+    `flag_geographic_candidates`/`flag_genomic_candidates`, where the two
+    cline types define "steep" in opposite directions relative to their
+    own raw parameter).
+    """
+    locus_names = list(locus_names)
+    z_center = np.asarray(z_center, dtype=float)
+    z_rate_steep_positive = np.asarray(z_rate_steep_positive, dtype=float)
+    n = len(locus_names)
+    if n < 2:
+        raise ValueError("Need at least 2 loci to flag candidates.")
+    if len(z_center) != n or len(z_rate_steep_positive) != n:
+        raise ValueError("locus_names, z_center, and z_rate_steep_positive must have "
+                          "the same length.")
+
+    corrected_alpha = alpha / n
+    chi2_crit = stats.chi2.ppf(1.0 - corrected_alpha, df=2)
+    z_crit = stats.norm.ppf(1.0 - corrected_alpha / 2.0)
+
+    flags = []
+    for name, zc, zr in zip(locus_names, z_center, z_rate_steep_positive):
+        d2 = float(zc ** 2 + zr ** 2)
+        is_outlier = d2 > chi2_crit
+        center_outlier = abs(zc) > z_crit
+        rate_outlier = abs(zr) > z_crit
+
+        if rate_outlier:
+            rate_direction = "steep" if zr > 0 else "shallow"
+        else:
+            rate_direction = None
+
+        if not is_outlier:
+            category = None
+        elif center_outlier and rate_outlier:
+            category = "ambiguous"
+        elif center_outlier:
+            category = "asymmetric_gene_flow"
+        elif rate_outlier:
+            category = "restricted_gene_flow" if rate_direction == "steep" else "elevated_gene_flow"
+        else:
+            # a joint D^2 outlier where neither marginal test individually
+            # crosses its own (stricter) threshold -- a real, subtler
+            # combined deviation, not a fifth "no reason" bucket.
+            category = "ambiguous"
+
+        flags.append(LocusCandidateFlag(
+            locus=name, d2=d2, chi2_quantile=float(stats.chi2.cdf(d2, df=2)),
+            is_outlier=bool(is_outlier), center_outlier=bool(center_outlier),
+            rate_outlier=bool(rate_outlier), rate_direction=rate_direction,
+            category=category))
+
+    return CandidateFlagResult(flags=flags, alpha=alpha, n_loci=n)
+
+
+def flag_geographic_candidates(locus_names, locus_center, locus_width,
+                                mu_center: float, sigma_center: float,
+                                mu_log_width: float, sigma_log_width: float,
+                                alpha: float = 0.05) -> CandidateFlagResult:
+    """Flag geographic-cline loci as candidates for restricted, elevated,
+    or asymmetric gene flow relative to the rest of the locus set, using
+    Fitzpatrick (2013)'s multivariate outlier method against a
+    hierarchical fit's own population-level hyperparameters.
+
+    Scope: intended for hierarchical fits only (`fit-hierarchical-
+    geographic`'s `population_summary()`/`locus_summary()`), not
+    independent per-locus fits -- an independent point estimate's own
+    sampling noise can look exactly like a real outlier, while the
+    hierarchical population-level hyperparameters already estimate the
+    correct empirical null while properly accounting for that per-locus
+    uncertainty. See this module's own "WHY THIS COMES AFTER COMPONENTS
+    A/B" docstring note above for the same reasoning applied to
+    `geographic_cline_variance`.
+
+    "Steep" for geographic clines means *narrower* width than the
+    population average (width and steepness are inversely related) --
+    this function flips the sign of z(log width) internally so a
+    positive `rate` z-score always means steeper, matching the shared
+    convention `_flag_from_z_scores` expects.
+
+    Parameters
+    ----------
+    locus_names : per-locus names, same order as locus_center/locus_width
+    locus_center, locus_width : per-locus point estimates (e.g.
+        `HierarchicalFitResult.locus_summary()`'s `center_mean`/
+        `width_mean` columns)
+    mu_center, sigma_center, mu_log_width, sigma_log_width : population-
+        level hyperparameter posterior means (e.g.
+        `HierarchicalFitResult.population_summary()`'s `mean` column for
+        each of these four rows)
+    alpha : family-wise significance level before Bonferroni correction
+        across loci (default 0.05, matching Fitzpatrick's own choice)
+
+    Returns
+    -------
+    CandidateFlagResult
+
+    See `CANDIDATE_FLAGGING_CAVEAT` (and this module's section header
+    comment above `LocusCandidateFlag`) for the mandatory caveats on
+    interpreting these categories -- they name statistical patterns, not
+    confirmed evolutionary mechanisms.
+    """
+    locus_center = np.asarray(locus_center, dtype=float)
+    locus_width = np.asarray(locus_width, dtype=float)
+    if np.any(locus_width <= 0):
+        raise ValueError("locus_width must be positive.")
+    if sigma_center <= 0 or sigma_log_width <= 0:
+        raise ValueError("sigma_center and sigma_log_width must be positive.")
+
+    z_center = (locus_center - mu_center) / sigma_center
+    z_log_width = (np.log(locus_width) - mu_log_width) / sigma_log_width
+    z_rate_steep_positive = -z_log_width  # narrower width = steeper -> flip sign
+
+    return _flag_from_z_scores(locus_names, z_center, z_rate_steep_positive, alpha)
+
+
+def flag_genomic_candidates(locus_names, locus_u, locus_v,
+                             mu_center_or_u: float, sigma_center_or_u: float,
+                             mu_log_v: float, sigma_log_v: float,
+                             pool_center: bool = False,
+                             alpha: float = 0.05) -> CandidateFlagResult:
+    """Flag genomic-cline loci as candidates for restricted, elevated, or
+    asymmetric gene flow relative to the rest of the locus set, using
+    Fitzpatrick (2013)'s multivariate outlier method against a
+    hierarchical fit's own population-level hyperparameters.
+
+    Scope, and why hierarchical-only, exactly mirrors
+    `flag_geographic_candidates` -- see that function's docstring.
+
+    "Steep" for genomic clines means `v > 1` (steeper than the neutral/
+    population-average rate), so `z(log v)` is used directly with no sign
+    flip -- unlike the geographic case, where narrower width (the
+    opposite-signed relationship) is steeper.
+
+    Parameters
+    ----------
+    locus_names : per-locus names, same order as locus_u/locus_v
+    locus_u, locus_v : per-locus point estimates (e.g.
+        `HierarchicalGenomicFitResult.locus_summary()`'s `u_mean`/`v_mean`
+        columns -- present regardless of whether the fit used
+        `pool_center`, per that method's own docstring)
+    mu_center_or_u, sigma_center_or_u : population-level hyperparameter
+        posterior means for the center/bias dimension -- pass
+        `population_summary()`'s `mu_center`/`sigma_center` row means if
+        the fit used `pool_center=True`, or `mu_u`/`sigma_u` otherwise
+        (set `pool_center` to match)
+    mu_log_v, sigma_log_v : population-level hyperparameter posterior
+        means for `log_v` (present in `population_summary()` either way)
+    pool_center : must match whatever `pool_center` state the hierarchical
+        fit that produced `mu_center_or_u`/`sigma_center_or_u` used --
+        determines whether the center dimension is computed as
+        `logit(center) = u/v` (True, Firneno et al. 2023's own quantity)
+        or used as raw `u` directly (False, the default)
+    alpha : family-wise significance level before Bonferroni correction
+        across loci (default 0.05, matching Fitzpatrick's own choice)
+
+    Returns
+    -------
+    CandidateFlagResult
+
+    See `CANDIDATE_FLAGGING_CAVEAT` for the mandatory caveats on
+    interpreting these categories.
+    """
+    locus_u = np.asarray(locus_u, dtype=float)
+    locus_v = np.asarray(locus_v, dtype=float)
+    if len(locus_u) != len(locus_v):
+        raise ValueError("locus_u and locus_v must have the same length.")
+    if np.any(locus_v <= 0):
+        raise ValueError("locus_v must be positive.")
+    if sigma_center_or_u <= 0 or sigma_log_v <= 0:
+        raise ValueError("sigma_center_or_u and sigma_log_v must be positive.")
+
+    center_dim = (locus_u / locus_v) if pool_center else locus_u
+    z_center = (center_dim - mu_center_or_u) / sigma_center_or_u
+    z_log_v = (np.log(locus_v) - mu_log_v) / sigma_log_v
+    z_rate_steep_positive = z_log_v  # v>1 = steep -> already the right sign
+
+    return _flag_from_z_scores(locus_names, z_center, z_rate_steep_positive, alpha)

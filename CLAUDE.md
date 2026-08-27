@@ -2,7 +2,7 @@
 
 A Python successor to the R package HZAR (Derryberry et al. 2014) for hybrid
 zone cline analysis, extended to genomic clines, quantitative trait clines,
-and coupling/concordance analysis. 431 tests, all passing as of this file's
+and coupling/concordance analysis. 455 tests, all passing as of this file's
 last update. CLI entry point: `hycline` (or `python run_hycline.py`).
 
 **Before doing anything else, read `README.md` in full** -- particularly the
@@ -14,42 +14,37 @@ the actual backlog, not background reading.
 
 ## Current priorities (Tier 1, top of the list)
 
-Two items were added most recently, both from a direct reading of Baird &
-Daley (2025), *The Shapes of Clines and Wavefronts* (Mol Ecol,
-doi:10.1111/mec.70109) -- see `references/` for the PDF, and README.md's
-Tier 1 section for full detail:
+The two items previously headlined here -- a geographic T-cline tail-model
+alternative (Baird & Daley 2025), and candidate-locus flagging (Fitzpatrick
+2013, adapted to both cline types) -- are both done, not backlog. See
+README.md's "What's implemented" section (the `t_cline_function` and
+`flag_geographic_candidates`/`flag_genomic_candidates` bullets) for what
+shipped, and BACKEND_PHASE2.md section 15 / BACKEND_PHASE4.md section 15
+respectively for the full design writeups. Fitzpatrick (2013) and Firneno
+et al. (2023) -- both cited by the papers above but not read directly at
+the time this section was first written -- have since been read directly
+too (commit `b83afc0`), with every specific claim checked against the PDF
+text rather than trusted secondhand.
 
-1. **A geographic T-cline tail-model alternative.** HyCline's existing
-   `--hzar-tail` tripartite model has a real, previously-only-empirically-
-   documented convergence difficulty; Baird & Daley's paper gives the
-   underlying reason (genuine mathematical discontinuities where the
-   tripartite model's pieces join) and a validated, already-coded
-   alternative (`Clinalyse`, github.com/Studenecivb/clinalyse) to port from.
-2. **Adaptive-introgression candidate flagging**, specified in detail in
-   README.md's Tier 1 section after reading four primary sources directly
-   (Gompert et al. 2012; Bailey 2024; Jofre & Rosenthal 2021; Gompert &
-   Buerkle 2011 -- all in `references/`). Key constraints already worked
-   out: rank by delta-AIC/delta-waic, not raw p-values (Bailey 2024 found
-   p-values non-monotonic with true effect size); report center-outliers
-   and rate-outliers separately; the output must carry a mandatory caveat
-   that cline shape alone cannot identify the selective mechanism (this is
-   the original bgc authors' own stated conclusion about their model, not
-   a hedge); and the method has a documented blind spot for epistatic
-   incompatibilities specifically (0.81-0.95 false discovery rate in
-   Gompert & Buerkle 2011's own simulations).
+What's actually next, in order, per README.md's Tier 1 section:
 
-**Correction: both have now been read directly** (commit `b83afc0`), closing
-the gap this paragraph used to flag -- Fitzpatrick (2013), the original
-logit-logistic genomic cline paper HyCline's own model is built from, and
-Firneno et al. 2023, which already shapes the `--pool-center`
-reparameterization and `coupling-genomic`'s theta calibration. Findings are
-folded into `references/README.md`, README.md's Tier 1 candidate-flagging
-spec (Fitzpatrick's own precision/sensitivity numbers and outlier-detection
-method), and `hycline/analysis/coupling.py`'s docstring plus
-`HyCline_UserGuide_Coupling.md` (Firneno's migration-rate-sensitivity
-caveat on the theta calibration). Every specific claim in
-`references/README.md` attributed to these two papers was checked directly
-against the PDF text (not just trusted) before this correction was written.
+1. **Two small, genuinely separate items surfaced by the candidate-flagging
+   work but not part of it**: a `fit-hierarchical-genomic` warning for
+   uneven hybrid-index sampling (Bailey 2024's own finding that this
+   degrades accuracy specifically for steep genomic clines), and a
+   delta-AIC/WAIC ranking addition for the classic-MLE genomic path
+   (`fit-genomic`/`fit-hierarchical-genomic`), independent of the
+   hierarchical-only flagging feature already built.
+2. Several older Tier 1 items already investigated and scoped, not
+   freshly discovered: a `TailType.MIRROR` parameter-naming inconsistency
+   between classic and Bayesian output; missing HZAR-tail support in
+   `fit_mle_fixed_extremes` and in Components A/D (Phase 4's hierarchical
+   geographic models); real-world input-compatibility gaps found against
+   HZAR's own bundled datasets (semicolon-delimited CSVs, multiallelic-
+   locus handling, no STRUCTURE/PLINK reader); and unbuffered stdout on
+   long multi-locus/Bayesian runs. See README.md's Tier 1 section for the
+   full detail on each -- all are scoped, none require further
+   investigation before picking up.
 
 ## References folder
 
@@ -62,7 +57,7 @@ to hold itself to throughout (see "Key principles" below).
 
 ## Where things live
 
-- `hycline/cli.py` -- the CLI, 13 top-level commands.
+- `hycline/cli.py` -- the CLI, 15 top-level commands.
 - `hycline/models/` -- the cline functions themselves (`cline.py`,
   `genomic_cline.py`).
 - `hycline/likelihoods/` -- binomial likelihood, genotype-likelihood-aware
@@ -72,7 +67,7 @@ to hold itself to throughout (see "Key principles" below).
   `mcmc_genomic_hierarchical.py`, `mcmc_pymc.py`).
 - `hycline/data/` -- readers/writers, VCF/beagle handling, AIM filtering.
 - `hycline/viz/` -- plotting.
-- `tests/` -- 410 tests. `test_cli.py` and the MCMC test files are the
+- `tests/` -- 455 tests. `test_cli.py` and the MCMC test files are the
   slowest; if the environment has tight per-command timeouts, split large
   test runs into batches rather than assuming a single `pytest tests/` call
   will complete.

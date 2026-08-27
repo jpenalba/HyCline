@@ -13,7 +13,8 @@ import pytest
 from hycline.analysis.coupling import (
     geographic_cline_variance, genomic_cline_variance, estimate_coupling_coefficient,
     calibration_data_range, FIRNENO_2023_TABLE1, GeographicClineVariance,
-    GenomicClineVariance,
+    GenomicClineVariance, flag_geographic_candidates, flag_genomic_candidates,
+    CANDIDATE_FLAGGING_CAVEAT,
 )
 
 
@@ -270,3 +271,240 @@ def test_end_to_end_with_hierarchical_genomic_fit():
     assert result.n_loci == 4
     assert result.sd_logit_center >= 0
     assert result.sd_log_v >= 0
+
+
+# ---------------------------------------------------------------------------
+# Candidate-locus flagging (Fitzpatrick 2013's multivariate outlier method)
+# ---------------------------------------------------------------------------
+
+def test_flag_geographic_candidates_categorizes_each_pattern():
+    names = [f"L{i}" for i in range(10)]
+    centers = np.array([50.0] * 10)
+    widths = np.array([20.0] * 10)
+    widths[3] = 2.0     # steep, not displaced -> restricted_gene_flow
+    centers[5] = 90.0   # displaced, not steep -> asymmetric_gene_flow
+    widths[7] = 200.0   # shallow, not displaced -> elevated_gene_flow
+    centers[9], widths[9] = 90.0, 2.0  # both -> ambiguous
+
+    result = flag_geographic_candidates(
+        names, centers, widths, mu_center=50.0, sigma_center=5.0,
+        mu_log_width=np.log(20.0), sigma_log_width=0.3, alpha=0.05)
+
+    by_locus = {f.locus: f for f in result.flags}
+    assert by_locus["L0"].category is None
+    assert by_locus["L0"].is_outlier is False
+    assert by_locus["L3"].category == "restricted_gene_flow"
+    assert by_locus["L3"].rate_direction == "steep"
+    assert by_locus["L5"].category == "asymmetric_gene_flow"
+    assert by_locus["L5"].center_outlier is True
+    assert by_locus["L5"].rate_outlier is False
+    assert by_locus["L7"].category == "elevated_gene_flow"
+    assert by_locus["L7"].rate_direction == "shallow"
+    assert by_locus["L9"].category == "ambiguous"
+    assert by_locus["L9"].center_outlier is True
+    assert by_locus["L9"].rate_outlier is True
+    assert result.n_loci == 10
+    assert result.alpha == 0.05
+
+
+def test_flag_genomic_candidates_categorizes_each_pattern():
+    names = [f"L{i}" for i in range(10)]
+    u = np.array([0.0] * 10)
+    v = np.array([1.0] * 10)
+    v[3] = 5.0   # v>1 -> steep, not displaced -> restricted_gene_flow
+    u[5] = 3.0   # displaced, not steep -> asymmetric_gene_flow
+    v[7] = 0.1   # v<1 -> shallow, not displaced -> elevated_gene_flow
+
+    result = flag_genomic_candidates(
+        names, u, v, mu_center_or_u=0.0, sigma_center_or_u=0.3,
+        mu_log_v=0.0, sigma_log_v=0.3, pool_center=False, alpha=0.05)
+
+    by_locus = {f.locus: f for f in result.flags}
+    assert by_locus["L3"].category == "restricted_gene_flow"
+    assert by_locus["L3"].rate_direction == "steep"
+    assert by_locus["L5"].category == "asymmetric_gene_flow"
+    assert by_locus["L7"].category == "elevated_gene_flow"
+    assert by_locus["L7"].rate_direction == "shallow"
+
+
+def test_flag_genomic_candidates_pool_center_matches_non_pool_center_when_v_is_one():
+    # u/v == u exactly when v == 1 everywhere -- pool_center should be a
+    # no-op on the flagged categories in that special case, confirming
+    # the two code paths compute the same z_center quantity as designed.
+    names = [f"L{i}" for i in range(6)]
+    u = np.array([0.0, 0.0, 0.0, 0.0, 3.0, 0.0])
+    v = np.array([1.0, 1.0, 1.0, 5.0, 1.0, 0.1])
+
+    result_raw = flag_genomic_candidates(
+        names, u, v, mu_center_or_u=0.0, sigma_center_or_u=0.3,
+        mu_log_v=0.0, sigma_log_v=0.3, pool_center=False, alpha=0.05)
+    result_pooled = flag_genomic_candidates(
+        names, u, v, mu_center_or_u=0.0, sigma_center_or_u=0.3,
+        mu_log_v=0.0, sigma_log_v=0.3, pool_center=True, alpha=0.05)
+
+    for f_raw, f_pooled in zip(result_raw.flags, result_pooled.flags):
+        assert f_raw.category == f_pooled.category
+        assert f_raw.d2 == pytest.approx(f_pooled.d2)
+
+
+def test_flag_candidates_ambiguous_via_joint_but_not_marginal_deviation():
+    # A locus with z_center = z_rate = 2.0: d2 = 8.0 exceeds the 2-locus
+    # Bonferroni-adjusted chi-squared(df=2) critical value (~7.38), but
+    # neither |z| individually exceeds its own per-parameter critical
+    # value (~2.24) -- a real joint deviation the two marginal tests
+    # aren't positioned to explain alone. Must land in 'ambiguous', not
+    # silently fall through uncategorized.
+    names = ["null", "joint_only"]
+    centers = np.array([0.0, 2.0])
+    widths = np.array([1.0, np.exp(-2.0)])  # z(log width) = -2.0 -> steep z = +2.0
+
+    result = flag_geographic_candidates(
+        names, centers, widths, mu_center=0.0, sigma_center=1.0,
+        mu_log_width=0.0, sigma_log_width=1.0, alpha=0.05)
+
+    flagged = result.flags[1]
+    assert flagged.d2 == pytest.approx(8.0)
+    assert flagged.is_outlier is True
+    assert flagged.center_outlier is False
+    assert flagged.rate_outlier is False
+    assert flagged.category == "ambiguous"
+
+
+def test_flag_geographic_candidates_requires_at_least_two_loci():
+    with pytest.raises(ValueError, match="at least 2 loci"):
+        flag_geographic_candidates(["L0"], [50.0], [20.0], mu_center=50.0,
+                                    sigma_center=5.0, mu_log_width=np.log(20.0),
+                                    sigma_log_width=0.3)
+
+
+def test_flag_geographic_candidates_rejects_non_positive_width():
+    with pytest.raises(ValueError, match="width must be positive"):
+        flag_geographic_candidates(["A", "B"], [50.0, 50.0], [20.0, -5.0],
+                                    mu_center=50.0, sigma_center=5.0,
+                                    mu_log_width=np.log(20.0), sigma_log_width=0.3)
+
+
+def test_flag_geographic_candidates_rejects_non_positive_sigma():
+    with pytest.raises(ValueError, match="must be positive"):
+        flag_geographic_candidates(["A", "B"], [50.0, 50.0], [20.0, 20.0],
+                                    mu_center=50.0, sigma_center=0.0,
+                                    mu_log_width=np.log(20.0), sigma_log_width=0.3)
+
+
+def test_flag_genomic_candidates_rejects_non_positive_v():
+    with pytest.raises(ValueError, match="v must be positive"):
+        flag_genomic_candidates(["A", "B"], [0.0, 0.0], [1.0, -1.0],
+                                 mu_center_or_u=0.0, sigma_center_or_u=0.3,
+                                 mu_log_v=0.0, sigma_log_v=0.3)
+
+
+def test_flag_genomic_candidates_rejects_mismatched_lengths():
+    with pytest.raises(ValueError, match="same length"):
+        flag_genomic_candidates(["A", "B"], [0.0, 0.0, 0.0], [1.0, 1.0],
+                                 mu_center_or_u=0.0, sigma_center_or_u=0.3,
+                                 mu_log_v=0.0, sigma_log_v=0.3)
+
+
+def test_flag_candidates_bonferroni_correction_scales_with_n_loci():
+    # A fixed z_center that's a marginal outlier against a small locus
+    # set's looser threshold should stop being one once diluted into a
+    # much larger set, purely from the stricter Bonferroni correction --
+    # not because the underlying deviation changed.
+    small = flag_geographic_candidates(
+        ["A", "B"], [52.5, 50.0], [20.0, 20.0], mu_center=50.0, sigma_center=1.0,
+        mu_log_width=np.log(20.0), sigma_log_width=0.3, alpha=0.05)
+    n_large = 500
+    names = [f"L{i}" for i in range(n_large)]
+    centers = [50.0] * n_large
+    centers[0] = 52.5
+    widths = [20.0] * n_large
+    large = flag_geographic_candidates(
+        names, centers, widths, mu_center=50.0, sigma_center=1.0,
+        mu_log_width=np.log(20.0), sigma_log_width=0.3, alpha=0.05)
+
+    assert small.flags[0].center_outlier is True
+    assert large.flags[0].center_outlier is False
+
+
+def test_candidate_flagging_caveat_cites_key_sources():
+    assert "Gompert" in CANDIDATE_FLAGGING_CAVEAT
+    assert "Payseur" in CANDIDATE_FLAGGING_CAVEAT
+    assert "Jofre" in CANDIDATE_FLAGGING_CAVEAT
+    assert "epistatic" in CANDIDATE_FLAGGING_CAVEAT.lower()
+    assert "incomplete lineage sorting" in CANDIDATE_FLAGGING_CAVEAT.lower()
+
+
+def test_flag_candidates_result_summary_reports_category_counts():
+    names = ["A", "B", "C"]
+    result = flag_geographic_candidates(
+        names, [50.0, 50.0, 90.0], [2.0, 20.0, 20.0], mu_center=50.0,
+        sigma_center=5.0, mu_log_width=np.log(20.0), sigma_log_width=0.3, alpha=0.05)
+    summary = result.summary()
+    assert "restricted_gene_flow: 1" in summary
+    assert "asymmetric_gene_flow: 1" in summary
+    assert "CAVEATS" in summary
+
+
+def test_end_to_end_flag_candidates_with_hierarchical_geographic_fit():
+    from hycline.models.cline import ClineParams, TailType, cline_function
+    from hycline.inference.mcmc_hierarchical import fit_hierarchical_batch
+
+    rng = np.random.default_rng(5)
+    distance = np.sort(rng.uniform(0, 100, size=30))
+    n_loci = 4
+    true_widths = [15.0, 16.0, 14.0, 2.0]  # last locus deliberately much steeper
+    n_alleles = np.full((n_loci, 30), 30.0)
+    n_focal = np.zeros((n_loci, 30))
+    for j in range(n_loci):
+        params = ClineParams(center=50.0, width=true_widths[j], pmin=0.05, pmax=0.95)
+        p = cline_function(distance, params, TailType.NONE)
+        n_focal[j, :] = rng.binomial(30, p)
+
+    fit = fit_hierarchical_batch(distance, n_alleles, n_focal,
+                                  num_warmup=500, num_samples=500, num_chains=2, seed=0)
+    pop_df = fit.population_summary()
+    locus_df = fit.locus_summary()
+
+    result = flag_geographic_candidates(
+        locus_df["locus"], locus_df["center_mean"], locus_df["width_mean"],
+        mu_center=float(pop_df.loc["mu_center", "mean"]),
+        sigma_center=float(pop_df.loc["sigma_center", "mean"]),
+        mu_log_width=float(pop_df.loc["mu_log_width", "mean"]),
+        sigma_log_width=float(pop_df.loc["sigma_log_width", "mean"]),
+        alpha=0.05)
+    assert result.n_loci == 4
+    assert all(f.category in (None, "restricted_gene_flow", "elevated_gene_flow",
+                               "asymmetric_gene_flow", "ambiguous") for f in result.flags)
+
+
+def test_end_to_end_flag_candidates_with_hierarchical_genomic_fit():
+    from hycline.models.genomic_cline import GenomicClineParams, genomic_cline_function
+    from hycline.inference.mcmc_genomic_hierarchical import fit_hierarchical_genomic_batch
+
+    rng = np.random.default_rng(6)
+    hybrid_index = rng.uniform(0.02, 0.98, 100)
+    n_loci = 4
+    true_u = [0.1, -0.1, 0.05, 3.0]  # last locus deliberately displaced
+    true_v = [1.0, 1.1, 0.9, 1.05]
+    n_alleles = np.full((n_loci, 100), 2.0)
+    n_focal = np.zeros((n_loci, 100))
+    for j in range(n_loci):
+        params = GenomicClineParams(u=true_u[j], v=true_v[j])
+        phi = genomic_cline_function(hybrid_index, params)
+        n_focal[j, :] = rng.binomial(2, phi)
+
+    fit = fit_hierarchical_genomic_batch(hybrid_index, n_alleles, n_focal,
+                                          num_warmup=500, num_samples=500, num_chains=2, seed=0)
+    pop_df = fit.population_summary()
+    locus_df = fit.locus_summary()
+
+    result = flag_genomic_candidates(
+        locus_df["locus"], locus_df["u_mean"], locus_df["v_mean"],
+        mu_center_or_u=float(pop_df.loc["mu_u", "mean"]),
+        sigma_center_or_u=float(pop_df.loc["sigma_u", "mean"]),
+        mu_log_v=float(pop_df.loc["mu_log_v", "mean"]),
+        sigma_log_v=float(pop_df.loc["sigma_log_v", "mean"]),
+        pool_center=False, alpha=0.05)
+    assert result.n_loci == 4
+    assert all(f.category in (None, "restricted_gene_flow", "elevated_gene_flow",
+                               "asymmetric_gene_flow", "ambiguous") for f in result.flags)

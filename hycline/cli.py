@@ -835,6 +835,126 @@ def _build_parser() -> argparse.ArgumentParser:
     covgn_out_g.add_argument("--prefix", default="hycline",
                               help="Filename prefix for all output files (default: hycline)")
 
+    # ---- `flag-candidates-geographic` subcommand (Phase 4 Component C) ----
+    flagg_p = subparsers.add_parser(
+        "flag-candidates-geographic",
+        help="Flag geographic-cline loci as candidates for restricted, elevated, "
+             "or asymmetric gene flow, from a hierarchical fit's population and "
+             "locus summary CSVs.",
+        description="Multivariate outlier detection (Fitzpatrick 2013's diagonal-"
+                     "Mahalanobis/chi-squared method) against a hierarchical "
+                     "geographic-cline fit's own population-level hyperparameters -- "
+                     "flags loci whose center and/or rate deviate from the rest of "
+                     "the locus set by more than expected from sampling noise "
+                     "alone. Category names describe the observed statistical "
+                     "pattern only, not a confirmed evolutionary mechanism -- see "
+                     "the mandatory caveat text printed with the output (and "
+                     "written into the output CSV as a comment header) before "
+                     "interpreting these as findings. Hierarchical fits only "
+                     "(fit-hierarchical-geographic), not independent per-locus "
+                     "fits -- see README.md's Tier 1 backlog and BACKEND_PHASE4.md "
+                     "section 15 for the full design rationale.",
+    )
+    flagg_p.add_argument("--population-summary-csv", default=None, metavar="FILE.csv",
+                          help="Population-level hyperparameter summary CSV from "
+                               "fit-hierarchical-geographic (e.g. "
+                               "'<prefix>_hierarchical_population_summary.csv'). "
+                               "Default: derived from --input-dir/--input-prefix.")
+    flagg_p.add_argument("--locus-summary-csv", default=None, metavar="FILE.csv",
+                          help="Per-locus summary CSV from fit-hierarchical-geographic "
+                               "(e.g. '<prefix>_hierarchical_locus_summary.csv'). "
+                               "Default: derived from --input-dir/--input-prefix.")
+    flagg_p.add_argument("--input-dir", default=None,
+                          help="Directory containing fit-hierarchical-geographic's "
+                               "output files -- used with --input-prefix to derive "
+                               "--population-summary-csv/--locus-summary-csv "
+                               "automatically when those aren't given explicitly.")
+    flagg_p.add_argument("--input-prefix", default="hycline",
+                          help="Filename prefix fit-hierarchical-geographic was run "
+                               "with (default: hycline) -- used with --input-dir.")
+    flagg_p.add_argument("--locus-col", default="locus",
+                          help="Column with locus names (default: locus).")
+    flagg_p.add_argument("--center-col", default=None,
+                          help="Column with each locus's fitted center. Default: "
+                               "auto-detect 'center_mean' then 'center'.")
+    flagg_p.add_argument("--width-col", default=None,
+                          help="Column with each locus's fitted cline width. Default: "
+                               "auto-detect 'width_mean' then 'width'.")
+    flagg_p.add_argument("--alpha", type=float, default=0.05,
+                          help="Family-wise significance level before Bonferroni "
+                               "correction across loci (default: 0.05, matching "
+                               "Fitzpatrick 2013's own choice).")
+    flagg_out_g = flagg_p.add_argument_group("output")
+    flagg_out_g.add_argument("--output-dir", default="./hycline_output",
+                              help="Directory to write results into (created if needed). "
+                                   "(default: ./hycline_output)")
+    flagg_out_g.add_argument("--prefix", default="hycline",
+                              help="Filename prefix for all output files (default: hycline)")
+
+    # ---- `flag-candidates-genomic` subcommand (Phase 4 Component C) ----
+    flagn_p = subparsers.add_parser(
+        "flag-candidates-genomic",
+        help="Flag genomic-cline loci as candidates for restricted, elevated, or "
+             "asymmetric gene flow, from a hierarchical fit's population and locus "
+             "summary CSVs.",
+        description="Multivariate outlier detection (Fitzpatrick 2013's diagonal-"
+                     "Mahalanobis/chi-squared method) against a hierarchical "
+                     "genomic-cline fit's own population-level hyperparameters -- "
+                     "flags loci whose center/bias and/or rate deviate from the "
+                     "rest of the locus set by more than expected from sampling "
+                     "noise alone. Category names describe the observed statistical "
+                     "pattern only, not a confirmed evolutionary mechanism -- see "
+                     "the mandatory caveat text printed with the output (and "
+                     "written into the output CSV as a comment header) before "
+                     "interpreting these as findings. Hierarchical fits only "
+                     "(fit-hierarchical-genomic), not independent per-locus fits -- "
+                     "see README.md's Tier 1 backlog and BACKEND_PHASE4.md section "
+                     "15 for the full design rationale.",
+    )
+    flagn_p.add_argument("--population-summary-csv", default=None, metavar="FILE.csv",
+                          help="Population-level hyperparameter summary CSV from "
+                               "fit-hierarchical-genomic (e.g. "
+                               "'<prefix>_hierarchical_population_summary.csv'). "
+                               "Default: derived from --input-dir/--input-prefix.")
+    flagn_p.add_argument("--locus-summary-csv", default=None, metavar="FILE.csv",
+                          help="Per-locus summary CSV from fit-hierarchical-genomic "
+                               "(e.g. '<prefix>_hierarchical_locus_summary.csv'). "
+                               "Default: derived from --input-dir/--input-prefix.")
+    flagn_p.add_argument("--input-dir", default=None,
+                          help="Directory containing fit-hierarchical-genomic's "
+                               "output files -- used with --input-prefix to derive "
+                               "--population-summary-csv/--locus-summary-csv "
+                               "automatically when those aren't given explicitly.")
+    flagn_p.add_argument("--input-prefix", default="hycline",
+                          help="Filename prefix fit-hierarchical-genomic was run "
+                               "with (default: hycline) -- used with --input-dir.")
+    flagn_p.add_argument("--locus-col", default="locus",
+                          help="Column with locus names (default: locus).")
+    flagn_p.add_argument("--u-col", default=None,
+                          help="Column with each locus's fitted u. Default: "
+                               "auto-detect 'u_mean' then 'u'.")
+    flagn_p.add_argument("--v-col", default=None,
+                          help="Column with each locus's fitted v. Default: "
+                               "auto-detect 'v_mean' then 'v'.")
+    flagn_p.add_argument("--pool-center", action="store_true",
+                          help="Must match whatever --pool-center state "
+                               "fit-hierarchical-genomic used to produce the input "
+                               "files -- reads mu_center/sigma_center "
+                               "(logit(center) = u/v) from the population summary "
+                               "instead of mu_u/sigma_u for the center/bias "
+                               "dimension. locus_summary()'s u_mean/v_mean columns "
+                               "are used either way, per that method's own docstring.")
+    flagn_p.add_argument("--alpha", type=float, default=0.05,
+                          help="Family-wise significance level before Bonferroni "
+                               "correction across loci (default: 0.05, matching "
+                               "Fitzpatrick 2013's own choice).")
+    flagn_out_g = flagn_p.add_argument_group("output")
+    flagn_out_g.add_argument("--output-dir", default="./hycline_output",
+                              help="Directory to write results into (created if needed). "
+                                   "(default: ./hycline_output)")
+    flagn_out_g.add_argument("--prefix", default="hycline",
+                              help="Filename prefix for all output files (default: hycline)")
+
     def add_gl_columns_args(g, single_locus=True):
         g.add_argument("--gl0-col" if single_locus else "--gl0-suffix",
                         default="log_gl0" if single_locus else ".gl0",
@@ -1404,6 +1524,53 @@ def _resolve_summary_col(df, explicit, candidates, path, flag_name):
           f"(tried: {', '.join(candidates)}). Specify {flag_name} explicitly. "
           f"Columns present: {', '.join(df.columns)}\n", file=sys.stderr)
     sys.exit(2)
+
+
+def _load_population_summary_csv(path, required_vars):
+    """Load a hierarchical fit's population-summary CSV (an
+    `az.summary()`-style table: one row per hyperparameter, indexed by
+    variable name, with a `mean` column among others) and validate the
+    rows `flag-candidates-geographic`/`flag-candidates-genomic` need are
+    present."""
+    import pandas as pd
+    if not Path(path).exists():
+        print(f"\nERROR: input file not found: '{path}'\n", file=sys.stderr)
+        sys.exit(2)
+    df = pd.read_csv(path, index_col=0)
+    missing = [v for v in required_vars if v not in df.index]
+    if missing:
+        print(f"\nERROR: population summary '{path}' is missing expected "
+              f"row(s): {', '.join(missing)}. Rows present: {', '.join(df.index)}\n",
+              file=sys.stderr)
+        sys.exit(2)
+    if "mean" not in df.columns:
+        print(f"\nERROR: population summary '{path}' has no 'mean' column -- expected "
+              f"an ArviZ az.summary()-style CSV from fit-hierarchical-geographic/"
+              f"fit-hierarchical-genomic's own '<prefix>_hierarchical_population_"
+              f"summary.csv' output.\n", file=sys.stderr)
+        sys.exit(2)
+    return df
+
+
+def _resolve_hierarchical_input_paths(args, pop_suffix, locus_suffix):
+    """Resolve --population-summary-csv/--locus-summary-csv, defaulting
+    from --input-dir/--input-prefix (fit-hierarchical-geographic/
+    fit-hierarchical-genomic's own output-file naming convention) when
+    either isn't given explicitly."""
+    pop_path = args.population_summary_csv
+    locus_path = args.locus_summary_csv
+    if pop_path is None or locus_path is None:
+        if args.input_dir is None:
+            print("\nERROR: specify either both --population-summary-csv and "
+                  "--locus-summary-csv, or --input-dir (with --input-prefix, "
+                  "default 'hycline') to derive them automatically.\n", file=sys.stderr)
+            sys.exit(2)
+        base = Path(args.input_dir)
+        if pop_path is None:
+            pop_path = base / f"{args.input_prefix}{pop_suffix}"
+        if locus_path is None:
+            locus_path = base / f"{args.input_prefix}{locus_suffix}"
+    return pop_path, locus_path
 
 
 def _tail_type(name: str):
@@ -2890,6 +3057,108 @@ def cmd_coupling_genomic(args) -> int:
     return 0
 
 
+def cmd_flag_candidates_geographic(args) -> int:
+    import pandas as pd
+    from hycline.analysis.coupling import flag_geographic_candidates, CANDIDATE_FLAGGING_CAVEAT
+
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prefix = args.prefix
+
+    pop_path, locus_path = _resolve_hierarchical_input_paths(
+        args, "_hierarchical_population_summary.csv", "_hierarchical_locus_summary.csv")
+
+    print(f"Reading population summary from '{pop_path}' ...")
+    pop_df = _load_population_summary_csv(
+        pop_path, ["mu_center", "sigma_center", "mu_log_width", "sigma_log_width"])
+    print(f"Reading locus summary from '{locus_path}' ...")
+    locus_df = _load_locus_summary_csv(locus_path, args.locus_col)
+    center_col = _resolve_summary_col(locus_df, args.center_col, ["center_mean", "center"],
+                                       locus_path, "--center-col")
+    width_col = _resolve_summary_col(locus_df, args.width_col, ["width_mean", "width"],
+                                      locus_path, "--width-col")
+    print(f"  {len(locus_df)} loci, using columns '{center_col}'/'{width_col}' for center/width.")
+
+    result = flag_geographic_candidates(
+        locus_df[args.locus_col].tolist(),
+        locus_df[center_col].to_numpy(), locus_df[width_col].to_numpy(),
+        mu_center=float(pop_df.loc["mu_center", "mean"]),
+        sigma_center=float(pop_df.loc["sigma_center", "mean"]),
+        mu_log_width=float(pop_df.loc["mu_log_width", "mean"]),
+        sigma_log_width=float(pop_df.loc["sigma_log_width", "mean"]),
+        alpha=args.alpha)
+    print(f"\n{result.summary()}")
+
+    out_df = pd.DataFrame([{
+        "locus": f.locus, "d2": f.d2, "chi2_quantile": f.chi2_quantile,
+        "is_outlier": f.is_outlier, "center_outlier": f.center_outlier,
+        "rate_outlier": f.rate_outlier,
+        "rate_direction": f.rate_direction if f.rate_direction is not None else "NA",
+        "category": f.category if f.category is not None else "NA",
+    } for f in result.flags])
+    csv_path = out_dir / f"{prefix}_candidates.csv"
+    with open(csv_path, "w") as fh:
+        for line in CANDIDATE_FLAGGING_CAVEAT.splitlines():
+            fh.write(f"# {line}\n")
+    out_df.to_csv(csv_path, mode="a", index=False)
+
+    print(f"\nAll output written to: {out_dir.resolve()}")
+    print(f"  {prefix}_candidates.csv  -- one row per locus, all loci included")
+    return 0
+
+
+def cmd_flag_candidates_genomic(args) -> int:
+    import pandas as pd
+    from hycline.analysis.coupling import flag_genomic_candidates, CANDIDATE_FLAGGING_CAVEAT
+
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prefix = args.prefix
+
+    pop_path, locus_path = _resolve_hierarchical_input_paths(
+        args, "_hierarchical_population_summary.csv", "_hierarchical_locus_summary.csv")
+
+    center_vars = ["mu_center", "sigma_center"] if args.pool_center else ["mu_u", "sigma_u"]
+    print(f"Reading population summary from '{pop_path}' ...")
+    pop_df = _load_population_summary_csv(pop_path, center_vars + ["mu_log_v", "sigma_log_v"])
+    print(f"Reading locus summary from '{locus_path}' ...")
+    locus_df = _load_locus_summary_csv(locus_path, args.locus_col)
+    u_col = _resolve_summary_col(locus_df, args.u_col, ["u_mean", "u"], locus_path, "--u-col")
+    v_col = _resolve_summary_col(locus_df, args.v_col, ["v_mean", "v"], locus_path, "--v-col")
+    print(f"  {len(locus_df)} loci, using columns '{u_col}'/'{v_col}' for u/v.")
+    if args.pool_center:
+        print("  --pool-center: using population summary's mu_center/sigma_center "
+              "(logit(center) = u/v) for the center dimension.")
+
+    center_var, sigma_center_var = center_vars
+    result = flag_genomic_candidates(
+        locus_df[args.locus_col].tolist(),
+        locus_df[u_col].to_numpy(), locus_df[v_col].to_numpy(),
+        mu_center_or_u=float(pop_df.loc[center_var, "mean"]),
+        sigma_center_or_u=float(pop_df.loc[sigma_center_var, "mean"]),
+        mu_log_v=float(pop_df.loc["mu_log_v", "mean"]),
+        sigma_log_v=float(pop_df.loc["sigma_log_v", "mean"]),
+        pool_center=args.pool_center, alpha=args.alpha)
+    print(f"\n{result.summary()}")
+
+    out_df = pd.DataFrame([{
+        "locus": f.locus, "d2": f.d2, "chi2_quantile": f.chi2_quantile,
+        "is_outlier": f.is_outlier, "center_outlier": f.center_outlier,
+        "rate_outlier": f.rate_outlier,
+        "rate_direction": f.rate_direction if f.rate_direction is not None else "NA",
+        "category": f.category if f.category is not None else "NA",
+    } for f in result.flags])
+    csv_path = out_dir / f"{prefix}_candidates.csv"
+    with open(csv_path, "w") as fh:
+        for line in CANDIDATE_FLAGGING_CAVEAT.splitlines():
+            fh.write(f"# {line}\n")
+    out_df.to_csv(csv_path, mode="a", index=False)
+
+    print(f"\nAll output written to: {out_dir.resolve()}")
+    print(f"  {prefix}_candidates.csv  -- one row per locus, all loci included")
+    return 0
+
+
 def _fit_genomic_gl(args, out_dir, prefix) -> int:
     from hycline.inference.mle_genotype_likelihood import fit_mle_genomic_gl
     from hycline.models.genomic_cline import genomic_cline_function
@@ -3429,6 +3698,10 @@ def main(argv=None) -> int:
             return cmd_coupling_geographic(args)
         elif args.command == "coupling-genomic":
             return cmd_coupling_genomic(args)
+        elif args.command == "flag-candidates-geographic":
+            return cmd_flag_candidates_geographic(args)
+        elif args.command == "flag-candidates-genomic":
+            return cmd_flag_candidates_genomic(args)
         elif args.command == "estimate-hybrid-index":
             return cmd_estimate_hybrid_index(args)
         elif args.command == "generate-geographic-input":

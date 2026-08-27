@@ -1284,3 +1284,180 @@ than a misleadingly precise number.
   (`width`/`width_mean`, `u`/`u_mean`, `v`/`v_mean`) -- a summary CSV from
   a different source with different column names still needs
   `--width-col`/`--u-col`/`--v-col` specified explicitly.
+
+## 15. Candidate-locus flagging: adapting Fitzpatrick (2013)'s multivariate outlier method to both cline types
+
+README.md's Tier 1 backlog specified this feature in full before any code
+was written -- the design discussion below covers what that spec-writing
+process settled during implementation, not the original design (see
+README.md's "What's implemented" section for the shipped feature itself,
+and the git history for the spec discussion this was built from).
+
+### 15.1 The statistic: Fitzpatrick's own D^2/chi-squared approach, read directly
+
+Fitzpatrick (2013)'s "Outlier detection" section, read directly from the
+PDF rather than paraphrased, describes exactly the approach implemented
+here: "Assuming the joint distribution of parameter estimates among loci
+is multivariate normal, the squared Mahalanobis distance D^2 of each
+locus is expected to be distributed as a chi-squared random variable with
+degrees of freedom equal to the number of parameters... For automated
+outlier detection, I used the Bonferroni-adjusted critical P-value."
+
+This project's own hierarchical models (Components A/B) don't jointly
+estimate a center-rate covariance -- `population_summary()` reports
+`mu_center`/`sigma_center` and `mu_log_width`/`sigma_log_width` (or
+`mu_u`/`sigma_u`, `mu_log_v`/`sigma_log_v`) as independent priors, no
+covariance term -- so the honest statistic available is a
+**diagonal-covariance** D^2 = z_center^2 + z_rate^2, not a full bivariate
+Mahalanobis distance with an estimated off-diagonal term the way
+Fitzpatrick's own (built on raw per-locus MLE point estimates, where the
+covariance can be estimated empirically across loci) does. This is a
+known, stated simplification -- a true correlation between center and
+rate deviations (plausible for some mechanisms, e.g. a Dobzhansky-Muller
+case) is invisible to this statistic. Extending Components A/B to
+estimate a joint covariance is out of scope for this pass.
+
+`_flag_from_z_scores` in `hycline/analysis/coupling.py` is the shared
+statistical core both `flag_geographic_candidates` and
+`flag_genomic_candidates` call into -- one implementation of the D^2/
+chi-squared logic, not two parallel copies.
+
+### 15.2 Two Bonferroni-correction decisions, made explicit rather than left implicit
+
+Two design choices weren't fully pinned down by Fitzpatrick's own text
+and needed a decision during implementation:
+
+1. **The joint D^2 test's correction factor is `alpha/n_loci`** --
+   directly matching Fitzpatrick's own stated convention ("Bonferroni-
+   adjusted critical P <= 0.05/100 = 0.0005" for his 100-locus
+   simulations, i.e. one correction factor for n tests, one per locus).
+2. **The marginal per-parameter z-tests use the same `alpha/n_loci`
+   correction, not a further split across the two parameters**
+   (`alpha/(2*n_loci)`). Fitzpatrick's own text doesn't specify a
+   marginal single-parameter test at all -- his method flags a locus
+   outlier via D^2 alone, with no described procedure for attributing
+   *which* dimension drove it. The per-parameter marginal test (used
+   here to decide `center_outlier`/`rate_outlier`, and hence category)
+   is this project's own addition, needed because Fitzpatrick's four-way
+   category split (steep-only / displaced-only / shallow-only / both)
+   requires knowing which dimension(s) triggered, not just whether the
+   locus is an outlier at all. Using the same per-locus correction factor
+   for both the joint and marginal tests (rather than inventing a
+   further split) was chosen as the simpler, more defensible reading --
+   stated here explicitly as a real design decision, not a hidden
+   assumption, so a future reader can revisit it if it turns out to
+   matter empirically.
+
+A consequence of this choice, verified directly
+(`tests/test_coupling.py::test_flag_candidates_ambiguous_via_joint_but_
+not_marginal_deviation`): a locus can be a joint D^2 outlier without
+either marginal z individually crossing its own (numerically identical,
+but squared-vs-unsquared) threshold -- e.g. z_center=z_rate=2.0 gives
+D^2=8.0, above the 2-locus chi-squared(df=2) critical value of ~7.38, but
+neither |z|=2.0 exceeds the 2-locus per-parameter critical value of
+~2.24 individually. This is handled explicitly, not silently: such a
+locus lands in `ambiguous` rather than falling through uncategorized,
+since it's a real joint deviation the two single-parameter tests aren't
+positioned to explain on their own.
+
+### 15.3 The sign-convention problem: "steep" means opposite things for the two cline types
+
+Geographic and genomic clines define steepness in *opposite* directions
+relative to the parameter each type's hierarchical model actually pools:
+narrower **width** is steeper (an inverse relationship) for geographic
+clines, while larger **v** is steeper (a direct relationship) for genomic
+clines. `_flag_from_z_scores` is written direction-agnostic -- it expects
+`z_rate_steep_positive` already signed so positive always means
+steeper -- and each caller owns its own sign convention:
+`flag_geographic_candidates` computes `z_log_width` and then negates it
+(`z_rate_steep_positive = -z_log_width`); `flag_genomic_candidates` uses
+`z_log_v` directly with no sign flip. Getting this backwards for either
+caller would silently swap `restricted_gene_flow`/`elevated_gene_flow`
+for that cline type specifically -- caught during implementation by
+building explicit sign-convention tests for both cline types
+(`test_flag_geographic_candidates_categorizes_each_pattern`,
+`test_flag_genomic_candidates_categorizes_each_pattern`) before trusting
+either direction, rather than after a bug report.
+
+### 15.4 Category naming: a real correction made during design discussion, not after the fact
+
+The original spec (README.md's Tier 1 backlog, written before any code)
+used three category names of inconsistent register: `barrier` (an
+interpretive/functional label -- "resists gene flow") and
+`adaptive_introgression` (a named evolutionary process) alongside
+`elevated_gene_flow` (a bare pattern description) for the fourth. This
+inconsistency was caught and fixed during a design discussion *before*
+implementation began, not discovered as a bug afterward: all three
+outlier categories now name the observed statistical pattern only
+(`restricted_gene_flow`, `elevated_gene_flow`, `asymmetric_gene_flow`),
+with which evolutionary mechanism each pattern is *most consistent with*
+moved entirely into documentation (this module's own section-header
+comment above `LocusCandidateFlag`, and `CANDIDATE_FLAGGING_CAVEAT`) --
+never in the machine-readable `category` value itself.
+
+The motivating concern, stated directly rather than just asserted: a
+column of confident-sounding labels like `barrier`/`adaptive_introgression`
+in a CSV is exactly the kind of thing that gets copied into a results
+table or a paper's methods section without the caveat text that should
+accompany it. `restricted_gene_flow`/`asymmetric_gene_flow` read as data describing a
+pattern, not as a claim about mechanism -- a small but real difference in
+how a downstream reader is likely to treat the column.
+
+`asymmetric_gene_flow` in particular turned out to be the *more* standard
+term in the hybrid-zone literature than the name it replaced
+(`adaptive_introgression`) -- "asymmetric introgression"/"asymmetric gene
+flow" is already established phrasing that doesn't assert *why* the flow
+is asymmetric (selection-driven, differential hybrid fitness, or
+incomplete lineage sorting mimicking it -- exactly the ambiguity the
+caveat text has to spell out regardless of the name chosen), so this
+rename is not a precision-for-safety tradeoff -- it is, if anything,
+closer to correct on both counts.
+
+### 15.5 Output: a CSV comment header, not just a printed caveat
+
+The original spec called for "a printed caveat block... the same way the
+near-invariant-locus warning is surfaced directly rather than left to a
+docs page." Implemented as specified, and extended one step further: the
+same caveat text (`CANDIDATE_FLAGGING_CAVEAT`) is also written as `#`-
+prefixed comment lines at the top of `<prefix>_candidates.csv` itself,
+before the header row -- not just printed to stdout. This directly
+addresses the same copy-paste risk discussed in 15.4: stdout is easy to
+lose track of once a CSV is passed downstream (into R, Excel, a
+notebook), while a comment header travels with the file. Verified this
+doesn't break normal CSV consumption:
+`tests/test_cli.py::test_cli_flag_candidates_geographic_end_to_end` reads
+the file back with `pandas.read_csv(..., comment="#")` and confirms the
+caveat lines are skipped cleanly and the data rows parse correctly.
+
+### 15.6 Verification
+
+- Statistical-core unit tests confirm all four categories trigger
+  correctly on constructed synthetic cases, the ambiguous-via-joint-only
+  case (15.2), rejection of degenerate inputs (fewer than 2 loci,
+  non-positive width/v/sigma, mismatched array lengths), and that the
+  Bonferroni correction actually gets stricter as `n_loci` grows (a fixed
+  marginal deviation that's flagged at n=2 loci is not flagged at
+  n=500) -- `tests/test_coupling.py`.
+- `flag_genomic_candidates`'s `pool_center=True` and `pool_center=False`
+  paths are confirmed to compute the same `z_center` quantity (and hence
+  the same categories) in the special case `v=1` everywhere, where
+  `u/v == u` exactly -- a direct check that the two code paths reduce to
+  the same computation where they should.
+- Two full CLI commands (`flag-candidates-geographic`,
+  `flag-candidates-genomic`), including `--input-dir`/`--input-prefix`
+  convenience-path derivation, `--pool-center` wiring (and its
+  actionable error when a population summary written *without*
+  `--pool-center` is read back *with* it -- the required population-
+  summary rows are simply absent, and the existing
+  `_load_population_summary_csv` validation catches this the same way it
+  catches any other missing-row case, not a special-cased check), and
+  the CSV comment-header caveat mechanism -- `tests/test_cli.py`.
+- **Real CLI-to-CLI composition, not just hand-built fixture CSVs**:
+  `test_cli_flag_candidates_geographic_composes_with_real_fit_hierarchical_
+  output` runs the actual `fit-hierarchical-geographic` command against
+  the real, published Manakin multi-locus dataset, then feeds its own
+  output files straight into `flag-candidates-geographic` via
+  `--input-dir`/`--input-prefix` -- confirming the two commands' output/
+  input CSV conventions actually agree in practice, not just on paper.
+- Full test suite reconciled against `--collect-only`'s total after this
+  feature landed: 455 tests collected, all passing in batched runs.

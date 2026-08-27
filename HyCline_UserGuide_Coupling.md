@@ -3,11 +3,17 @@
 **Document status: working draft, updated alongside HyCline's own
 development.**
 
-This guide covers HyCline's coupling analysis -- measuring how concordant
+This guide covers two related, cross-locus analyses HyCline offers on top
+of already-fitted per-locus cline parameters: **coupling analysis**
+(`coupling-geographic`/`coupling-genomic`) -- measuring how concordant
 cline shapes are across loci, the empirical proxy for Barton's (1983)
 coupling coefficient and the basis for Firneno et al. (2023)'s theta
-estimator. It applies to both geographic and genomic clines, via two
-separate commands sharing the same underlying idea.
+estimator -- and **candidate-locus flagging**
+(`flag-candidates-geographic`/`flag-candidates-genomic`) -- flagging
+individual loci whose center or rate deviate from the rest of the locus
+set, adapting Fitzpatrick (2013)'s multivariate outlier method. Each
+comes as a pair of commands, one per cline type, sharing the same
+underlying idea.
 
 Every command shown below was run for real against synthetic and real
 (published) test data while writing this guide -- flags, output messages,
@@ -253,6 +259,136 @@ Both commands write the same two files to `--output-dir` (default
 - **`*_summary.json`** -- the same numbers, machine-readable:
   - `coupling-geographic`: `n_loci`, `mean_slope`, `sd_slope`, `cv_slope`, `width_col_used`
   - `coupling-genomic`: `n_loci`, `sd_logit_center`, `sd_log_v`, `theta_estimate`, `within_calibration_range`, `u_col_used`, `v_col_used`
+
+---
+
+## `flag-candidates-geographic` / `flag-candidates-genomic`
+
+A different question from the two commands above: not "how concordant is
+this locus set overall," but "which *individual* loci look statistically
+unusual, and in what way." Adapts Fitzpatrick (2013)'s multivariate
+outlier-detection method (built for genomic clines) to both cline types,
+against a **hierarchical** fit's own population-level hyperparameters --
+same input as `coupling-geographic`/`coupling-genomic` prefer
+(`fit-hierarchical-geographic`/`fit-hierarchical-genomic`'s output), but
+using *both* the population-summary and locus-summary CSVs, not just the
+locus one.
+
+```bash
+hycline flag-candidates-geographic \
+    --input-dir results/ --input-prefix hycline \
+    --output-dir candidate_results/
+```
+
+(`--input-dir`/`--input-prefix` derive the two expected file paths
+automatically, matching `fit-hierarchical-geographic`'s own output-naming
+convention; use `--population-summary-csv`/`--locus-summary-csv` directly
+if your files live somewhere else or under different names.)
+
+Real output, running `fit-hierarchical-geographic` on the HZAR-bundled
+Manakin dataset (7 loci) and feeding its output straight into
+`flag-candidates-geographic`:
+
+```
+Candidate-locus flagging across 7 loci (Bonferroni-adjusted alpha=0.05/7 per test):
+  0/7 loci flagged as statistical outliers
+
+CAVEATS (read before interpreting these categories as findings):
+  [... 7 numbered caveats, see below ...]
+
+All output written to: candidate_results/
+  hycline_candidates.csv  -- one row per locus, all loci included
+```
+
+No loci flagged here -- a real, non-cherry-picked result, and worth
+seeing what "nothing unusual" looks like, not just a flagged case. With
+only 7 loci, the Bonferroni-adjusted threshold is fairly strict (`alpha`
+divided by 7), and this particular locus set is fairly concordant to
+begin with.
+
+To see all three outlier categories at once, here's a small **synthetic**
+5-locus example (constructed, not real data) run the same way:
+
+```
+Candidate-locus flagging across 5 loci (Bonferroni-adjusted alpha=0.05/5 per test):
+  3/5 loci flagged as statistical outliers
+    restricted_gene_flow: 1
+    elevated_gene_flow: 1
+    asymmetric_gene_flow: 1
+```
+
+```
+locus,d2,chi2_quantile,is_outlier,center_outlier,rate_outlier,rate_direction,category
+locus1,0.006,0.003,False,False,False,NA,NA
+locus2,64.655,1.000,True,False,True,steep,restricted_gene_flow
+locus3,67.250,1.000,True,True,False,NA,asymmetric_gene_flow
+locus4,59.970,1.000,True,False,True,shallow,elevated_gene_flow
+locus5,0.074,0.036,False,False,False,NA,NA
+```
+
+### Category names describe a pattern, not a mechanism -- read this before the categories
+
+**`restricted_gene_flow`**, **`elevated_gene_flow`**, and
+**`asymmetric_gene_flow`** name the *statistical pattern* observed
+(rate steeper/shallower than the locus set's average with no center
+shift, or a center shift without a rate change) -- not a confirmed
+evolutionary cause. `ambiguous` covers loci where both dimensions
+deviate together, or a joint-but-not-individually-significant
+combination.
+
+Which mechanism each pattern is *most consistent with*, per Fitzpatrick
+(2013)'s own simulations of one mechanism at a time: `restricted_gene_flow`
+matches heterozygote disadvantage (a genuine barrier/speciation-locus
+signature); `elevated_gene_flow` matches heterozygote advantage (hybrid
+vigor at that locus) *or* simple recombination-rate heterogeneity nearby
+(Payseur 2010) -- two unrelated causes producing the same pattern;
+`asymmetric_gene_flow` matches directional/environmental selection, the
+closest single-mechanism match to adaptive introgression, but
+indistinguishable from incomplete lineage sorting on cline shape alone
+(Payseur 2010).
+
+**Every run prints a full, seven-point caveat block covering these and
+other real confounds** (epistatic incompatibilities, drift, marker
+ascertainment bias, false-negative risk, and single-transect
+reliability) -- and, deliberately, the same text is written as `#`-
+prefixed comment lines at the top of `*_candidates.csv` itself, not just
+printed to the terminal. A CSV is easy to separate from the terminal
+output that produced it once it's opened in R, Excel, or a notebook; the
+comment header travels with the file. Standard CSV readers with
+comment-skipping enabled (e.g. `pandas.read_csv(path, comment="#")`)
+parse the data rows normally.
+
+### Flags
+
+| Flag | Meaning |
+|---|---|
+| `--population-summary-csv` | Population-level hyperparameter CSV from `fit-hierarchical-geographic`/`fit-hierarchical-genomic` (e.g. `<prefix>_hierarchical_population_summary.csv`). Default: derived from `--input-dir`/`--input-prefix`. |
+| `--locus-summary-csv` | Per-locus summary CSV from the same fit (e.g. `<prefix>_hierarchical_locus_summary.csv`). Default: derived from `--input-dir`/`--input-prefix`. |
+| `--input-dir` / `--input-prefix` | Convenience pair: derives both CSV paths above from the hierarchical-fit output-naming convention. |
+| `--locus-col` | Column with locus names (default: `locus`) |
+| `--center-col` (geographic) | Column with each locus's fitted center. Default: auto-detect `center_mean` then `center`. |
+| `--width-col` (geographic) | Column with each locus's fitted width. Default: auto-detect `width_mean` then `width`. |
+| `--u-col` / `--v-col` (genomic) | Columns with each locus's fitted `u`/`v`. Default: auto-detect `u_mean`/`v_mean` then `u`/`v`. |
+| `--pool-center` (genomic only) | Must match whatever `--pool-center` state `fit-hierarchical-genomic` used to produce the input files -- changes which population-summary rows are read (`mu_center`/`sigma_center` vs. `mu_u`/`sigma_u`) for the center/bias dimension. |
+| `--alpha` | Family-wise significance level before Bonferroni correction across loci (default: 0.05, matching Fitzpatrick 2013's own choice). |
+
+**Scope: hierarchical fits only**, same reasoning as
+`coupling-geographic`/`coupling-genomic` preferring hierarchical input
+(see "Independent vs. hierarchical input" above) -- an independent
+per-locus point estimate's own sampling noise can look exactly like a
+real outlier, while the hierarchical population-level hyperparameters
+already estimate the correct empirical null while properly accounting
+for that per-locus uncertainty.
+
+### Output
+
+`*_candidates.csv`, one row per locus (every locus, not just flagged
+ones), prefixed with the caveat block as `#` comment lines, then columns:
+`locus`, `d2` (the diagonal-covariance squared Mahalanobis distance),
+`chi2_quantile`, `is_outlier`, `center_outlier`, `rate_outlier`,
+`rate_direction` (`steep`/`shallow`/`NA`), `category`
+(`restricted_gene_flow`/`elevated_gene_flow`/`asymmetric_gene_flow`/
+`ambiguous`/`NA`).
 
 ---
 

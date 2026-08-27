@@ -1058,6 +1058,199 @@ def test_cli_coupling_geographic_missing_column_actionable_error(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# flag-candidates-geographic / flag-candidates-genomic (Phase 4 Component C)
+# ---------------------------------------------------------------------------
+
+def _write_geographic_hierarchical_summaries(tmp_path):
+    pop_csv = tmp_path / "hycline_hierarchical_population_summary.csv"
+    pop_csv.write_text(
+        ",mean,sd\n"
+        "mu_center,50.0,2.0\n"
+        "sigma_center,5.0,1.0\n"
+        "mu_log_width,3.0,0.2\n"
+        "sigma_log_width,0.3,0.05\n"
+    )
+    locus_csv = tmp_path / "hycline_hierarchical_locus_summary.csv"
+    locus_csv.write_text(
+        "locus,center_mean,width_mean\n"
+        "L0,50.0,20.0\n"
+        "L1,50.0,2.0\n"
+        "L2,90.0,20.0\n"
+        "L3,50.0,20.0\n"
+    )
+    return pop_csv, locus_csv
+
+
+def _write_genomic_hierarchical_summaries(tmp_path, pool_center=False):
+    pop_csv = tmp_path / "hycline_hierarchical_population_summary.csv"
+    if pool_center:
+        pop_csv.write_text(
+            ",mean,sd\n"
+            "mu_center,0.0,0.1\n"
+            "sigma_center,0.3,0.05\n"
+            "mu_log_v,0.0,0.1\n"
+            "sigma_log_v,0.3,0.05\n"
+        )
+    else:
+        pop_csv.write_text(
+            ",mean,sd\n"
+            "mu_u,0.0,0.1\n"
+            "sigma_u,0.3,0.05\n"
+            "mu_log_v,0.0,0.1\n"
+            "sigma_log_v,0.3,0.05\n"
+        )
+    locus_csv = tmp_path / "hycline_hierarchical_locus_summary.csv"
+    locus_csv.write_text(
+        "locus,u_mean,v_mean\n"
+        "L0,0.0,1.0\n"
+        "L1,0.0,5.0\n"
+        "L2,3.0,1.0\n"
+        "L3,0.0,1.0\n"
+    )
+    return pop_csv, locus_csv
+
+
+def test_cli_flag_candidates_geographic_help_runs_without_error():
+    result = _run_cli(["flag-candidates-geographic", "--help"])
+    assert result.returncode == 0
+    assert "--population-summary-csv" in result.stdout
+
+
+def test_cli_flag_candidates_genomic_help_runs_without_error():
+    result = _run_cli(["flag-candidates-genomic", "--help"])
+    assert result.returncode == 0
+    assert "--pool-center" in result.stdout
+
+
+def test_cli_flag_candidates_geographic_end_to_end(tmp_path):
+    pop_csv, locus_csv = _write_geographic_hierarchical_summaries(tmp_path)
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "flag-candidates-geographic",
+        "--population-summary-csv", str(pop_csv), "--locus-summary-csv", str(locus_csv),
+        "--output-dir", str(out_dir), "--prefix", "flag",
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "restricted_gene_flow" in result.stdout
+    assert "CAVEATS" in result.stdout
+
+    out_csv = out_dir / "flag_candidates.csv"
+    lines = out_csv.read_text().splitlines()
+    assert lines[0].startswith("# CAVEATS")
+    caveat_lines = [line for line in lines if line.startswith("#")]
+    assert any("Gompert" in line for line in caveat_lines)
+    assert any("Payseur" in line for line in caveat_lines)
+    assert any("Jofre" in line for line in caveat_lines)
+
+    df = pd.read_csv(out_csv, comment="#")
+    assert len(df) == 4
+    row = {r["locus"]: r for _, r in df.iterrows()}
+    assert row["L1"]["category"] == "restricted_gene_flow"
+    assert row["L2"]["category"] == "asymmetric_gene_flow"
+    assert row["L0"]["is_outlier"] == False  # noqa: E712 (pandas bool comparison)
+
+
+def test_cli_flag_candidates_geographic_input_dir_prefix_convenience(tmp_path):
+    _write_geographic_hierarchical_summaries(tmp_path)
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "flag-candidates-geographic", "--input-dir", str(tmp_path),
+        "--output-dir", str(out_dir),
+    ])
+    assert result.returncode == 0, result.stderr
+    assert (out_dir / "hycline_candidates.csv").exists()
+
+
+def test_cli_flag_candidates_geographic_missing_input_actionable_error(tmp_path):
+    out_dir = tmp_path / "out"
+    result = _run_cli(["flag-candidates-geographic", "--output-dir", str(out_dir)])
+    assert result.returncode != 0
+    assert "--input-dir" in result.stderr
+
+
+def test_cli_flag_candidates_genomic_end_to_end(tmp_path):
+    pop_csv, locus_csv = _write_genomic_hierarchical_summaries(tmp_path, pool_center=False)
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "flag-candidates-genomic",
+        "--population-summary-csv", str(pop_csv), "--locus-summary-csv", str(locus_csv),
+        "--output-dir", str(out_dir), "--prefix", "flag",
+    ])
+    assert result.returncode == 0, result.stderr
+
+    df = pd.read_csv(out_dir / "flag_candidates.csv", comment="#")
+    row = {r["locus"]: r for _, r in df.iterrows()}
+    assert row["L1"]["category"] == "restricted_gene_flow"
+    assert row["L2"]["category"] == "asymmetric_gene_flow"
+
+
+def test_cli_flag_candidates_genomic_pool_center_flag(tmp_path):
+    pop_csv, locus_csv = _write_genomic_hierarchical_summaries(tmp_path, pool_center=True)
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "flag-candidates-genomic", "--pool-center",
+        "--population-summary-csv", str(pop_csv), "--locus-summary-csv", str(locus_csv),
+        "--output-dir", str(out_dir),
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "using population summary's mu_center/sigma_center" in result.stdout
+
+
+def test_cli_flag_candidates_genomic_pool_center_mismatch_gives_missing_row_error(tmp_path):
+    # population summary written WITHOUT --pool-center, but the command
+    # invoked WITH --pool-center: mu_center/sigma_center rows won't exist.
+    pop_csv, locus_csv = _write_genomic_hierarchical_summaries(tmp_path, pool_center=False)
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "flag-candidates-genomic", "--pool-center",
+        "--population-summary-csv", str(pop_csv), "--locus-summary-csv", str(locus_csv),
+        "--output-dir", str(out_dir),
+    ])
+    assert result.returncode != 0
+    assert "missing expected row" in result.stderr
+
+
+def test_cli_flag_candidates_geographic_composes_with_real_fit_hierarchical_output(tmp_path):
+    # True CLI-to-CLI composition, not hand-crafted fixture CSVs: run the
+    # real fit-hierarchical-geographic command against real Manakin
+    # multi-locus data, then feed its own output files straight into
+    # flag-candidates-geographic via --input-dir/--input-prefix.
+    fit_out = tmp_path / "fit_out"
+    fit_result = _run_cli([
+        "fit-hierarchical-geographic", "--input", str(MULTILOCUS_CSV),
+        "--site-col", "locationID",
+        "--num-warmup", "300", "--num-samples", "300", "--num-chains", "2",
+        "--output-dir", str(fit_out), "--prefix", "manakin",
+    ])
+    assert fit_result.returncode == 0, fit_result.stderr
+
+    flag_out = tmp_path / "flag_out"
+    flag_result = _run_cli([
+        "flag-candidates-geographic", "--input-dir", str(fit_out),
+        "--input-prefix", "manakin", "--output-dir", str(flag_out),
+    ])
+    assert flag_result.returncode == 0, flag_result.stderr
+
+    df = pd.read_csv(flag_out / "hycline_candidates.csv", comment="#")
+    assert len(df) == 7
+    assert set(df["locus"]) == {"ada", "ak2", "gsr", "pgm2", "l5", "pscn3", "mtDNA"}
+    assert set(df["category"].dropna()) <= {
+        "restricted_gene_flow", "elevated_gene_flow", "asymmetric_gene_flow", "ambiguous"}
+
+
+def test_cli_flag_candidates_geographic_custom_alpha(tmp_path):
+    pop_csv, locus_csv = _write_geographic_hierarchical_summaries(tmp_path)
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "flag-candidates-geographic",
+        "--population-summary-csv", str(pop_csv), "--locus-summary-csv", str(locus_csv),
+        "--alpha", "0.5", "--output-dir", str(out_dir),
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "alpha=0.5" in result.stdout
+
+
+# ---------------------------------------------------------------------------
 # fit-gl / fit-genomic-gl / fit-gl-multi / fit-genomic-gl-multi (Phase 5 CLI)
 # ---------------------------------------------------------------------------
 
