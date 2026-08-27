@@ -963,203 +963,235 @@ project had already found and documented empirically:**
   extensions above exist to actually fit shape-aware clines feeding
   into coupling analysis.
 
-**Adaptive-introgression candidate flagging, added at the user's
-request after a joint review of four primary sources** (Gompert,
-Parchman & Buerkle 2012, *Phil Trans R Soc B*, doi:10.1098/rstb.2011.0196;
-Bailey 2024, the gghybrid paper, doi:10.1111/1755-0998.13910;
-Jofre & Rosenthal 2021, *Mol Ecol Resour*, doi:10.1111/1755-0998.13428;
-Gompert & Buerkle 2011, *Mol Ecol*, doi:10.1111/j.1365-294X.2011.05074.x)
--- specified in enough detail here to build directly, not just a
-pointer to "go read the outlier-detection literature":
+**Candidate-locus flagging, covering both geographic and genomic clines,
+specified in enough detail to build directly.** Originated as
+"adaptive-introgression candidate flagging" after a joint review of four
+primary sources (Gompert, Parchman & Buerkle 2012, *Phil Trans R Soc B*,
+doi:10.1098/rstb.2011.0196; Bailey 2024, the gghybrid paper,
+doi:10.1111/1755-0998.13910; Jofre & Rosenthal 2021, *Mol Ecol Resour*,
+doi:10.1111/1755-0998.13428; Gompert & Buerkle 2011, *Mol Ecol*,
+doi:10.1111/j.1365-294X.2011.05074.x), then extended to geographic clines
+and split into distinct candidate categories after reading Fitzpatrick
+(2013), Firneno et al. (2023), and Payseur (2010) directly (all three now
+in `references/`). Checked directly against the existing tool landscape:
+genomic-cline software (`bgc`/`bgc-hm`/`bgchm`, `HIest`, `gghybrid`) all
+flag outlier loci in some form, but the classic geographic-cline
+toolchain (`Analyse`/ClineFit, Barton & Baird 1995 -- the direct ancestor
+of the Barton cline `bgc` splices) offers only pairwise/composite
+heterogeneity tests (Phillips et al. 2004; Macholan et al. 2007; Long
+1991), never a ranked per-locus candidate list, and HZAR has no
+cross-locus flagging at all. This is a real gap in the wider ecosystem,
+not just in HyCline -- there is no single tool to port for the geographic
+side, so the design below adapts Fitzpatrick (2013)'s genomic-cline
+multivariate outlier method to both cline types with one shared
+statistical core.
 
-- **Core mechanism: rank by delta-AIC/delta-waic against the neutral null
-  (u=0, v=1), not by raw Bayesian p-value or credible-interval-excludes-
-  zero alone.** Bailey (2024)'s own simulations found the reported
-  Bayesian p-value's relationship to the true deviation is
-  non-monotonic -- peaked at intermediate cline steepness rather than
-  scaling with the actual effect size -- and states directly in the
-  abstract that "use of Bayesian posterior distributions and p values
-  to select candidate non-null loci is problematic and should be
-  avoided." waic performed best in their comparison. This is
-  computable from quantities `fit-genomic`/`fit-hierarchical-genomic`
-  already produce (log-likelihood and parameter count for classic MLE;
-  posterior samples for Bayesian) -- the AICc HyCline already reports
-  per locus is most of the way there for the classic-MLE path; the
-  fixed-null-model comparison (u=0, v=1 forced) is the piece that
-  doesn't exist yet.
-- **Report center-outlier and rate-outlier status separately, not
-  merged into one flag.** Gompert et al. (2012) found BDM epistatic
-  incompatibilities showed up mainly as *center* (`u`) shifts rather
-  than *rate* (`v`) shifts -- but so does ordinary directional
-  selection, and so can drift. Jofre & Rosenthal (2021) documented a
-  third, specifically deceptive pattern for geographic clines directly
-  analogous to this: drift under underdominance or BDM incompatibility
-  can narrow a cline's width *and* shift its center in a way that
-  specifically mimics directional/adaptive selection ("spurious centre
-  outliers") -- not just generic noise, a false signal shaped like the
-  thing being searched for.
-- **A mandatory caveat in the output itself, not just documentation**:
-  cline-shape signatures alone cannot distinguish *which* mechanism
-  (directional selection, underdominance, BDM epistasis, or drift)
-  produced an outlier. This isn't a hedge -- it's Gompert et al.
-  (2012)'s own stated conclusion about their own model: "previous
-  attempts (including our own) to associate a specific form of
-  selection... with a locus based on the sign or magnitude of cline
-  parameters were perhaps overly simplistic and naive." Any HyCline
-  output that flags candidate loci needs to say this plainly next to
-  the flags, the same way the near-invariant-locus warning
-  (`hycline/inference/mle.py::_warn_if_locus_near_invariant`) is
-  surfaced directly rather than left to a docs page.
-- **A second, explicit documented limitation: this method is weak at
-  detecting epistatic (BDM-style) incompatibilities specifically.**
-  Gompert & Buerkle (2011)'s own simulations found a false discovery
-  rate of 0.81-0.95 for pairwise epistasis, dramatically worse than for
-  underdominance or directional selection (both <0.1 under most
-  conditions they tested). A user relying on this feature to search
-  for epistatic barriers specifically should be told this directly,
-  not left to infer it.
-- **A separate, genuinely new warning candidate, distinct from the
-  existing near-invariant-locus warning**: Bailey (2024) found that an
-  *uneven distribution of hybrid index values* specifically degrades
-  accuracy for steep clines (`v` estimates less accurate, cline centers
-  artificially clustered, higher uncertainty for loci whose true steep
-  transition falls in a sparsely-sampled region of hybrid-index space)
-  -- a different failure mode than a near-invariant focal allele, and
-  one HyCline currently has no check for at all. Worth its own
-  `_warn_if_hybrid_index_distribution_uneven`-style check alongside the
-  existing one, likely checking for large gaps in the empirical hybrid
-  index distribution relative to the fitted cline's steepness.
-- **Document, not automate, the strongest available validation**:
-  Jofre & Rosenthal (2021) found outlier analysis on a single hybrid
-  zone transect is only reliable within a fairly narrow demographic
-  window (their own false-positive rates ranged from 1.35% in the best
-  case -- young zone, high migration, large deme -- to 98.9% in the
-  worst), and recommend cross-validating candidate loci against
-  independent replicate hybrid zones of the same species pair wherever
-  available, citing concrete precedent (e.g. 59/366 outlier loci
-  replicating across independent house mouse transects). This can't be
-  automated in general (it requires a second dataset), but the study
-  design guide should say so plainly rather than let a single-transect
-  result read as more confident than it is.
-- **Now read directly, closing the gap noted above**: Fitzpatrick (2013)
-  and Firneno et al. (2023) have both been read in full (PDFs in
-  `references/`, notes in `references/README.md`). Neither changes the
-  design above -- if anything both reinforce it directly: Fitzpatrick's
-  own simulations found the logit-logistic model has the best precision/
-  sensitivity balance for outlier detection of the models he compared,
-  and that naive null-hypothesis testing (ignoring drift) is badly
-  miscalibrated, independently supporting the delta-AIC/delta-WAIC
-  ranking approach above over raw p-values. Firneno et al.'s own
-  robustness checks add one caveat not yet reflected in
-  `coupling-geographic`/`coupling-genomic`'s docs: their sigma-to-theta
-  calibration is sensitive to the migration rate and genetic map size
-  assumed in the underlying simulations, and can lose essentially all
-  predictive power (~0% out-of-bag variance explained in one of their own
-  checks) when applied outside those conditions -- worth folding into the
-  shape-mismatch caveat item below as a second, distinct reason the
-  calibration can mislead.
-- **A third primary source, read directly in the same pass, not
-  previously on this project's radar**: Payseur (2010), *Mol Ecol
-  Resour* 10:806-820, doi:10.1111/j.1755-0998.2010.02883.x -- a review of
-  differential-introgression methods that names confounds for outlier-
-  based candidate detection not yet listed above. Worth folding into the
-  adaptive-introgression flagging feature's caveat text alongside the
-  drift/epistasis caveats already specified:
-  - **Incomplete lineage sorting (ILS)** produces the same locus-level
-    signature as recent gene flow, and is a larger confound than drift
-    alone for recently diverged species or large effective population
-    sizes -- worth naming explicitly, not left implicit under "drift."
+**Two categories of candidate, not one -- this distinction matters and is
+directly supported by Fitzpatrick (2013)'s own simulation results, not an
+invented taxonomy:**
+
+| Signature | Category | Basis |
+|---|---|---|
+| Rate significantly steep (`v>1` genomic / narrow width geographic), center **not** displaced | **Barrier / speciation candidate** -- resists gene flow from both sides | Fitzpatrick: heterozygote disadvantage steepens clines with no displacement -- the cleanest, least ambiguous signature |
+| Center/bias significantly displaced (`u`!=0 or shifted geographic center) **and** rate not steep (`v<=1` / not narrow) | **Adaptive-introgression candidate** -- directional *and* more porous than average | Directional excess ancestry from one parent without elevated resistance -- the closest match to one-directional beneficial introgression |
+| Rate significantly shallow (`v<1` genomic / wide geographic width), center **not** displaced | **Elevated-gene-flow candidate** -- a third, distinct label, not folded into "adaptive introgression" | Fitzpatrick: heterozygote advantage flattens clines ("inside-out" genomic cline) with no directional bias -- symmetric excess porosity, consistent with hybrid vigor at that locus, but with no bias signal establishing *which* parent's allele is favored, so it should not be reported as evidence of adaptive introgression specifically |
+| Center displaced **and** rate steep simultaneously, or any other combination not covered above | **Ambiguous / mixed** -- reported, not force-categorized | Not one of Fitzpatrick's simulated single-mechanism cases; plausibly multiple linked selected loci or a genuinely mixed mechanism |
+
+A locus that is not a statistical outlier on either dimension gets no
+category at all (not a fifth "neutral" label -- absence of a flag already
+communicates that).
+
+- **Scope: hierarchical fits only** (`fit-hierarchical-geographic`/
+  `fit-hierarchical-genomic`, Components A/B), not independent per-locus
+  fits. Deliberate, not an oversight: an independent point estimate's own
+  noise can look exactly like a real outlier (the "single unlucky low
+  read count... pushed an independently-fit cline's width to roughly
+  double its true value" case already documented under "Why hierarchical
+  clines?" above), and the hierarchical population-level hyperparameters
+  already estimate the correct empirical null while properly accounting
+  for that per-locus uncertainty -- exactly the problem Component A/B's
+  partial pooling exists to solve.
+- **Statistic, and a real asymmetry between the two cline types worth
+  stating plainly rather than glossing over**: `population_summary()`
+  for both `HierarchicalFitResult` (geographic) and
+  `HierarchicalGenomicFitResult` (genomic) already reports exactly 4
+  population-level hyperparameters, and in both cases they parameterize
+  the two dimensions of interest as **independent** priors with no
+  estimated cross-covariance term (`mu_center`/`sigma_center` and
+  `mu_log_width`/`sigma_log_width` for geographic; `mu_u`/`sigma_u` and
+  `mu_log_v`/`sigma_log_v`, or `mu_center`/`sigma_center` and
+  `mu_log_v`/`sigma_log_v` under `--pool-center`, for genomic -- see
+  `hycline/inference/mcmc_hierarchical.py::population_summary` and
+  `mcmc_genomic_hierarchical.py::population_summary`). So the honest
+  statistic this model actually supports is a **diagonal**-covariance
+  Mahalanobis distance -- `D^2 = z_1^2 + z_2^2` where each `z` is a
+  per-locus posterior mean standardized by its own population-level
+  mean/SD -- not a full bivariate normal with an off-diagonal term the
+  way Fitzpatrick's original (built on raw per-locus MLE point estimates
+  across loci, where the covariance can be estimated empirically) does.
+  `D^2` compared to a chi-squared distribution with df=2 either way
+  (sum of two independent standardized-normal squares), flagged via a
+  Bonferroni-adjusted critical value, with `D^2` and its chi-squared
+  quantile reported regardless of flag status (not just a binary flag) so
+  a user can inspect a Q-Q plot the way Fitzpatrick recommends. Which of
+  the two dimensions individually exceeds its own per-parameter
+  Bonferroni-adjusted threshold determines `center_outlier`/
+  `rate_outlier` status (and hence the category table above) --
+  `D^2` alone determines whether the locus is flagged at all. A true
+  correlation between center and rate deviations (plausible for some
+  mechanisms, e.g. Fitzpatrick's Dobzhansky-Muller case) is therefore
+  invisible to this statistic -- a known, stated simplification, not a
+  silently-assumed one. Extending the hierarchical models themselves to
+  estimate a joint covariance is out of scope for this pass.
+- **Geographic clines get the full 2-parameter version, which is a
+  genuine HyCline extension beyond Firneno et al. (2023)'s own geographic
+  design, not a direct port of it -- worth being precise about.** Firneno
+  et al.'s own geographic hierarchical model pools *only* cline slope
+  across loci (`sigma_beta`); they deliberately did not pool cline center,
+  because their tripartite fit re-centers each locus operationally at its
+  own p=0.5 point rather than estimating center as a shared, comparable
+  hierarchical quantity. HyCline's Component A already does jointly pool
+  both `center` and `log_width` as genuine hierarchical quantities (an
+  independent design choice already built, not one added for this
+  feature) -- that's what makes the 2-parameter version possible for
+  geographic clines here, not something taken directly from the coupling
+  paper.
+- **Where it lives in code**: new functions in `hycline/analysis/coupling.py`,
+  alongside `geographic_cline_variance`/`genomic_cline_variance` (which
+  already compute closely related cross-locus quantities): a shared
+  internal helper for the diagonal-Mahalanobis/chi-squared computation and
+  category assignment, plus `flag_geographic_candidates()` and
+  `flag_genomic_candidates()` as the two public entry points.
+- **CLI: two new dedicated commands**, matching the existing `verb-domain`
+  naming convention and kept separate from `coupling-geographic`/
+  `coupling-genomic` (which stay focused on the aggregate theta/variance
+  question they already answer -- a ranked per-locus candidate table is a
+  materially different kind of output). Each takes the population-summary
+  CSV *and* the locus-summary CSV `fit-hierarchical-geographic`/
+  `fit-hierarchical-genomic` already write (`<prefix>_hierarchical_population_summary.csv`,
+  `<prefix>_hierarchical_locus_summary.csv`), defaulted from a single
+  `--input-prefix`/`--input-dir` pair so the common case needs no column
+  wrangling, with explicit overrides available the same way
+  `coupling-geographic`/`coupling-genomic` already offer `--width-col`/
+  `--u-col`/`--v-col`:
+
+  ```
+  hycline flag-candidates-geographic \
+      --population-summary-csv hycline_output/hycline_hierarchical_population_summary.csv \
+      --locus-summary-csv hycline_output/hycline_hierarchical_locus_summary.csv \
+      [--locus-col locus] [--center-col center_mean] [--width-col width_mean] \
+      [--alpha 0.05] \
+      --output-dir hycline_output --prefix hycline
+
+  hycline flag-candidates-genomic \
+      --population-summary-csv hycline_output/hycline_hierarchical_population_summary.csv \
+      --locus-summary-csv hycline_output/hycline_hierarchical_locus_summary.csv \
+      [--locus-col locus] [--u-col u_mean] [--v-col v_mean] \
+      [--pool-center] \
+      [--alpha 0.05] \
+      --output-dir hycline_output --prefix hycline
+  ```
+
+  `--pool-center` on `flag-candidates-genomic` must match whatever
+  `fit-hierarchical-genomic --pool-center` state produced the input
+  files -- it only changes which population-summary columns are expected
+  (`mu_center`/`sigma_center` vs. `mu_u`/`sigma_u`), since `locus_summary()`
+  already reports `u_mean`/`center_mean` either way regardless of fit-time
+  parameterization. `--alpha` sets the Bonferroni-adjusted significance
+  level (default 0.05, matching Fitzpatrick's own choice). Output:
+  `<prefix>_candidates.csv`, one row per locus, every locus included (not
+  just flagged ones) with columns `locus`, `d2`, `chi2_quantile`,
+  `is_outlier`, `center_outlier`, `rate_outlier`, `rate_direction`
+  (`steep`/`shallow`/`NA`), `category` (`barrier`/`adaptive_introgression`/
+  `elevated_gene_flow`/`ambiguous`/`NA`) -- plus a printed caveat block
+  (see below) the same way the near-invariant-locus warning
+  (`hycline/inference/mle.py::_warn_if_locus_near_invariant`) is surfaced
+  directly rather than left to a docs page.
+- **Mandatory caveat text, printed with the output, one shared block
+  covering both commands and both categories:**
+  - Cline-shape signatures alone cannot identify *which* mechanism
+    produced an outlier -- Gompert et al. (2012)'s own stated conclusion
+    about their model ("previous attempts (including our own) to
+    associate a specific form of selection... with a locus based on the
+    sign or magnitude of cline parameters were perhaps overly simplistic
+    and naive"). The category table above narrows *what kind* of pattern
+    was observed, not *why* it occurred.
+  - This method is weak at detecting epistatic (Dobzhansky-Muller-style)
+    incompatibilities specifically -- Gompert & Buerkle (2011)'s own
+    simulations found a 0.81-0.95 false discovery rate for pairwise
+    epistasis (vs. <0.1 for underdominance/directional selection), and
+    Payseur (2010, citing Gompert & Buerkle 2009 and Gavrilets 1997)
+    confirms this isn't genomic-cline-specific -- epistatic
+    incompatibilities distort geographic clines too, but only when
+    linkage is tight and selection is strong, and existing analytical
+    approaches generally "are not specifically designed to find it."
+  - Drift alone generates real cross-locus variance, and **incomplete
+    lineage sorting** is a larger confound than drift for recently
+    diverged species or large effective population sizes (Payseur 2010) --
+    named explicitly rather than left implicit under "drift."
   - **Marker ascertainment bias**: fixed-difference markers -- exactly
     what `filter-aims` selects for -- systematically bias toward
-    *underestimating* introgression, and regions that actually carry
+    *underestimating* introgression, and loci that actually carry
     reproductive-isolation genes are, paradoxically, more likely to have
     fixed differences in the first place, making reduced introgression
-    there specifically harder to detect by comparison to other loci.
+    there specifically harder to detect by comparison to other loci
+    (Payseur 2010).
   - **A false-negative risk, not just false-positive**: citing the wider
-    genome-scan literature (Kelley et al. 2006; Teshima et al. 2006),
-    truly selected loci need not lie in the most extreme tail of the
-    empirical outlier distribution -- worth stating alongside the
-    existing false-positive-focused caveats so the mandatory caveat text
-    doesn't read as one-sided.
-
-**Speciation-candidate locus flagging for geographic clines, extending
-the item above to cover both cline types with one shared statistical
-approach.** The item above is scoped to genomic clines only (its core
-mechanism, delta-AIC/delta-WAIC against the fixed neutral null u=0,v=1,
-is genomic-cline-specific -- geographic clines have no equivalent
-theory-fixed null). Checked directly against the existing literature
-(Payseur 2010's review, cross-checked with Gompert & Buerkle 2011,
-Bailey 2024, Fitzpatrick 2013 already read for the item above) whether an
-equivalent, dedicated tool already exists for geographic clines the way
-`bgc`/`bgc-hm`/`HIest`/`gghybrid` exist for genomic clines: **it doesn't**.
-The classic geographic-cline toolchain (`Analyse`/ClineFit, Barton & Baird
-1995 -- the direct ancestor of the Barton cline `bgc` splices) offers only
-pairwise likelihood-ratio tests between two loci's cline parameters, a
-composite-profile test for whether *any* cross-locus heterogeneity exists
-at all (Phillips et al. 2004; Macholan et al. 2007), and Long's (1991)
-test for a single admixed population -- none of which produce a ranked,
-per-locus candidate list. HZAR itself has no cross-locus outlier flagging
-whatsoever. This is a real gap in the wider ecosystem, not just in
-HyCline, so there is no single paper or tool to port -- the design below
-adapts Fitzpatrick (2013)'s genomic-cline multivariate outlier method to
-geographic-cline parameters instead.
-
-- **Scope: hierarchical fits only, deliberately narrower than the
-  genomic-cline item above.** Requires `fit-hierarchical-geographic`/
-  `fit-hierarchical-genomic` (Components A/B) rather than also supporting
-  independent per-locus fits. This is a deliberate choice, not an
-  oversight: an independent per-locus point estimate's own noise can look
-  exactly like a real outlier (the "single unlucky low read count...
-  pushed an independently-fit cline's width to roughly double its true
-  value" case already documented under "Why hierarchical clines?" above),
-  and the hierarchical population-level hyperparameters
-  (`mu_center`/`sigma_center`, `mu_log_width`/`sigma_log_width` for
-  geographic; the analogous `u`/`v` hyperparameters for genomic) already
-  estimate the correct empirical null distribution while properly
-  accounting for that per-locus uncertainty -- exactly the problem
-  Component A/B's partial pooling exists to solve, so building the flag on
-  top of it rather than around it is a natural fit, not new machinery.
-- **Statistic: Fitzpatrick (2013)'s multivariate Mahalanobis-distance
-  outlier test, generalized by parameter pair rather than reimplemented
-  per cline type.** Assume each locus's hierarchical-model parameter pair
-  is jointly distributed as multivariate normal (per the model's own
-  population-level prior); compute each locus's squared Mahalanobis
-  distance from the population mean using the population-level covariance;
-  compare to a chi-squared distribution with degrees of freedom equal to
-  the number of parameters (2, in both cases below); flag via a
-  Bonferroni-adjusted critical value, with the per-locus D^2 and its
-  chi-squared quantile reported either way (not just a binary flag) so a
-  user can inspect a Q-Q plot the way Fitzpatrick recommends for
-  exploratory analysis. Parameter pairs: `(center, log(width))` for
-  geographic clines; `(u, log(v))` for genomic clines fit without
-  `--pool-center`, or `(logit(center), log(v))` -- Firneno et al.'s own
-  quantities -- for genomic clines fit with it.
-- **Where it lives in code**: `hycline.analysis.coupling` already computes
-  the cross-locus variance/covariance this statistic needs
-  (`geographic_cline_variance`/`genomic_cline_variance`) -- a new
-  `flag_outlier_loci()`-style function belongs alongside them, reusing
-  that computation rather than duplicating it in a separate module.
-- **CLI: two new dedicated commands, not an extension of
-  `coupling-geographic`/`coupling-genomic`.** `flag-candidates-geographic`/
-  `flag-candidates-genomic`, matching the existing `verb-domain` naming
-  convention (`fit-geographic`, `coupling-genomic`, etc.) and taking the
-  same per-locus summary CSV inputs those commands already consume.
-  Keeping this separate from `coupling-geographic`/`coupling-genomic`
-  keeps those commands focused on the aggregate theta/variance question
-  they already answer well, and gives the per-locus candidate list (a
-  materially different kind of output -- a ranked table, not a single
-  summary statistic) its own clearly-named entry point.
-- **Caveats: one shared block, not duplicated per cline type.** All of
-  Payseur (2010)'s confounds named above (incomplete lineage sorting,
-  `filter-aims`'s own marker-ascertainment bias, recombination-rate
-  heterogeneity, the false-negative risk) are geography-agnostic and apply
-  identically to both commands' output -- write the caveat text once and
-  share it, along with the already-planned mandatory
-  mechanism-cannot-be-identified caveat and the epistatic-incompatibility
-  blind-spot warning (both from the genomic-cline item above, and both
-  equally applicable here: Gavrilets (1997), read via Payseur's review,
-  shows epistatic incompatibilities distort geographic clines too, and
-  only when linkage is tight and selection is strong).
+    genome-scan literature (Kelley et al. 2006; Teshima et al. 2006, via
+    Payseur 2010), truly selected loci need not lie in the most extreme
+    tail of the empirical outlier distribution.
+  - Drift under underdominance or Dobzhansky-Muller incompatibility can
+    narrow a cline's width *and* shift its center in a way that
+    specifically mimics directional/adaptive selection ("spurious centre
+    outliers," Jofre & Rosenthal 2021) -- not generic noise, a false
+    signal shaped like the thing being searched for, and a specific
+    reason the `ambiguous` category above exists rather than defaulting
+    such loci to `adaptive_introgression`.
+  - Outlier analysis on a single hybrid zone transect is only reliable
+    within a fairly narrow demographic window (Jofre & Rosenthal 2021:
+    their own false-positive rates ranged from 1.35% in the best case to
+    98.9% in the worst); cross-validating candidates against independent
+    replicate transects of the same species pair, where available, is the
+    strongest available check, and can't be automated in general -- the
+    output should say this rather than let a single-transect result read
+    as more confident than it is.
+- **A separate, genuinely new warning candidate for the fitting step this
+  feature depends on**, distinct from the existing near-invariant-locus
+  warning: Bailey (2024) found that an *uneven distribution of hybrid
+  index values* specifically degrades accuracy for steep genomic clines
+  (`v` estimates less accurate, cline centers artificially clustered,
+  higher uncertainty for loci whose true steep transition falls in a
+  sparsely-sampled region of hybrid-index space) -- worth its own
+  `_warn_if_hybrid_index_distribution_uneven`-style check in
+  `fit-hierarchical-genomic` itself (upstream of this feature, not inside
+  it), likely checking for large gaps in the empirical hybrid-index
+  distribution relative to the fitted cline's steepness.
+- **Ranking, not just binary flagging, for the classic-MLE genomic path
+  specifically**: independent of the hierarchical-only flagging feature
+  above, `fit-genomic`/`fit-hierarchical-genomic` already produce enough
+  (log-likelihood, parameter count) to rank loci by delta-AIC against the
+  fixed neutral null (`u=0`, `v=1`) -- Bailey (2024)'s own simulations
+  found the reported Bayesian p-value's relationship to true deviation is
+  non-monotonic and states directly that "use of Bayesian posterior
+  distributions and p values to select candidate non-null loci is
+  problematic and should be avoided," with WAIC performing best in their
+  comparison. This is a smaller, complementary addition for users working
+  from classic-MLE independent fits rather than the hierarchical models --
+  worth keeping as its own small item since it doesn't require the
+  hierarchical-fit prerequisite the categorized flagging above does.
+- **Two related items, read about but deliberately out of scope for this
+  pass, named so they aren't lost**: Payseur (2010)'s reproductive-
+  barrier-strength formula (`B = delta-p_center / (dp/dx)_edge`, Nagylaki
+  1976) -- a single-locus, geography-only metric that only means
+  something for a tripartite/HZAR-tail cline fit (needs a distinguishable
+  center-vs-edge slope), so it's a natural companion to the T-cline/
+  tail-model Tier 1 item above rather than to this one; and stratifying
+  candidate flagging by inheritance mode (autosomal vs. sex-linked/
+  mitochondrial), since the mtDNA caveat already documented under "Why
+  hierarchical clines?" above (McKenzie et al. 2016) applies just as much
+  to outlier flagging as to pooling itself -- worth a stratify-by-linkage-
+  group option, or at minimum a loud warning, in a later pass rather than
+  this one.
 
 Three real, small items surfaced while extending `--hzar-tail` to the
 Bayesian path (BACKEND_PHASE2.md section 14, BACKEND_TRAIT.md
