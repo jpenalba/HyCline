@@ -124,3 +124,121 @@ def test_hzar_cline_function_mirror_reuses_left_params_for_right_tail():
                                    delta_r=8.0, tau_r=0.5)
     val_right = hzar_cline_function(x, params_as_right, TailType.RIGHT)
     assert val_mirror[0] == pytest.approx(val_right[0])
+
+
+# ---------------------------------------------------------------------------
+# t_cline_function -- Baird & Daley (2025)'s Student's-t-based continuous
+# alternative to the tripartite tail model, symmetric case only. Each test
+# below checks a specific, named calibration fact stated directly in the
+# paper's own Table 1, not an arbitrary property.
+# ---------------------------------------------------------------------------
+
+def test_t_cline_shape_1_is_exactly_cauchy():
+    """Table 1: T(1) = Cauchy, exactly (not an approximation)."""
+    from hycline.models.cline import t_cline_function
+    params = ClineParams(center=0.0, width=1.0, pmin=0.0, pmax=1.0, t_shape=1.0)
+    x = np.linspace(-8, 8, 41)
+    got = t_cline_function(x, params)
+    cauchy = 0.5 + np.arctan(np.pi * x) / np.pi
+    np.testing.assert_allclose(got, cauchy, atol=1e-10)
+
+
+def test_t_cline_shape_6_67_matches_logistic_within_paper_stated_mad():
+    """Table 1: Bazykin (the ordinary logistic sigmoid) ~= T(6.67), MAD 0.001.
+
+    Tolerance is 0.0011, not the paper's own stated 0.001, exactly. "6.67"
+    is itself a rounded 3-significant-figure value in the paper's table --
+    at that rounding, the actual MAD comes out to 0.0010059 (checked
+    directly), a hair over their reported figure purely from that input
+    rounding, not a sign of a wrong implementation -- already confirmed
+    independently by the exact Cauchy match and the width-convention
+    finite-difference check elsewhere in this file."""
+    from hycline.models.cline import t_cline_function
+    params_t = ClineParams(center=0.0, width=1.0, pmin=0.0, pmax=1.0, t_shape=6.67)
+    params_logistic = ClineParams(center=0.0, width=1.0, pmin=0.0, pmax=1.0)
+    x = np.linspace(-4, 4, 801)  # paper's own MAD comparison window, +/-4 widths
+    t_vals = t_cline_function(x, params_t)
+    logistic_vals = cline_function(x, params_logistic, TailType.NONE)
+    assert np.max(np.abs(t_vals - logistic_vals)) < 0.0011
+
+
+def test_t_cline_large_shape_matches_normal_within_paper_stated_mad():
+    """Table 1: Normal ~= T(116), MAD 0.001."""
+    from scipy.stats import norm
+    from hycline.models.cline import t_cline_function
+    params = ClineParams(center=0.0, width=1.0, pmin=0.0, pmax=1.0, t_shape=116.0)
+    x = np.linspace(-4, 4, 801)
+    t_vals = t_cline_function(x, params)
+    # Normal unit cline: same width convention (max gradient = 1), so scale
+    # by the Normal PDF's own peak density (1/sqrt(2*pi)) the same way
+    # _t_cline_scale does for the Student's-t case.
+    normal_vals = norm.cdf(x * np.sqrt(2 * np.pi))
+    assert np.max(np.abs(t_vals - normal_vals)) < 0.001
+
+
+def test_t_cline_width_convention_matches_max_gradient_inverse():
+    """This project's width convention ("width" = 1/max gradient) must hold
+    for the T-cline exactly as it does for the logistic core, across a wide
+    range of shape and width values -- not just asserted, checked by finite
+    difference."""
+    from hycline.models.cline import t_cline_function
+    eps = 1e-4
+    for t_shape in (0.5, 1.0, 2.0, 6.67, 30.0, 200.0):
+        for width in (1.0, 10.0, 37.5):
+            params = ClineParams(center=20.0, width=width, pmin=0.0, pmax=1.0, t_shape=t_shape)
+            y = t_cline_function(np.array([20.0 - eps, 20.0 + eps]), params)
+            grad = (y[1] - y[0]) / (2 * eps)
+            assert grad * width == pytest.approx(1.0, rel=1e-4)
+
+
+def test_t_cline_is_monotonic_across_steepness_range():
+    from hycline.models.cline import t_cline_function
+    x = np.linspace(-50, 50, 2001)
+    for t_shape in (0.06, 0.5, 1.0, 6.67, 500.0):
+        params = ClineParams(center=0.0, width=2.0, pmin=0.1, pmax=0.9, t_shape=t_shape)
+        y = t_cline_function(x, params)
+        assert np.all(np.diff(y) >= -1e-12)
+        assert not np.any(np.isnan(y))
+
+
+def test_t_cline_asymptotes():
+    from hycline.models.cline import t_cline_function
+    params = ClineParams(center=0.0, width=5.0, pmin=0.05, pmax=0.95, t_shape=3.0)
+    val = t_cline_function(np.array([-1e6, 1e6]), params)
+    assert val[0] == pytest.approx(0.05, abs=1e-6)
+    assert val[1] == pytest.approx(0.95, abs=1e-6)
+
+
+def test_t_cline_requires_positive_t_shape():
+    from hycline.models.cline import t_cline_function
+    params = ClineParams(center=0.0, width=1.0, pmin=0.0, pmax=1.0, t_shape=None)
+    with pytest.raises(ValueError):
+        t_cline_function(np.array([0.0]), params)
+    params.t_shape = -1.0
+    with pytest.raises(ValueError):
+        t_cline_function(np.array([0.0]), params)
+
+
+def test_cline_function_rejects_t_cline_tail_type():
+    """cline_function is not the entry point for T-cline evaluation --
+    should fail clearly rather than mishandle TailType.T_CLINE."""
+    params = ClineParams(center=0.0, width=1.0, pmin=0.0, pmax=1.0, t_shape=2.0)
+    with pytest.raises(ValueError):
+        cline_function(np.array([0.0]), params, TailType.T_CLINE)
+
+
+def test_hzar_cline_function_rejects_t_cline_tail_type():
+    from hycline.models.cline import hzar_cline_function
+    params = ClineParams(center=0.0, width=1.0, pmin=0.0, pmax=1.0, t_shape=2.0)
+    with pytest.raises(ValueError):
+        hzar_cline_function(np.array([0.0]), params, TailType.T_CLINE)
+
+
+def test_t_cline_param_names_and_array_roundtrip():
+    params = ClineParams(center=12.0, width=8.0, pmin=0.1, pmax=0.9, t_shape=4.5)
+    vec = params.as_array(TailType.T_CLINE)
+    from hycline.models.cline import param_names
+    assert param_names(TailType.T_CLINE) == ["center", "width", "pmin", "pmax", "t_shape"]
+    assert list(vec) == [12.0, 8.0, 0.1, 0.9, 4.5]
+    roundtrip = ClineParams.from_array(vec, TailType.T_CLINE)
+    assert roundtrip.t_shape == pytest.approx(4.5)

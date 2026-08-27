@@ -308,16 +308,25 @@ def _build_parser() -> argparse.ArgumentParser:
                              "BACKEND_PHASE2.md section 13. Falls back automatically "
                              "to one independent MCMC run per locus for ragged data "
                              "or --scaling fixed. (default: classic)")
-    fit_p.add_argument("--tail", choices=["none", "mirror", "both"], default="none",
-                        help="Cline tail configuration (default: none). Supported for "
-                             "both --method classic and --method bayesian on hard-"
-                             "count input, but Bayesian tail-model fitting has a "
-                             "known, real convergence difficulty (non-smooth log-"
-                             "density) -- classic MLE is recommended for tail models. "
-                             "See BACKEND_PHASE2.md section 12. Genotype-likelihood "
-                             "input uses several randomized restarts internally to "
-                             "guard against the same non-smooth surface -- see "
-                             "BACKEND_PHASE2.md section 12.3.")
+    fit_p.add_argument("--tail", choices=["none", "mirror", "both", "t-cline"], default="none",
+                        help="Cline tail configuration (default: none). 'none'/'mirror'/"
+                             "'both' are supported for both --method classic and "
+                             "--method bayesian on hard-count input, but Bayesian "
+                             "tail-model fitting has a known, real convergence "
+                             "difficulty (non-smooth log-density) -- classic MLE is "
+                             "recommended for tail models. See BACKEND_PHASE2.md "
+                             "section 12. Genotype-likelihood input uses several "
+                             "randomized restarts internally to guard against the "
+                             "same non-smooth surface -- see BACKEND_PHASE2.md "
+                             "section 12.3. 't-cline': Baird & Daley (2025)'s "
+                             "Student's-t-distribution-based alternative -- "
+                             "continuous everywhere (no corners), addressing the "
+                             "tail-model convergence difficulty at its structural "
+                             "root rather than working around it. --method classic "
+                             "only for now (gives a clear error with --method "
+                             "bayesian); symmetric shape only (single 't_shape' "
+                             "parameter, no asymmetry yet). See "
+                             "hycline.models.cline.t_cline_function's docstring.")
     add_bayes_args(fit_p)
     add_output_args(fit_p)
     fit_p.add_argument("--plot-grid", action="store_true", default=True,
@@ -337,7 +346,10 @@ def _build_parser() -> argparse.ArgumentParser:
     add_input_args(cmp_p)
     cmp_p.add_argument("--candidates", default="none,mirror,both",
                         help="Comma-separated list of tail models to compare, from "
-                             "{none, mirror, both} (default: none,mirror,both)")
+                             "{none, mirror, both, left, right, t-cline} (default: "
+                             "none,mirror,both). 't-cline' is Baird & Daley (2025)'s "
+                             "continuous, symmetric-only alternative -- see "
+                             "'fit-geographic --help' for the same note.")
     add_output_args(cmp_p)
     cmp_p.add_argument("--plot-best", action="store_true",
                         help="Also generate a plot of the best (lowest-AICc) model.")
@@ -1387,7 +1399,8 @@ def _resolve_summary_col(df, explicit, candidates, path, flag_name):
 def _tail_type(name: str):
     from hycline.models.cline import TailType
     return {"none": TailType.NONE, "mirror": TailType.MIRROR, "both": TailType.BOTH,
-            "left": TailType.LEFT, "right": TailType.RIGHT}[name]
+            "left": TailType.LEFT, "right": TailType.RIGHT,
+            "t-cline": TailType.T_CLINE}[name]
 
 
 def _format_loci_list(loci, max_shown: int = 10) -> str:
@@ -1558,6 +1571,13 @@ def _fit_single_locus_core(transect, args, tail_type, use_fixed, pmin_fixed, pma
                                            n_edge_sites=args.n_edge_sites)
         return fit_mle(transect, tail_type=tail_type,
                         hzar_tail=getattr(args, "hzar_tail", False))
+
+    from hycline.models.cline import TailType
+    if tail_type == TailType.T_CLINE:
+        raise UnsupportedFitConfiguration(
+            "--tail t-cline is classic MLE only for now (--method bayesian is not "
+            "yet supported for the T-cline model). Use --method classic."
+        )
 
     if args.backend == "numpyro":
         from hycline.inference.mcmc_numpyro import fit_mcmc
@@ -2015,7 +2035,15 @@ def _fit_geographic_hard_count(args, out_dir, prefix) -> int:
     print(f"  {len(transects)} loci detected: {_format_loci_list(transects.keys())}")
 
     tail_type = _tail_type(args.tail)
-    if tail_type != TailType.NONE and args.method == "bayesian" and args.backend == "numpyro":
+    if tail_type == TailType.T_CLINE and args.method == "bayesian":
+        print("\nERROR: --tail t-cline is classic MLE only for now -- --method bayesian "
+              "is not yet supported for the T-cline model (this is checked here, before "
+              "any fitting starts, since the plate-vectorized batched Bayesian path would "
+              "otherwise fail with a much less clear error). Use --method classic.\n",
+              file=sys.stderr)
+        return 2
+    if tail_type not in (TailType.NONE, TailType.T_CLINE) and args.method == "bayesian" \
+            and args.backend == "numpyro":
         print("NOTE: Bayesian tail-model fitting is known to have real convergence "
               "difficulty (a non-smooth log-density where the sigmoid core meets the "
               "exponential tail) -- classic MLE (--method classic) is recommended for "
@@ -2064,8 +2092,12 @@ def _fit_geographic_hard_count(args, out_dir, prefix) -> int:
 
             if args.method == "classic":
                 print(f"  Done in {elapsed:.1f}s. {fit.summary()}")
-                curve_fn = hzar_cline_function if getattr(fit, "hzar_tail", False) else cline_function
-                y_smooth = curve_fn(x_smooth, fit.params, tail_type)
+                if tail_type == TailType.T_CLINE:
+                    from hycline.models.cline import t_cline_function
+                    y_smooth = t_cline_function(x_smooth, fit.params)
+                else:
+                    curve_fn = hzar_cline_function if getattr(fit, "hzar_tail", False) else cline_function
+                    y_smooth = curve_fn(x_smooth, fit.params, tail_type)
                 for x, y in zip(x_smooth, y_smooth):
                     curve_rows.append({"locus": locus_name, "distance": x, "fitted_freq": y})
 
@@ -2079,6 +2111,8 @@ def _fit_geographic_hard_count(args, out_dir, prefix) -> int:
                     row["delta_l"], row["tau_l"] = fit.params.delta_l, fit.params.tau_l
                 if tail_type in (TailType.RIGHT, TailType.BOTH):
                     row["delta_r"], row["tau_r"] = fit.params.delta_r, fit.params.tau_r
+                if tail_type == TailType.T_CLINE:
+                    row["t_shape"] = fit.params.t_shape
                 if fit.std_errors is not None:
                     names = (["center", "width"] if use_fixed
                              else _cline_param_names(tail_type)[:len(fit.std_errors)])

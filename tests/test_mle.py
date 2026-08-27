@@ -196,3 +196,72 @@ def test_fit_mle_hzar_tail_none_identical_regardless_of_flag():
     fit_false = fit_mle(transect, tail_type=TailType.NONE, hzar_tail=False)
     fit_true = fit_mle(transect, tail_type=TailType.NONE, hzar_tail=True)
     np.testing.assert_allclose(fit_false.param_vec, fit_true.param_vec)
+
+
+# ---------------------------------------------------------------------------
+# T-cline (Baird & Daley 2025) classic-MLE fitting -- symmetric case only.
+# ---------------------------------------------------------------------------
+
+def _simulate_t_cline(true_params, n_sites=150, n_alleles=200, seed=1):
+    from hycline.models.cline import t_cline_function
+    rng = np.random.default_rng(seed)
+    distance = np.linspace(0.0, 100.0, n_sites)
+    true_freq = t_cline_function(distance, true_params)
+    n_alleles_arr = np.full(n_sites, n_alleles, dtype=float)
+    n_focal = rng.binomial(n_alleles, true_freq).astype(float)
+    return AlleleFreqTransect(distance=distance, n_alleles=n_alleles_arr, n_focal=n_focal)
+
+
+def test_fit_mle_t_cline_recovers_known_parameters_with_adequate_data():
+    """With enough data, all five parameters (including the shape
+    parameter itself, the hardest one to identify) should recover well --
+    checked against a real regression case, not just a smoke test.
+    Reproduces (by direct construction, not by re-deriving the same
+    numbers again) the manual verification done before this test existed:
+    t_shape recovered 1.375 +/- 0.27 against a true value of 1.5."""
+    true_params = ClineParams(center=50.0, width=20.0, pmin=0.02, pmax=0.98, t_shape=1.5)
+    transect = _simulate_t_cline(true_params, n_sites=150, n_alleles=200, seed=1)
+
+    fit = fit_mle(transect, tail_type=TailType.T_CLINE)
+
+    assert fit.success
+    assert fit.params.center == pytest.approx(50.0, abs=1.0)
+    assert fit.params.width == pytest.approx(20.0, abs=3.0)
+    assert fit.params.pmin == pytest.approx(0.02, abs=0.03)
+    assert fit.params.pmax == pytest.approx(0.98, abs=0.03)
+    assert fit.params.t_shape == pytest.approx(1.5, abs=0.6)
+
+
+def test_aicc_correctly_prefers_t_cline_over_plain_logistic_on_stepped_data():
+    """The whole point of the T-cline: on genuinely stepped (thick-tailed,
+    low t_shape) data, AICc should decisively favor it over the plain
+    logistic core -- checked directly, not assumed."""
+    true_params = ClineParams(center=50.0, width=20.0, pmin=0.02, pmax=0.98, t_shape=1.5)
+    transect = _simulate_t_cline(true_params, n_sites=150, n_alleles=200, seed=1)
+
+    fit_t_cline = fit_mle(transect, tail_type=TailType.T_CLINE)
+    fit_none = fit_mle(transect, tail_type=TailType.NONE)
+
+    assert fit_t_cline.aicc < fit_none.aicc - 10  # decisive preference, not a coin flip
+
+
+def test_fit_mle_t_cline_hzar_tail_combination_rejected():
+    """The T-cline has no HZAR-parameterized variant -- hzar_tail=True
+    should fail clearly and immediately, not deep inside the optimizer."""
+    true_params = ClineParams(center=50.0, width=20.0, pmin=0.1, pmax=0.9, t_shape=5.0)
+    transect = _simulate_t_cline(true_params, n_sites=30, seed=2)
+    with pytest.raises(ValueError):
+        fit_mle(transect, tail_type=TailType.T_CLINE, hzar_tail=True)
+
+
+def test_compare_models_includes_t_cline_candidate():
+    """compare_models (the AICc model-selection function behind
+    'compare-tails') should handle TailType.T_CLINE as an ordinary
+    candidate, with no special-casing needed at that layer."""
+    true_params = ClineParams(center=50.0, width=20.0, pmin=0.02, pmax=0.98, t_shape=1.5)
+    transect = _simulate_t_cline(true_params, n_sites=100, n_alleles=150, seed=4)
+
+    comparison = compare_models(
+        transect, candidates=[TailType.NONE, TailType.MIRROR, TailType.T_CLINE])
+    assert TailType.T_CLINE in comparison.results
+    assert comparison.best_model == TailType.T_CLINE

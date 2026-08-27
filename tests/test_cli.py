@@ -81,6 +81,75 @@ def test_cli_fit_hzar_tail_recovers_known_cline_simulated_from_hzar_formula(tmp_
     np.testing.assert_allclose(curve_df["fitted_freq"].to_numpy(), expected_hzar, atol=1e-6)
 
 
+def test_cli_fit_geographic_t_cline_recovers_known_cline(tmp_path):
+    """End-to-end CLI check for the T-cline model (Baird & Daley 2025):
+    real subprocess invocation, real CSV I/O, real fitted-curve export --
+    not just the direct-API check in test_mle.py."""
+    import numpy as np
+    from hycline.models.cline import ClineParams, TailType, t_cline_function
+
+    rng = np.random.default_rng(2024)
+    n_sites = 150
+    distance = np.linspace(0.0, 100.0, n_sites)
+    true_params = ClineParams(center=50.0, width=20.0, pmin=0.02, pmax=0.98, t_shape=1.5)
+    p_true = t_cline_function(distance, true_params)
+    n_alleles = np.full(n_sites, 200)
+    n_focal = rng.binomial(n_alleles, p_true)
+
+    input_path = tmp_path / "genotypes.csv"
+    pd.DataFrame({"distance": distance, "locus0.nSamples": n_alleles,
+                  "locus0.A": n_focal / n_alleles}).to_csv(input_path, index=False)
+    out_dir = tmp_path / "out"
+
+    result = _run_cli([
+        "fit-geographic", "--input", str(input_path), "--tail", "t-cline",
+        "--method", "classic", "--output-dir", str(out_dir),
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "t_shape" in result.stdout
+
+    summary_df = pd.read_csv(out_dir / "hycline_summary.csv")
+    row = summary_df.iloc[0]
+    assert "t_shape" in summary_df.columns
+    assert row["center"] == pytest.approx(50.0, abs=2.0)
+    assert row["t_shape"] == pytest.approx(1.5, abs=0.6)
+
+    # the exported fitted-curve CSV should match t_cline_function at the
+    # fitted parameters (a real bug elsewhere in this project, caught only
+    # by checking curve export against the fitting function directly
+    # rather than assuming they agree -- see the hzar_tail test above)
+    from hycline.models.cline import ClineParams as _CP
+    curve_df = pd.read_csv(out_dir / "hycline_fitted_curves.csv")
+    fitted_params = _CP(center=row["center"], width=row["width"],
+                         pmin=row["pmin"], pmax=row["pmax"], t_shape=row["t_shape"])
+    expected = t_cline_function(curve_df["distance"].to_numpy(), fitted_params)
+    np.testing.assert_allclose(curve_df["fitted_freq"].to_numpy(), expected, atol=1e-6)
+
+
+def test_cli_fit_geographic_t_cline_bayesian_gives_actionable_error(tmp_path):
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "fit-geographic", "--input", str(REPO_ROOT / "examples" / "manakin_multilocus.csv"),
+        "--tail", "t-cline", "--method", "bayesian", "--output-dir", str(out_dir),
+    ])
+    assert result.returncode != 0
+    assert "classic MLE only" in result.stderr
+
+
+def test_cli_compare_tails_includes_t_cline_candidate(tmp_path):
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "compare-tails", "--input", str(MANAKIN_CSV),
+        "--freq-col", "freq", "--site-col", "site",
+        "--candidates", "none,mirror,t-cline",
+        "--output-dir", str(out_dir), "--prefix", "cmp",
+    ])
+    assert result.returncode == 0, result.stderr
+
+    csv_text = (out_dir / "cmp_model_comparison.csv").read_text()
+    assert "t-cline" in csv_text
+
+
 def test_cli_fit_bayesian_hzar_tail_recovers_known_cline_and_exports_correct_curve(tmp_path):
     """The Bayesian analog of the classic-MLE test above -- also checks
     the exported curve CSV directly, since this is exactly the kind of

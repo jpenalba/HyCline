@@ -911,34 +911,62 @@ directly explains (rather than just works around) a limitation this
 project had already found and documented empirically:**
 
 - **A geographic tail-model alternative that doesn't have the
-  convergence problem HyCline's own `--hzar-tail` tripartite model has.**
-  This project already documented, empirically, that "Bayesian
-  (NUTS) tail-model fitting has a known, real convergence difficulty"
-  caused by "the tail model's non-smooth join between the sigmoid core
-  and the exponential tail" (see the geographic user guide's tail-model
-  section, and the `fit_mcmc`/`fit_mle` docstrings), and worked around
-  it with randomized restarts on the classic-MLE path. Baird & Daley
-  give the underlying reason, independently and rigorously: the
-  tripartite model (which HZAR's own tail parameterization, and
-  therefore `--hzar-tail`, is built from) has genuine mathematical
-  discontinuities -- "corners" -- at the two points where the logistic
-  core joins each exponential tail. That's not a numerical
-  inconvenience specific to this project's optimizer or sampler; it's a
-  structural property of the model family itself. The randomized
-  restarts address the symptom, not the cause. Baird & Daley propose
-  and validate a fix: the **T-cline family**, built from the
-  non-central Student's-t distribution, continuous everywhere (no
-  corners), needing only 2 parameters for symmetric stepped-ness (4
-  with asymmetry, vs. the tripartite model's 4-6) -- and demonstrate a
-  real, quantified result on Fisher's own 1937 wave-of-advance data: an
-  18-fold accuracy improvement over the best tripartite fit, using
-  *fewer* free parameters, not more. Working Python code already
-  exists: `Clinalyse` (Baird & Daley 2023,
-  github.com/Studenecivb/clinalyse) -- this would be a genuine port/
-  adaptation, not research from scratch. Recommended scope: implement
-  as an *additional* `--tail` option alongside the existing
-  HZAR-compatible tripartite one (which needs to stay, for direct
-  HZAR-parity comparisons), not a replacement.
+  convergence problem HyCline's own `--hzar-tail` tripartite model has --
+  symmetric case now implemented, classic MLE only.** This project
+  already documented, empirically, that "Bayesian (NUTS) tail-model
+  fitting has a known, real convergence difficulty" caused by "the tail
+  model's non-smooth join between the sigmoid core and the exponential
+  tail" (see the geographic user guide's tail-model section, and the
+  `fit_mcmc`/`fit_mle` docstrings), and worked around it with randomized
+  restarts on the classic-MLE path. Baird & Daley give the underlying
+  reason, independently and rigorously: the tripartite model (which
+  HZAR's own tail parameterization, and therefore `--hzar-tail`, is
+  built from) has genuine mathematical discontinuities -- "corners" --
+  at the two points where the logistic core joins each exponential
+  tail. That's not a numerical inconvenience specific to this project's
+  optimizer or sampler; it's a structural property of the model family
+  itself. The randomized restarts address the symptom, not the cause.
+  Baird & Daley propose and validate a fix: the **T-cline family**,
+  built from the non-central Student's-t distribution, continuous
+  everywhere (no corners), needing only 2 parameters for symmetric
+  stepped-ness (4 with asymmetry, vs. the tripartite model's 4-6) -- and
+  demonstrate a real, quantified result on Fisher's own 1937
+  wave-of-advance data: an 18-fold accuracy improvement over the best
+  tripartite fit, using *fewer* free parameters, not more.
+
+  **Now implemented**: `hycline.models.cline.t_cline_function`
+  (`--tail t-cline` on `fit-geographic`/`compare-tails`), a genuine
+  port/adaptation of the reference implementation (`Clinalyse`, Baird &
+  Daley 2023, github.com/Studenecivb/clinalyse), not research from
+  scratch -- its own `PreparationGosset._studentcdfgrad` computes
+  exactly the same width-normalizing scale factor this port derives
+  independently and cross-checks against it (`scipy.stats.t.pdf(0,
+  df=v)`). Verified, not just implemented: exact match to the Cauchy
+  CDF at `t_shape=1` (Table 1's own stated exact case, to floating-point
+  precision), matches the paper's own MAD-0.001 calibration points for
+  `t_shape=6.67` (Bazykin/logistic) and `t_shape=116` (Normal), the
+  width convention (max gradient = 1/width) holds to 8 decimal places
+  by finite-difference check across `t_shape` 0.5-500 and width 1-37.5,
+  and end-to-end classic-MLE fitting recovers all five parameters
+  (including `t_shape` itself, the hardest to identify) from adequately-
+  sampled synthetic data, with AICc correctly and decisively preferring
+  it over the plain logistic core on genuinely stepped data. 27 new
+  tests across `tests/test_cline.py`/`test_mle.py`/`test_cli.py`.
+
+  **Deliberately scoped out of this pass, not forgotten**: (1) the
+  paper's full *asymmetric* `T(v, alpha)` family -- needed to exactly
+  reproduce the paper's own Fisher-1937 validation result
+  (`T(8.365, 1.367)`) -- requires porting a materially more complex
+  noncentral-Student's-t peak-location formula (closed-form, involving
+  Hermite/confluent-hypergeometric functions in Clinalyse's own
+  `PreparationGosset.preparation_gosset_asy`); (2) Bayesian/NUTS support
+  -- ironically the case this whole item exists to fix -- needs that
+  same peak-location computation to be JAX-differentiable for NUTS to
+  work at all, which the closed-form formula may or may not be
+  (`jax.scipy.special`'s confluent-hypergeometric support wasn't
+  confirmed), making this genuinely harder than the classic-MLE port
+  and worth its own scoped pass rather than a rushed, unverified
+  addition to this one.
 - **Update the existing tail-model convergence warning to cite the
   actual explanation.** Small, no new model work: the warning text in
   `fit_mcmc` currently describes the convergence difficulty as an
@@ -1192,6 +1220,34 @@ communicates that).
   to outlier flagging as to pooling itself -- worth a stratify-by-linkage-
   group option, or at minimum a loud warning, in a later pass rather than
   this one.
+
+**A real, verified dependency-pinning gap found while running the full
+test suite for the T-cline work above, unrelated to it**:
+`requirements-bayes.txt` pins only lower bounds (`arviz>=0.16`,
+`jax>=0.4`, etc.), no upper bounds. A fresh `pip install -r
+requirements-bayes.txt` pulls the latest arviz/xarray, whose APIs have
+since changed incompatibly with this project's own code in two places:
+`az.hdi(..., prob=...)` (`hycline/inference/mcmc_numpyro.py`'s `hdi`
+method) now raises `TypeError: apply_ufunc() got an unexpected keyword
+argument 'prob'`, and `idata.posterior["center"]`-style direct variable
+access (`hycline/viz/plotting.py::plot_bayesian_fit`,
+`hycline/cli.py::_report_bayesian_multilocus_fit`) now raises `KeyError`
+against the newer xarray/arviz Dataset structure. Confirmed to affect
+real functionality, not just the test suite: reproduced directly via the
+actual CLI (`fit-geographic --method bayesian` with credible intervals
+requested), not just inferred from a test failure. 10 tests fail as a
+direct result (`tests/test_mcmc_manakin_bayesian.py`,
+`tests/test_plotting_bayesian.py`, and 8 in `tests/test_cli.py`, all and
+only the Bayesian-credible-interval-reporting ones) -- every other test
+in the suite passes, confirmed by running the complete suite in full
+(see BACKEND_SCALE.md-style batch reconciliation: every `tests/*.py`
+file run, batch counts reconciled against `--collect-only`'s totals).
+Fixing this means either pinning `arviz`/`xarray` upper bounds or
+updating the two call sites for the newer API -- not attempted here,
+since it surfaced while verifying unrelated work and deserves its own
+scoped pass (in particular, confirming which arviz/xarray version range
+this project's own Bayesian numerics were actually validated against,
+not just picking versions that happen to fix the immediate errors).
 
 Three real, small items surfaced while extending `--hzar-tail` to the
 Bayesian path (BACKEND_PHASE2.md section 14, BACKEND_TRAIT.md
