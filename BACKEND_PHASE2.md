@@ -276,14 +276,25 @@ from hycline.viz.plotting import plot_bayesian_fit
 This is why `pyproject.toml` splits `bayes` out as an optional dependency
 group (`pip install -e ".[bayes]"`) rather than a base requirement.
 
-**Versions this was built and tested against:** `numpyro==0.21.0`,
-`arviz==1.2.0`, `jax==0.11.0`, `pymc==6.2.0`. Called out specifically
-because ArviZ's `hdi()` API changed between major versions in a way that
-fails loudly (`TypeError`) rather than silently -- pre-1.0 ArviZ used
-`hdi_prob=` and returned an `hdi` coordinate with `'lower'`/`'higher'`
-labels; the version here uses `prob=` and a `ci_bound` coordinate with
-`'lower'`/`'upper'` labels. `BayesianFitResult.hdi()` is written against
-the newer API; if you pin an older ArviZ, update that method to match.
+**Correction (found and fixed while chasing an unrelated test-suite
+failure -- see section 16): the "Versions this was built and tested
+against" claim originally written here was wrong, not just stale.** It
+previously named `arviz==1.2.0` and described `BayesianFitResult.hdi()`
+as written against a `prob=`/`ci_bound`-coordinate API introduced in
+ArviZ >=1.0. Neither claim survives a direct check: `pip index versions
+arviz` shows no `1.x` release ever existed on PyPI -- the latest real
+release is `0.23.4` -- and `inspect.signature(az.hdi)` against that real,
+installed version shows the actual, only-ever-real API is `hdi_prob=`,
+returning an `hdi` coordinate with `'lower'`/`'higher'` labels. The
+`prob=`/`ci_bound` version was never real; `BayesianFitResult.hdi()` had
+simply been calling ArviZ incorrectly since it was written, and this had
+gone uncaught because CI/local test runs happened to be checking against
+that same wrong API rather than the real one. See section 16 for the
+full account of how this was found and fixed. **Versions this was built
+and tested against, now checked directly via `pip show` rather than
+asserted** (the `jax`/`pymc` numbers above were also wrong, not just the
+arviz one -- corrected here too): `numpyro==0.21.0`, `arviz==0.23.4`,
+`jax==0.10.2`, `pymc==5.28.5`.
 
 ---
 
@@ -1175,3 +1186,97 @@ with real caution.
   genotype-likelihood input gives a clear, immediate CLI error for `--tail
   t-cline` rather than a confusing crash deep inside a code path that
   never learned about `TailType.T_CLINE` at all.
+
+## 16. A real `BayesianFitResult.hdi()` bug, found while verifying the T-cline work above -- and a wrong first diagnosis of it, corrected
+
+While running the full test suite to verify section 15's work (unrelated
+to it), two failures turned up: `tests/test_mcmc_manakin_bayesian.py::
+test_manakin_ada_bayesian_credible_intervals_contain_hzar_published_
+values` and `tests/test_plotting_bayesian.py::test_plot_bayesian_fit_
+uses_hzar_cline_function_when_hzar_tail_true`. Confirmed via `git stash`
+that both failed identically on the pre-T-cline-work commit too, so
+neither was caused by section 15's changes.
+
+**The first diagnosis (recorded in README.md's Tier 1 backlog before
+this section existed) was wrong, and is corrected here rather than
+quietly revised.** It attributed both failures to the same cause: a
+`requirements-bayes.txt` dependency-pinning gap pulling a newer arviz/
+xarray whose *Dataset structure* had changed incompatibly, breaking both
+`az.hdi(..., prob=...)` and direct `idata.posterior["center"]`-style
+variable access in `hycline/viz/plotting.py`/`hycline/cli.py`. Checking
+each failure directly (not just from its error message) found this was
+only half right, and the "direct variable access" half was flatly wrong:
+
+- **`az.hdi(..., prob=...)` really is broken -- but not because of
+  version drift.** `inspect.signature(az.hdi)` against the actually-
+  installed arviz (`0.23.4` -- confirmed via `pip index versions arviz`
+  to be the latest release that has ever existed on PyPI; no `1.x`
+  release exists) shows the real, only-ever-real parameter name is
+  `hdi_prob=`, not `prob=`, and the returned coordinate is named `hdi`
+  with `'lower'`/`'higher'` labels, not `ci_bound` with `'lower'`/
+  `'upper'`. `BayesianFitResult.hdi()` (`hycline/inference/mcmc_numpyro.
+  py`) had been calling `az.hdi(self.idata.posterior, var_names=[param],
+  prob=prob)` and reading back `.sel(ci_bound="lower"/"upper")` since it
+  was first written -- a real, load-bearing bug affecting any credible-
+  interval request (`fit-geographic --method bayesian
+  --credible-interval`, and any other caller of `.hdi()`), not a
+  regression from a dependency upgrade. The section 8 docstring this
+  method cited (claiming ArviZ `>=1.0` introduced the `prob=`/`ci_bound`
+  API) was itself invented, not verified against a real install, and is
+  corrected in section 8 above. **Fixed** by calling `az.hdi(...,
+  hdi_prob=prob)` and reading back `.sel(hdi="lower"/"higher")`, verified
+  directly with a live `az.hdi()` call before editing the method, not
+  just inferred from the error text. This is the actual cause of all 9
+  affected tests that called `.hdi()` through this method: the manakin
+  credible-interval test here, plus 8 in `tests/test_cli.py` exercising
+  `--credible-interval` end-to-end (not independently re-verified line by
+  line in this pass, since they share the exact same code path through
+  `BayesianFitResult.hdi()` and the fix is general, not per-caller; the
+  full-suite rerun after the fix is the actual verification -- see below).
+- **The "direct variable access is broken" half of the original
+  diagnosis was wrong.** `hycline/viz/plotting.py::plot_bayesian_fit` and
+  `hycline/cli.py::_report_bayesian_multilocus_fit` both do plain
+  `fit.idata.posterior["center"]`-style access against a real
+  `InferenceData` built by `az.from_numpyro` inside `fit_mcmc`/
+  `fit_mcmc_batch` -- this access pattern is unchanged and correct in
+  the currently-installed arviz/xarray; there is no Dataset-structure
+  incompatibility here. The actual cause of the
+  `test_plot_bayesian_fit_uses_hzar_cline_function_when_hzar_tail_true`
+  failure was a bug in the *test itself*: it built a fake posterior with
+  `az.from_dict({"posterior": draws})`, wrapping `draws` in an extra
+  `{"posterior": ...}` dict. `az.from_dict`'s own first parameter is
+  already named `posterior` (confirmed via
+  `inspect.signature(az.from_dict)`), so the extra wrapping dict was
+  itself being stored as a single object-dtype "variable" literally named
+  `"posterior"` inside the resulting `idata.posterior` Dataset, which is
+  exactly why indexing `post["center"]` then raised `KeyError: 'center'`
+  -- there was no `"center"` variable, only a `"posterior"` one holding
+  the whole dict as an opaque object. **Fixed** by calling
+  `az.from_dict(draws)` directly (verified with a standalone script
+  confirming `idata.posterior["center"].values` then contains the
+  expected `50.0`, before touching the test file). No production code
+  needed to change for this half at all.
+
+**Verification after both fixes**: re-ran the full suite in the same
+batched pattern used for section 15 (`tests/` minus the slow MCMC/CLI
+batch, plus that batch separately). All previously-failing tests now
+pass, and nothing else regressed.
+
+**On the `requirements-bayes.txt` pin range: deliberately narrow, and why.**
+Tried, in an isolated venv, to check how far back the `hdi_prob=`/`hdi`
+API actually holds (`arviz==0.16.1`, the existing lower bound, and
+`arviz==0.20.0`) so the pin could be a real validated range rather than a
+guess. Both installs hit real but unrelated breakage before the `hdi()`
+question was even reachable -- `0.16.1` pulled a scipy new enough that
+`from scipy.signal import gaussian` (removed in modern scipy) fails on
+arviz's own import, and `0.20.0` hit a `matplotlib.style` API arviz's own
+`__init__.py` no longer matches on this environment's matplotlib. Neither
+failure says anything about the `hdi()` signature itself, and chasing a
+three-way-compatible (arviz, scipy, matplotlib) old-version combination
+is its own separate, unscoped effort -- so this was not pursued further.
+`requirements-bayes.txt` now pins `arviz>=0.23,<0.24`: the exact range
+actually run end-to-end against this project's own code in this pass,
+not a wider range inferred from partial, environment-broken checks. If a
+future pass wants a wider validated floor, the honest way to get one is a
+matching pinned scipy/matplotlib per arviz version tried, not just
+`pip install arviz==X` alone.

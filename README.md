@@ -599,6 +599,13 @@ frequencies) -- classic MLE, full HZAR parity including tail models:**
   posteriors now (a real bug -- hardcoded `TailType.NONE` regardless of
   the actual fit -- was caught and fixed while validating this;
   BACKEND_PHASE2.md section 12.4).
+- `BayesianFitResult.hdi()` -- credible intervals via ArviZ's `hdi()`,
+  now calling the actual ArviZ API (`hdi_prob=`, `hdi` coordinate with
+  `'lower'`/`'higher'` labels) after a real bug (calling it with a
+  never-real `prob=`/`ci_bound` API) was found and fixed; see
+  BACKEND_PHASE2.md section 16, including a first diagnosis of the
+  surfacing test failures that was itself partially wrong and got
+  corrected in the same pass.
 
 **See `BACKEND_PHASE2.md`** for the full design rationale behind every one of
 these choices -- why NumPyro over PyMC, the exact probabilistic model,
@@ -1188,34 +1195,6 @@ communicates that).
   to outlier flagging as to pooling itself -- worth a stratify-by-linkage-
   group option, or at minimum a loud warning, in a later pass rather than
   this one.
-
-**A real, verified dependency-pinning gap found while running the full
-test suite for the T-cline work above, unrelated to it**:
-`requirements-bayes.txt` pins only lower bounds (`arviz>=0.16`,
-`jax>=0.4`, etc.), no upper bounds. A fresh `pip install -r
-requirements-bayes.txt` pulls the latest arviz/xarray, whose APIs have
-since changed incompatibly with this project's own code in two places:
-`az.hdi(..., prob=...)` (`hycline/inference/mcmc_numpyro.py`'s `hdi`
-method) now raises `TypeError: apply_ufunc() got an unexpected keyword
-argument 'prob'`, and `idata.posterior["center"]`-style direct variable
-access (`hycline/viz/plotting.py::plot_bayesian_fit`,
-`hycline/cli.py::_report_bayesian_multilocus_fit`) now raises `KeyError`
-against the newer xarray/arviz Dataset structure. Confirmed to affect
-real functionality, not just the test suite: reproduced directly via the
-actual CLI (`fit-geographic --method bayesian` with credible intervals
-requested), not just inferred from a test failure. 10 tests fail as a
-direct result (`tests/test_mcmc_manakin_bayesian.py`,
-`tests/test_plotting_bayesian.py`, and 8 in `tests/test_cli.py`, all and
-only the Bayesian-credible-interval-reporting ones) -- every other test
-in the suite passes, confirmed by running the complete suite in full
-(see BACKEND_SCALE.md-style batch reconciliation: every `tests/*.py`
-file run, batch counts reconciled against `--collect-only`'s totals).
-Fixing this means either pinning `arviz`/`xarray` upper bounds or
-updating the two call sites for the newer API -- not attempted here,
-since it surfaced while verifying unrelated work and deserves its own
-scoped pass (in particular, confirming which arviz/xarray version range
-this project's own Bayesian numerics were actually validated against,
-not just picking versions that happen to fix the immediate errors).
 
 Three real, small items surfaced while extending `--hzar-tail` to the
 Bayesian path (BACKEND_PHASE2.md section 14, BACKEND_TRAIT.md

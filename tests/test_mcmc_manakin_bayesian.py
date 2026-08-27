@@ -7,9 +7,14 @@ point estimate (expected behavior with a fairly flat prior and only 11
 sampling sites; see BACKEND_PHASE2.md section 3 and
 examples/demo_bayesian_manakin.py for the full discussion).
 
-This also locks in the current ArviZ (>=1.0) hdi() API usage
-(`prob=`, `ci_bound` coordinate) so an ArviZ upgrade that changes the API
-again gets caught here rather than silently in a script.
+This also locks in the ArviZ `hdi()` API this project's own `hdi()`
+wrapper (`hycline.inference.mcmc_numpyro.BayesianFitResult.hdi`) is
+written against -- `hdi_prob=`, `hdi` coordinate with 'lower'/'higher'
+labels, confirmed directly against the real installed ArviZ (0.23.4, the
+latest release on PyPI; a stale earlier claim in this project's own code
+that ArviZ >=1.0 uses a different `prob=`/`ci_bound` API was wrong and has
+been corrected -- see BACKEND_PHASE2.md section 8) -- so a future ArviZ
+API change gets caught here rather than silently in a script.
 """
 
 import json

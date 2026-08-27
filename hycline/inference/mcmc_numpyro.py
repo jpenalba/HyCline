@@ -302,15 +302,19 @@ class BayesianFitResult:
 
     def hdi(self, param: str, prob: float = 0.95) -> tuple:
         """Highest-density interval for a parameter. Note: uses ArviZ's
-        current (>=1.0) `hdi()` API (`prob=`, `ci_bound` coordinate with
-        'lower'/'upper' labels) -- this replaced the pre-1.0 API
-        (`hdi_prob=`, `hdi` coordinate with 'lower'/'higher' labels), which
-        will silently give a confusing `TypeError` on newer ArviZ if you
-        copy older example code. See BACKEND_PHASE2.md section 8 for the version
-        this was built and tested against."""
-        interval = az.hdi(self.idata.posterior, var_names=[param], prob=prob)
-        lo = float(interval[param].sel(ci_bound="lower"))
-        hi = float(interval[param].sel(ci_bound="upper"))
+        actual, verified `hdi()` API (`hdi_prob=`, `hdi` coordinate with
+        'lower'/'higher' labels) -- confirmed directly against the real
+        installed ArviZ (checked via `inspect.signature(az.hdi)` and a
+        live call, not assumed from changelog text). An earlier version of
+        this docstring claimed ArviZ >=1.0 uses a different `prob=`/
+        `ci_bound` API; that was wrong -- no such ArviZ release exists on
+        PyPI (the latest real release as of this check is 0.23.4, which
+        uses `hdi_prob=`/`hdi`), and the wrong claim was never actually
+        verified against a real install. See BACKEND_PHASE2.md section 8
+        for the corrected version history and how this was caught."""
+        interval = az.hdi(self.idata.posterior, var_names=[param], hdi_prob=prob)
+        lo = float(interval[param].sel(hdi="lower"))
+        hi = float(interval[param].sel(hdi="higher"))
         return lo, hi
 
     def summary(self) -> str:

@@ -4,6 +4,10 @@
 #   pip install -r requirements.txt -r requirements-bayes.txt
 
 numpyro>=0.14
-arviz>=0.16
+# arviz pinned to the exact range actually run end-to-end against this
+# project's code (see BACKEND_PHASE2.md section 16): a prior unbounded
+# `arviz>=0.16` pulled versions whose hdi() API this project's own
+# BayesianFitResult.hdi() was calling incorrectly for either version.
+arviz>=0.23,<0.24
 jax>=0.4
 pymc>=5.0

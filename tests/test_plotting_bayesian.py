@@ -67,7 +67,7 @@ def test_plot_bayesian_fit_uses_hzar_cline_function_when_hzar_tail_true():
         "pmin": np.array([[0.1]]), "pmax": np.array([[0.9]]),
         "delta_l": np.array([[8.0]]), "tau_l": np.array([[0.5]]),
     }
-    idata = az.from_dict({"posterior": draws})
+    idata = az.from_dict(draws)
     fit = BayesianFitResult(idata=idata, tail_type=TailType.LEFT, n_obs=10,
                              backend="numpyro", param_names=list(draws.keys()),
                              hzar_tail=True)
