@@ -953,20 +953,72 @@ project had already found and documented empirically:**
   it over the plain logistic core on genuinely stepped data. 27 new
   tests across `tests/test_cline.py`/`test_mle.py`/`test_cli.py`.
 
-  **Deliberately scoped out of this pass, not forgotten**: (1) the
-  paper's full *asymmetric* `T(v, alpha)` family -- needed to exactly
-  reproduce the paper's own Fisher-1937 validation result
-  (`T(8.365, 1.367)`) -- requires porting a materially more complex
-  noncentral-Student's-t peak-location formula (closed-form, involving
-  Hermite/confluent-hypergeometric functions in Clinalyse's own
-  `PreparationGosset.preparation_gosset_asy`); (2) Bayesian/NUTS support
-  -- ironically the case this whole item exists to fix -- needs that
-  same peak-location computation to be JAX-differentiable for NUTS to
-  work at all, which the closed-form formula may or may not be
-  (`jax.scipy.special`'s confluent-hypergeometric support wasn't
-  confirmed), making this genuinely harder than the classic-MLE port
-  and worth its own scoped pass rather than a rushed, unverified
-  addition to this one.
+  **Deliberately scoped out of this pass -- and now checked directly,
+  not left as an open question, before writing any more code for
+  either.**
+
+  **(1) Asymmetric `T(v, alpha)` for classic MLE: confirmed feasible,
+  but not via the closed-form route originally assumed.** Porting
+  Clinalyse's own closed-form peak-location formula
+  (`PreparationGosset.preparation_gosset_asy`, built from Hermite/
+  confluent-hypergeometric functions) turns out to be unnecessary for
+  the classic-MLE path specifically: `fit_mle` calls `scipy.optimize.
+  minimize` without a `jac=` argument, so L-BFGS-B already uses
+  finite-difference gradients on the whole objective -- nothing inside
+  `t_cline_function` needs to be analytically differentiable at all.
+  Checked directly: a plain numerical peak-finder
+  (`scipy.optimize.minimize_scalar` on `scipy.stats.nct.pdf`, bracketed
+  around `alpha` rather than a fixed wide window) succeeds cleanly
+  across 48 `(t_shape, alpha)` combinations spanning this project's own
+  existing `t_shape` bounds (0.05-500) and a representative asymmetry
+  range, at ~0.8ms/call -- fast enough for practical use inside an
+  optimizer. (A naive fixed-width search bracket does hit a real
+  `scipy.stats.nct.pdf` overflow deep in the extreme tail at
+  `t_shape=500` -- an artifact of an over-wide bracket evaluating the
+  PDF somewhere numerically meaningless, not a sign the distribution
+  itself is unusable; an alpha-centered bracket avoids it entirely.)
+  This is a smaller, more robust engineering path than the one
+  originally proposed, not a compromise.
+
+  **(2) Bayesian/NUTS support: confirmed NOT feasible with the
+  JAX/NumPyro versions available (jax 0.10.2), for a more fundamental
+  reason than originally guessed, and it applies to the *symmetric*
+  T-cline already shipped, not just the asymmetric extension.** Checked
+  directly rather than assumed: `jax.scipy.special.betainc` -- which
+  both a hand-built JAX Student's-t CDF and NumPyro's own official
+  `numpyro.distributions.StudentT.cdf()` are built on -- explicitly does
+  not support gradients with respect to its own shape parameters (`a`/
+  `b`); confirmed with `ValueError: Betainc gradient with respect to a
+  and b not supported` from calling `jax.grad` on NumPyro's *own*
+  `StudentT.cdf()` with respect to `df`, not just a homemade
+  implementation. Since `t_shape` enters exactly there, and NUTS needs
+  the gradient of the log-density with respect to every parameter it
+  samples (including `t_shape` itself for a Bayesian T-cline fit), this
+  isn't a gap this project's own code could close by porting more of
+  Clinalyse -- it's a capability gap in the JAX/NumPyro ecosystem itself
+  as currently available. (The `hyp1f1`-based asymmetric peak-location
+  formula has its own, separate numerical problem confirmed along the
+  way -- `jax.scipy.special.hyp1f1` diverges from `scipy.special.hyp1f1`
+  by a factor of ~150,000 at `t_shape=500` -- but that's now moot, since
+  the CDF gradient itself is the blocking issue regardless of asymmetry.)
+
+  **Recommendation, not yet acted on**: state this limitation up front
+  rather than silently omit it -- `--tail t-cline` combined with
+  `--method bayesian` already gives an immediate, clear CLI error
+  (existing behavior, unchanged); worth also adding a one-line note to
+  `t_cline_function`'s docstring and the geographic user guide's
+  tail-model section explaining *why* (the betainc-gradient limitation
+  above, cited plainly, the same way the tripartite model's own
+  convergence difficulty is cited with its real cause rather than left
+  as "doesn't work yet"), so a reader isn't left assuming this is a
+  todo-list gap rather than a currently-real ecosystem limitation. A
+  narrower, genuinely achievable alternative exists if Bayesian T-cline
+  credible intervals are wanted badly enough later: fix `t_shape` at its
+  classic-MLE-estimated value (a constant, not a sampled parameter) and
+  let NUTS explore only `center`/`width`/`pmin`/`pmax` -- sidesteps the
+  broken gradient entirely, at the cost of not propagating shape
+  uncertainty into the credible intervals. Not implemented here, since
+  it wasn't asked for and changes what "Bayesian T-cline" means.
 - **Update the existing tail-model convergence warning to cite the
   actual explanation.** Small, no new model work: the warning text in
   `fit_mcmc` currently describes the convergence difficulty as an
