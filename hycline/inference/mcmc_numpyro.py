@@ -381,13 +381,20 @@ def fit_mcmc(transect: AlleleFreqTransect, tail_type: TailType = TailType.NONE,
             "and the exponential tail creates a kinked log-density that gradient-based "
             "samplers can struggle with severely (poor R-hat/ESS, sometimes no "
             "practical convergence even with many warmup iterations) -- this is not a "
-            "bug, and more warmup/samples often does not fix it. See BACKEND_PHASE2.md "
-            "section 12.2 for the full investigation. Classic MLE "
-            "(hycline.inference.mle_genotype_likelihood.fit_mle_geographic_gl or "
-            "hycline.inference.mle.fit_mle) does not have this issue and is the "
-            "recommended path for tail models. If you do use this Bayesian path, "
-            "always check hycline.diagnostics.convergence.check() before trusting the "
-            "tail parameters.",
+            "bug, and more warmup/samples often does not fix it. Baird & Daley (2025) "
+            "give the structural reason directly: the join is a genuine mathematical "
+            "discontinuity (a 'corner'), not a numerical inconvenience specific to this "
+            "sampler. See BACKEND_PHASE2.md section 12.2 for the full investigation. "
+            "Classic MLE (hycline.inference.mle_genotype_likelihood.fit_mle_geographic_gl "
+            "or hycline.inference.mle.fit_mle) does not have this issue and is the "
+            "recommended path for tail models -- or, for a continuous-everywhere "
+            "alternative that avoids the corner at its source rather than working around "
+            "it, hycline.models.cline.t_cline_function (--tail t-cline, classic MLE "
+            "only -- Bayesian support is not available for it either, for a separate, "
+            "specific reason: see t_cline_function's own docstring and BACKEND_PHASE2.md "
+            "section 15.3). If you do use this Bayesian path with the tripartite tail "
+            "model, always check hycline.diagnostics.convergence.check() before trusting "
+            "the tail parameters.",
             UserWarning, stacklevel=2,
         )
 
@@ -467,9 +474,14 @@ def fit_mcmc_batch(distance: np.ndarray, n_alleles: np.ndarray, n_focal: np.ndar
     if tail_type != TailType.NONE:
         warnings.warn(
             "Bayesian (NUTS) tail-model fitting has a known, real convergence "
-            "difficulty -- see fit_mcmc's docstring / BACKEND_PHASE2.md section 12.2 "
+            "difficulty -- a genuine mathematical discontinuity where the sigmoid core "
+            "joins the exponential tail (Baird & Daley 2025), not a numerical "
+            "inconvenience -- see fit_mcmc's docstring / BACKEND_PHASE2.md section 12.2 "
             "for the full investigation. This applies per-locus here too. Classic MLE "
-            "does not have this issue and is the recommended path for tail models.",
+            "does not have this issue and is the recommended path for tail models -- or "
+            "hycline.models.cline.t_cline_function (--tail t-cline) for a continuous-"
+            "everywhere alternative, classic MLE only (see BACKEND_PHASE2.md "
+            "section 15.3 for why Bayesian support isn't available for it either).",
             UserWarning, stacklevel=2,
         )
 

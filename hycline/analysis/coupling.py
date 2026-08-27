@@ -43,6 +43,30 @@ it); this closes the same gap for sigma_c. See BACKEND_PHASE4.md section
 9.3 for the full story of why this was a real, precisely-identified gap
 rather than a hypothetical one, and section 7.4 for the model extension
 itself.
+
+A REAL SHAPE-MISMATCH CAVEAT, not a hypothetical one (Baird & Daley 2025,
+read directly -- `references/`): both functions here use across-locus
+variance in cline *center*/*width* (equivalently, slope) as the coupling
+signal, which implicitly assumes every locus's underlying cline is
+symmetric and non-stepped. The paper gives a concrete mechanism by which
+that assumption, when wrong, contaminates the signal in two specific,
+opposite-direction ways: a model that doesn't allow for asymmetry will
+misattribute incomplete-lineage-sorting-driven asymmetry as a spurious
+center/width outlier (a false positive for coupling variation that isn't
+really there), while a model that doesn't allow for steppedness will
+systematically overestimate width for genuinely stepped loci and thereby
+miss real barrier-effect outliers (a false negative for the loci coupling
+analysis exists to find). This is a real limitation of `geographic_cline_
+variance`/`genomic_cline_variance` as they stand today, not fixed by
+`hycline.models.cline.t_cline_function` (the T-cline, BACKEND_PHASE2.md
+section 15) existing elsewhere in this project -- feeding T-cline-fitted
+loci into these functions would still only extract width/slope from the
+summary CSV, discarding the T-cline's own shape (`t_shape`) and asymmetry
+(`t_skew`) parameters entirely, so it doesn't by itself close this gap.
+Extending these functions to account for shape (e.g. treating markedly
+different `t_shape`/`t_skew` values as their own signal, separate from
+center/width variance) is a real, open, unimplemented extension -- see
+README.md's Tier 1 backlog.
 """
 
 from __future__ import annotations

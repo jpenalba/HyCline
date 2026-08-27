@@ -25,6 +25,45 @@ across loci, isolation is weaker or more locus-specific. Coupling
 analysis quantifies this directly from a set of already-fitted, per-locus
 cline parameters -- it's a downstream step, not a fitting step itself.
 
+### A real shape-mismatch caveat, not a hypothetical one
+
+Both coupling commands measure concordance through `width`/`slope`
+(`coupling-geographic`) or `u`/`v` (`coupling-genomic`) -- summary numbers
+that assume each locus's cline is shaped like the others being compared.
+Baird & Daley (2025) point out a real, two-directional way that
+assumption can quietly break down when clines actually differ in *shape*,
+not just in the parameters being compared:
+
+- **Asymmetry read as a spurious outlier.** A locus with a genuinely
+  asymmetric cline (steeper on one side of the center than the other) can
+  show a shifted center or a distorted width estimate relative to
+  symmetric loci in the same set, purely because a symmetric model is
+  being asked to summarize an asymmetric shape -- not because that locus
+  has a different underlying selection/recombination balance.
+- **Steppedness inflates width, masking real outliers.** A locus with a
+  cline shape closer to a step function (sharper transition, heavier
+  tails) than the tripartite/logistic default tends to have its width
+  systematically overestimated by those models -- which can either
+  manufacture a false low-concordance outlier or, just as problematically,
+  hide a locus whose width is a genuine barrier-effect outlier for a
+  different reason.
+
+**HyCline's `--tail t-cline` model (a continuous alternative to the
+tripartite tail model; see `HyCline_UserGuide_Geographic.md`) does not by
+itself close this gap for coupling analysis.** `coupling-geographic`
+reads only `width` from the per-locus summary CSV, and `coupling-genomic`
+reads only `u`/`v` -- neither currently extracts the T-cline's own shape
+parameters (`t_shape`, and `t_skew` under `--t-cline-asymmetric`) from the
+summary, so a locus fit with the T-cline still enters coupling analysis
+as a single width or `u`/`v` number, with no signal about how stepped or
+asymmetric that locus actually was. If your locus set mixes clearly
+different cline shapes (some loci visibly stepped or asymmetric when
+plotted, others closer to plain logistic), treat cross-locus variance
+comparisons with that caveat in mind -- a low-concordance signal may
+reflect a shape mismatch between the model and a subset of your data
+rather than a real difference in selection/recombination balance across
+loci.
+
 ---
 
 ## `coupling-geographic`

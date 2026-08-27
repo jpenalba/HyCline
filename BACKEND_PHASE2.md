@@ -927,3 +927,251 @@ real, user-visible inconsistency -- not introduced by this pass, not
 fixed by it either, since it's an unrelated naming-consistency issue
 orthogonal to the `hzar_tail` extension this section is about. Noted
 here, and in the README's "Not yet implemented" list, so it isn't lost.
+
+## 15. The T-cline (Baird & Daley 2025): a structural fix for section 12's finding, not a workaround for it
+
+Section 12.2 found that Bayesian tail-model fitting fails because the
+tripartite model's sigmoid-core/exponential-tail join is a genuine
+mathematical discontinuity -- gradient-based sampling struggles with the
+kink itself, not with anything tunable. Baird & Daley (2025), read
+directly (`references/`), give the same diagnosis independently and
+propose a fix at the root: the T-cline family, built from the (possibly
+noncentral) Student's-t distribution, continuous everywhere with no join
+at all. This section covers what got built on top of that paper, checked
+directly rather than assumed at each step: a symmetric implementation
+(classic MLE only), a direct feasibility check of the two natural
+follow-ups (asymmetric shape, Bayesian support) before writing any more
+code for either, and the asymmetric implementation once one of those two
+turned out feasible.
+
+### 15.1 The symmetric T-cline: `t_cline_function`, classic MLE only
+
+`hycline.models.cline.t_cline_function` implements the paper's `T(v)`
+(Table 1): a Student's-t CDF with `t_shape` degrees of freedom, rescaled
+so this project's own width convention (`width` = inverse of the maximum
+gradient) holds exactly -- the same convention `_sigmoid_core`'s factor of
+4 already encodes for the logistic case, generalized via
+`_t_cline_scale(v) = scipy.stats.t.pdf(0, df=v)` (the standard Student-t's
+own peak density; delegating to scipy's own PDF evaluation rather than a
+hand-evaluated Gamma-function ratio, which can overflow for large `v`
+before the ratio is taken).
+
+Verified directly, not just implemented:
+- Exact match to the Cauchy CDF at `t_shape=1` (Table 1's own stated
+  exact case) to floating-point precision.
+- Matches the paper's own MAD-0.001 calibration points: `t_shape=6.67`
+  against the ordinary logistic/Bazykin sigmoid, `t_shape=116` against
+  the Normal CDF.
+- The width convention itself (gradient at `x=center` equals `1/width`)
+  holds to 8 decimal places by finite-difference check across
+  `t_shape` in [0.5, 500] and width in [1, 37.5].
+- Cross-checked the scale-factor derivation against the reference
+  implementation this is ported from (Baird & Daley 2023, `Clinalyse`,
+  github.com/Studenecivb/clinalyse): its own
+  `PreparationGosset._studentcdfgrad` computes the identical quantity in
+  closed form.
+
+Wired into `--tail t-cline` on `fit-geographic` and `compare-tails`
+(`hycline.selection.aicc.compare_models` needed no changes at all --
+`TailType.T_CLINE` is just another candidate to `fit_mle`). Classic MLE
+only from the start; whether Bayesian support was even feasible was an
+open question deliberately left open at this point rather than guessed
+at, addressed directly in 15.3 below.
+
+### 15.2 Real result on genuinely stepped synthetic data
+
+150 sites, `n_alleles=200`, true `t_shape=1.5` (thick-tailed, well into
+"stepped" territory): the T-cline recovered `t_shape=1.375 +/- 0.267`
+(true value inside the 95% CI) alongside accurate `center`/`width`/
+`pmin`/`pmax`, and AICc decisively preferred it over the plain logistic
+core (881.85 vs. 917.76, delta-AICc ~36) -- confirming both that the
+model fits correctly and that AICc-based model selection (as
+`compare-tails` already does for the tripartite models) correctly
+discriminates it when the signal is genuinely there.
+
+### 15.3 Checking the two natural follow-ups directly, before writing more code
+
+Two extensions were obvious candidates: the paper's fully general
+asymmetric `T(v, alpha)` family (needed to exactly reproduce the paper's
+own headline result on Fisher's 1937 wave-of-advance data, `T(8.365,
+1.367)`, an 18-fold MAD improvement over the best tripartite fit), and
+Bayesian/NUTS support (the case section 12.2's finding was originally
+about). Rather than implement either speculatively, both were checked for
+feasibility directly first.
+
+**Asymmetric, classic MLE: confirmed feasible, but not via the route
+originally assumed.** The obvious plan -- port Clinalyse's own closed-form
+peak-location formula for the noncentral case
+(`PreparationGosset.preparation_gosset_asy`, built from Hermite/confluent-
+hypergeometric functions) -- turned out to be unnecessary. `fit_mle` calls
+`scipy.optimize.minimize` without a `jac=` argument, so L-BFGS-B already
+uses finite-difference gradients on the whole objective; nothing inside
+the model needs to be analytically differentiable at all for classic MLE.
+A plain numerical peak-finder (`scipy.optimize.minimize_scalar` on
+`scipy.stats.nct.pdf`, bracketed around `t_skew` rather than a fixed wide
+window) was checked directly against 48 `(t_shape, t_skew)` combinations
+spanning this project's own existing `t_shape` bounds (0.05-500) and a
+representative asymmetry range: clean, no NaN/overflow, ~0.8ms/call. (A
+naive fixed-width bracket does hit a real `scipy.stats.nct.pdf` overflow
+deep in the extreme tail at `t_shape=500` -- traced to the bracket
+evaluating the PDF somewhere numerically meaningless, not to the
+distribution being unusable; the alpha-centered bracket avoids it
+entirely.)
+
+**Bayesian/NUTS, for either shape: confirmed NOT feasible with the
+JAX/NumPyro versions available (jax 0.10.2), for a more fundamental reason
+than expected, and it turned out to block the *already-shipped symmetric*
+case too, not just the asymmetric extension.** `jax.scipy.special.betainc`
+-- which both a hand-built JAX Student's-t CDF and NumPyro's own official
+`numpyro.distributions.StudentT.cdf()` are built on -- explicitly does not
+support gradients with respect to its own shape parameters. Confirmed
+directly, not just against a homemade implementation: calling `jax.grad`
+on NumPyro's *own* `StudentT(df=...).cdf()` with respect to `df` raises
+`ValueError: Betainc gradient with respect to a and b not supported`.
+Since `t_shape` enters exactly there, and NUTS needs the gradient of the
+log-density with respect to every parameter it samples (`t_shape`
+included, for any Bayesian T-cline fit at all), this is a real capability
+gap in the JAX/NumPyro ecosystem itself, not something more porting from
+Clinalyse would close. (The `hyp1f1`-based closed-form asymmetric
+peak-location formula has its own, separate numerical problem, found along
+the way and now moot given the above: `jax.scipy.special.hyp1f1` diverges
+from `scipy.special.hyp1f1` by a factor of ~150,000 at `t_shape=500`, well
+within this project's own existing bounds.) `--tail t-cline --method
+bayesian` gives an immediate, clear CLI error rather than attempting this
+and failing deep inside NumPyro; `t_cline_function`'s own module-level
+docstring and `HyCline_UserGuide_Geographic.md`'s tail-model section both
+now explain *why*, citing this finding directly, the same way section 12.2
+itself is cited rather than left as "doesn't work yet." A narrower
+alternative if Bayesian T-cline credible intervals are ever wanted badly
+enough: fix `t_shape`/`t_skew` at their classic-MLE-estimated values (not
+sampled parameters) and let NUTS explore only `center`/`width`/`pmin`/
+`pmax` -- sidesteps the broken gradient entirely, at the cost of not
+propagating shape-parameter uncertainty into the credible intervals. Not
+implemented.
+
+### 15.4 Implementing the asymmetric case: two real problems found and fixed during verification, not assumed away
+
+**A real bug: `scipy.stats.nct.cdf` itself returns NaN deep in its own
+extreme tail.** Found while stress-testing the implementation across a
+wide `(t_shape, t_skew, x)` grid, not in ordinary use: at `t_shape=100`,
+`t_skew=10`, `nct.cdf` returns NaN over a real, non-astronomical range of
+its argument (roughly `raw_t` in `[-92, -2.15]` in one traced case) --
+not just asymptotically at +/-infinity. Left unhandled, a single NaN
+would silently propagate into an entire fit's log-likelihood via
+`binom.logpmf`, turning one far-tail site into a completely
+uninformative optimizer target rather than the correctly-negligible one
+it should be. The fix (`t_cline_function`, asymmetric branch): substitute
+the correct limit (0 or 1, depending which side of the distribution's
+mode the point falls on) for any NaN. Justified directly, not just
+conveniently: the nearby, successfully-computed values in that same
+region are already ~1e-16 to 1e-29, far below this project's own
+likelihood floor (`_EPS=1e-10` in `hycline.likelihoods.binomial`), so the
+true value being replaced is already negligible by construction, not
+merely assumed to be.
+
+**A real optimizer-robustness problem, confirmed on a known-truth
+case.** A single L-BFGS-B start from the data-driven initial guess
+converged to a badly wrong local optimum: on one synthetic case (true
+`center=50, width=20, t_shape=3.0, t_skew=2.5`), the single-start fit
+recovered `width=36.67` (center/width off by more than 80%) with a
+negative log-likelihood 264 units worse than the true parameters' own.
+Starting the identical optimizer from the true parameters converged
+almost exactly, confirming the model and likelihood were correct and the
+problem was purely the optimizer landscape.
+
+The first fix tried -- randomized restarts drawn uniformly across the
+*entire* parameter range, the exact strategy already working for the
+tripartite tail model in `hycline.inference.mle_genotype_likelihood.
+fit_mle_geographic_gl` (section 12 covers a related but more tractable
+version of this same general problem) -- was checked directly and found
+badly insufficient here: 100 such restarts found the true optimum's
+basin of attraction **zero times out of 100** on the same representative
+case. The root cause: `t_shape`'s bounds span multiple orders of
+magnitude (0.05-500), and a linear-uniform draw over that range puts more
+than 99% of restarts above `t_shape=5`, so the search essentially never
+explores the genuinely "stepped" (small-`t_shape`) region a uniform-over-
+bounds strategy nominally covers.
+
+`hycline.inference.mle._fit_t_cline_multistart` uses two things checked
+directly to actually work, not assumed to:
+1. `t_shape` restarts drawn **log-uniformly**, not linearly, so orders of
+   magnitude get sampled roughly evenly.
+2. The asymmetric search is **anchored on a separately, robustly fit
+   symmetric optimum** -- `t_skew=0` is an exact point in the asymmetric
+   parameter space, not an approximation, so this is a legitimate
+   starting region -- explored with both a `t_skew` grid and further
+   log-uniform-shape/uniform-skew random restarts from the data-driven
+   guess for diversity.
+
+Checked across 6 representative `(t_shape, t_skew)` combinations spanning
+a wide range: 4 recovered known truth cleanly (fitted negative
+log-likelihood within ~3 units of the truth's own). The 2 that didn't
+were both *very* thick-tailed (`t_shape` below 1) *and* strongly
+asymmetric (`|t_skew| >= 5`) simultaneously -- a genuinely harder region
+of parameter space, not a case this function silently mishandles: even
+the symmetric anchor fit struggled there (e.g. one case's symmetric-only
+negative log-likelihood was 710.29 against a true asymmetric value of
+539.27), so the asymmetric search inherited an already-poor starting
+point in those specific cases.
+
+**A guarantee added by construction, not left to chance**: since
+`t_skew=0` is a valid point in the asymmetric family, the symmetric
+optimum (extended with `t_skew=0.0`) is always included as a literal
+restart candidate, so the asymmetric fit's log-likelihood can never be
+worse than the symmetric-only fit's on the same data -- verified by test
+across all 6 cases above, including the 2 that didn't fully converge to
+the true optimum. This closes off the confusing, mathematically-backwards
+symptom that motivated the whole investigation (an asymmetric AICc worse
+than the symmetric-only AICc for the same data, despite asymmetric being
+a strict superset model).
+
+### 15.5 A genuinely scientific finding, not an optimizer bug: `t_skew` can be weakly identified from real data
+
+While diagnosing the optimizer problem above, one specific case revealed
+something distinct from a convergence failure: a fit whose negative
+log-likelihood (448.30) was *better* than the true generating
+parameters' own (448.70) landed at `t_skew` between 13 and 20 across
+repeated runs (the exact value varying run to run due to the multi-start
+scheme's own randomization), against a true value of 2.5. This is not
+the optimizer failing to find a good solution -- 448.30 genuinely is a
+better fit to the observed (noisy) data than the truth itself achieves.
+It means different `t_skew` values, over the sampled geographic range,
+produce curves that are barely distinguishable in likelihood terms -- the
+asymmetry parameter itself is weakly identified by this dataset, a
+different phenomenon from (though it can compound with) the local-optima
+problem section 15.4 fixes.
+
+This mirrors the tripartite tail model's own already-documented weak
+identifiability of `delta`/`tau` (`hycline.inference.mle_genotype_
+likelihood.fit_mle_geographic_gl`'s own test suite explicitly declines to
+check those parameters against ground truth for exactly this reason).
+`fit_mle` now warns (`UserWarning`) when the fitted `t_skew` lands at its
+search bound -- the practical, checkable symptom of this weak
+identifiability, verified to fire correctly with a forced boundary result
+in `tests/test_mle.py::
+test_fit_mle_t_cline_asymmetric_warns_when_t_skew_hits_bound` rather than
+left to stochastic luck to exercise. `center`/`width`/`pmin`/`pmax` and
+the AICc comparison against the symmetric-only fit remain meaningful even
+when this fires; the `t_skew` point estimate itself should be treated
+with real caution.
+
+### 15.6 Known rough edges
+
+- **Asymmetric fits are meaningfully slower**: ~8s vs. ~1s for a
+  symmetric T-cline fit on a representative dataset in this
+  investigation, due to the extra restart phases `_fit_t_cline_
+  multistart` runs. A real cost of the robustness fix in 15.4, not
+  hidden -- documented in the CLI help text and user guide directly.
+- **The `n_restarts` defaults (8 for both the log-uniform shape restarts
+  and the `t_skew` grid) are reasonable but not rigorously tuned** --
+  checked to meaningfully improve reliability over both a single start
+  and the naive uniform-restart strategy, not swept for an optimal value.
+  Mirrors the identical caveat already noted for `fit_mle_geographic_
+  gl`'s own `n_restarts=8` default in section 12.5.
+- **Not wired into any other fitting path**: genotype-likelihood input
+  (`fit_mle_geographic_gl`), trait clines (`fit_mle_trait`), hierarchical
+  pooling (Components A/D), and `compare-tails`'s asymmetric variant are
+  all explicitly out of scope for this pass. `fit-geographic` with
+  genotype-likelihood input gives a clear, immediate CLI error for `--tail
+  t-cline` rather than a confusing crash deep inside a code path that
+  never learned about `TailType.T_CLINE` at all.
