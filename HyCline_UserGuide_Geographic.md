@@ -440,6 +440,79 @@ A real, named difference to be aware of: with `--hzar-tail`, the tail edge is
 the default tail model defines it -- `delta_l`/`tau_l`/`delta_r`/`tau_r` mean
 something different with this flag than without it.
 
+### `--tail t-cline`: a continuous alternative that avoids the tripartite model's real convergence difficulty
+
+`none`/`mirror`/`both` (with or without `--hzar-tail`) all build the tail
+model the same underlying way: a smooth sigmoid core joined to exponential
+tails at fixed points. That join is mathematically a genuine corner (Baird &
+Daley 2025) -- not a numerical inconvenience, a structural discontinuity --
+and it's the real, specific cause of the Bayesian convergence difficulty
+mentioned above (gradient-based samplers can struggle badly with a kinked
+log-density; more warmup usually doesn't fix it).
+
+`--tail t-cline` sidesteps the problem at its source instead of working
+around it: it's a *different* model family entirely, built from the
+Student's-t distribution, continuous everywhere with no corners at all.
+
+```bash
+hycline fit-geographic --input hardcounts.csv \
+    --tail t-cline --method classic --output-dir results/
+```
+
+```
+Cline fit (tail=t-cline): success=True, logL=-39.484, AICc=91.468, n=30, k=5
+      center =    51.2519  (SE 0.7094, ...)
+       width =    17.1589  (SE 3.1966, ...)
+        pmin =     0.0211  (SE 0.0114, ...)
+        pmax =     0.9921  (SE 0.0086, ...)
+     t_shape =     3.7396  (SE 3.7867, ...)
+```
+
+`t_shape` is the one new parameter -- it slides the cline's steepness
+continuously from very "stepped" (thick-tailed, `t_shape` near the lower
+bound of 0.05, close to a Cauchy distribution shape) through the ordinary
+logistic/sigmoid shape (`t_shape` around 6.67) to effectively Normal-shaped
+(`t_shape` above roughly 30). AICc against `--tail none` tells you whether
+the extra steepness parameter is actually earning its keep on your data --
+`compare-tails --candidates none,mirror,both,t-cline` includes it alongside
+the tripartite models directly.
+
+Add `--t-cline-asymmetric` to let the two sides of the cline steepen or
+decay at different rates (an extra `t_skew` parameter), the T-cline's
+analog of the tripartite model's separate left/right `delta`/`tau`:
+
+```bash
+hycline fit-geographic --input hardcounts.csv \
+    --tail t-cline --t-cline-asymmetric --method classic --output-dir results/
+```
+
+Two things worth knowing before relying on this:
+- **It's slower** -- an asymmetric fit runs several restart phases
+  internally to avoid a real risk of converging to a badly wrong local
+  optimum (confirmed directly during development, not a theoretical
+  worry), so expect roughly an order of magnitude longer than a symmetric
+  T-cline fit on the same data.
+- **`t_skew` itself can come back only loosely constrained by your data**,
+  the same way the tripartite model's own `delta`/`tau` tail parameters
+  are already known to be weakly identified. If the fitted `t_skew` sits
+  right at its search bound, HyCline prints a `UserWarning` explaining
+  this -- `center`/`width`/`pmin`/`pmax` and the AICc comparison against
+  the symmetric-only fit remain meaningful even then; treat the `t_skew`
+  point estimate itself with real caution.
+
+**Classic MLE only, for both the symmetric and asymmetric case** --
+`--method bayesian` gives an immediate, clear error rather than attempting
+this and failing deep inside NumPyro. This isn't a temporary gap expected to
+close soon: checked directly, `jax.scipy.special.betainc` (which both a
+hand-built JAX Student's-t CDF and NumPyro's own official `StudentT.cdf()`
+are built on) does not support gradients with respect to its own shape
+parameters -- confirmed against NumPyro's own code, not just a homemade
+implementation. Since NUTS needs the gradient of the log-density with
+respect to every parameter it samples, including `t_shape`, this is a real
+capability gap in the JAX/NumPyro ecosystem itself as currently available,
+not something more porting would close. See README.md's Tier 1 backlog for
+the full investigation.
+
 ---
 
 ## Fixed vs. estimated scaling (`pmin`/`pmax`)
