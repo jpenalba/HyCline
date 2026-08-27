@@ -1082,6 +1082,85 @@ pointer to "go read the outlier-detection literature":
     existing false-positive-focused caveats so the mandatory caveat text
     doesn't read as one-sided.
 
+**Speciation-candidate locus flagging for geographic clines, extending
+the item above to cover both cline types with one shared statistical
+approach.** The item above is scoped to genomic clines only (its core
+mechanism, delta-AIC/delta-WAIC against the fixed neutral null u=0,v=1,
+is genomic-cline-specific -- geographic clines have no equivalent
+theory-fixed null). Checked directly against the existing literature
+(Payseur 2010's review, cross-checked with Gompert & Buerkle 2011,
+Bailey 2024, Fitzpatrick 2013 already read for the item above) whether an
+equivalent, dedicated tool already exists for geographic clines the way
+`bgc`/`bgc-hm`/`HIest`/`gghybrid` exist for genomic clines: **it doesn't**.
+The classic geographic-cline toolchain (`Analyse`/ClineFit, Barton & Baird
+1995 -- the direct ancestor of the Barton cline `bgc` splices) offers only
+pairwise likelihood-ratio tests between two loci's cline parameters, a
+composite-profile test for whether *any* cross-locus heterogeneity exists
+at all (Phillips et al. 2004; Macholan et al. 2007), and Long's (1991)
+test for a single admixed population -- none of which produce a ranked,
+per-locus candidate list. HZAR itself has no cross-locus outlier flagging
+whatsoever. This is a real gap in the wider ecosystem, not just in
+HyCline, so there is no single paper or tool to port -- the design below
+adapts Fitzpatrick (2013)'s genomic-cline multivariate outlier method to
+geographic-cline parameters instead.
+
+- **Scope: hierarchical fits only, deliberately narrower than the
+  genomic-cline item above.** Requires `fit-hierarchical-geographic`/
+  `fit-hierarchical-genomic` (Components A/B) rather than also supporting
+  independent per-locus fits. This is a deliberate choice, not an
+  oversight: an independent per-locus point estimate's own noise can look
+  exactly like a real outlier (the "single unlucky low read count...
+  pushed an independently-fit cline's width to roughly double its true
+  value" case already documented under "Why hierarchical clines?" above),
+  and the hierarchical population-level hyperparameters
+  (`mu_center`/`sigma_center`, `mu_log_width`/`sigma_log_width` for
+  geographic; the analogous `u`/`v` hyperparameters for genomic) already
+  estimate the correct empirical null distribution while properly
+  accounting for that per-locus uncertainty -- exactly the problem
+  Component A/B's partial pooling exists to solve, so building the flag on
+  top of it rather than around it is a natural fit, not new machinery.
+- **Statistic: Fitzpatrick (2013)'s multivariate Mahalanobis-distance
+  outlier test, generalized by parameter pair rather than reimplemented
+  per cline type.** Assume each locus's hierarchical-model parameter pair
+  is jointly distributed as multivariate normal (per the model's own
+  population-level prior); compute each locus's squared Mahalanobis
+  distance from the population mean using the population-level covariance;
+  compare to a chi-squared distribution with degrees of freedom equal to
+  the number of parameters (2, in both cases below); flag via a
+  Bonferroni-adjusted critical value, with the per-locus D^2 and its
+  chi-squared quantile reported either way (not just a binary flag) so a
+  user can inspect a Q-Q plot the way Fitzpatrick recommends for
+  exploratory analysis. Parameter pairs: `(center, log(width))` for
+  geographic clines; `(u, log(v))` for genomic clines fit without
+  `--pool-center`, or `(logit(center), log(v))` -- Firneno et al.'s own
+  quantities -- for genomic clines fit with it.
+- **Where it lives in code**: `hycline.analysis.coupling` already computes
+  the cross-locus variance/covariance this statistic needs
+  (`geographic_cline_variance`/`genomic_cline_variance`) -- a new
+  `flag_outlier_loci()`-style function belongs alongside them, reusing
+  that computation rather than duplicating it in a separate module.
+- **CLI: two new dedicated commands, not an extension of
+  `coupling-geographic`/`coupling-genomic`.** `flag-candidates-geographic`/
+  `flag-candidates-genomic`, matching the existing `verb-domain` naming
+  convention (`fit-geographic`, `coupling-genomic`, etc.) and taking the
+  same per-locus summary CSV inputs those commands already consume.
+  Keeping this separate from `coupling-geographic`/`coupling-genomic`
+  keeps those commands focused on the aggregate theta/variance question
+  they already answer well, and gives the per-locus candidate list (a
+  materially different kind of output -- a ranked table, not a single
+  summary statistic) its own clearly-named entry point.
+- **Caveats: one shared block, not duplicated per cline type.** All of
+  Payseur (2010)'s confounds named above (incomplete lineage sorting,
+  `filter-aims`'s own marker-ascertainment bias, recombination-rate
+  heterogeneity, the false-negative risk) are geography-agnostic and apply
+  identically to both commands' output -- write the caveat text once and
+  share it, along with the already-planned mandatory
+  mechanism-cannot-be-identified caveat and the epistatic-incompatibility
+  blind-spot warning (both from the genomic-cline item above, and both
+  equally applicable here: Gavrilets (1997), read via Payseur's review,
+  shows epistatic incompatibilities distort geographic clines too, and
+  only when linkage is tight and selection is strong).
+
 Three real, small items surfaced while extending `--hzar-tail` to the
 Bayesian path (BACKEND_PHASE2.md section 14, BACKEND_TRAIT.md
 section 6) -- none are silent gaps (each fails clearly or is cosmetic,
