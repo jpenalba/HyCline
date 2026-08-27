@@ -12,7 +12,8 @@ import numpy as np
 from scipy.stats import binom
 
 from hycline.data.schema import AlleleFreqTransect
-from hycline.models.cline import ClineParams, TailType, cline_function, hzar_cline_function
+from hycline.models.cline import (ClineParams, TailType, cline_function,
+                                   hzar_cline_function, t_cline_function)
 
 # Numerical floor to keep log(0) from appearing when a fitted p(x) lands
 # exactly at 0 or 1 but the data disagrees.
@@ -24,9 +25,21 @@ def predicted_freq(transect: AlleleFreqTransect, params: ClineParams,
     """`hzar_tail=True` uses `hzar_cline_function` (HZAR's own, verified
     tail parameterization -- BACKEND_TRAIT.md sections 1-2) instead of
     `cline_function`'s own tail model. Default `False` preserves this
-    project's original, unchanged behavior."""
-    fn = hzar_cline_function if hzar_tail else cline_function
-    p = fn(transect.distance, params, tail_type)
+    project's original, unchanged behavior. `tail_type=TailType.T_CLINE`
+    dispatches to `t_cline_function` instead of either -- the T-cline is a
+    standalone continuous shape model, not a choice of tail
+    parameterization, so `hzar_tail` has no meaning for it and must be
+    False."""
+    if tail_type == TailType.T_CLINE:
+        if hzar_tail:
+            raise ValueError(
+                "hzar_tail is not meaningful with TailType.T_CLINE -- the T-cline "
+                "has no HZAR-parameterized variant (see t_cline_function's docstring)."
+            )
+        p = t_cline_function(transect.distance, params)
+    else:
+        fn = hzar_cline_function if hzar_tail else cline_function
+        p = fn(transect.distance, params, tail_type)
     return np.clip(p, _EPS, 1.0 - _EPS)
 
 
@@ -45,6 +58,8 @@ def negative_log_likelihood(param_vec: np.ndarray, transect: AlleleFreqTransect,
     if params.width <= 0:
         return np.inf
     if not (0.0 <= params.pmin <= 1.0 and 0.0 <= params.pmax <= 1.0):
+        return np.inf
+    if tail_type == TailType.T_CLINE and (params.t_shape is None or params.t_shape <= 0):
         return np.inf
     if hzar_tail:
         for name in ("delta_l", "delta_r", "tau_l", "tau_r"):

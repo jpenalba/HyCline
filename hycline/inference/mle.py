@@ -90,6 +90,13 @@ def _initial_guess(transect: AlleleFreqTransect, tail_type: TailType,
             params.delta_l, params.tau_l = width_guess / 2.0, 0.5
         if tail_type in (TailType.RIGHT, TailType.BOTH):
             params.delta_r, params.tau_r = width_guess / 2.0, 0.5
+    elif tail_type == TailType.T_CLINE:
+        # 6.67: Baird & Daley (2025) Table 1's own calibration point --
+        # T(6.67) matches the ordinary logistic/Bazykin sigmoid (this
+        # project's existing default core shape) to MAD 0.001, so it's
+        # the natural "no steepening yet" starting value, not an
+        # arbitrary guess.
+        params.t_shape = 6.67
     else:
         if tail_type in (TailType.LEFT, TailType.BOTH, TailType.MIRROR):
             params.delta_l, params.tau_l = 0.1, width_guess
@@ -125,6 +132,15 @@ def _bounds_for(transect: AlleleFreqTransect, tail_type: TailType,
             bounds += [(0.0, 1.0), (1e-3, d_span * 10 + 1e-3)]
         if tail_type == TailType.MIRROR:
             bounds += [(0.0, 1.0), (1e-3, d_span * 10 + 1e-3)]
+        if tail_type == TailType.T_CLINE:
+            # Lower bound 0.05: well past Cauchy (t_shape=1, already the
+            # thickest-tailed named case in Baird & Daley Table 1) into
+            # more extreme steepness, without reaching numerically
+            # unstable near-zero degrees of freedom. Upper bound 500:
+            # well past the paper's own T(116)=Normal calibration point,
+            # so the optimizer has room to converge to "no steepening
+            # detectable" without hitting the bound.
+            bounds += [(0.05, 500.0)]
     return bounds
 
 
@@ -160,8 +176,17 @@ def fit_mle(transect: AlleleFreqTransect, tail_type: TailType = TailType.NONE,
         1-2 for the full derivation and verification, and
         `hzar_cline_function`'s own docstring for the real, named
         difference in what `delta_l`/`tau_l`/`delta_r`/`tau_r` mean
-        between the two parameterizations.
+        between the two parameterizations. Not meaningful for
+        `tail_type=TailType.T_CLINE` (the T-cline has no HZAR-
+        parameterized variant) -- raises `ValueError` immediately rather
+        than failing deep inside the optimizer's first objective call.
     """
+    if tail_type == TailType.T_CLINE and hzar_tail:
+        raise ValueError(
+            "hzar_tail=True is not meaningful with tail_type=TailType.T_CLINE -- "
+            "the T-cline is a standalone continuous shape model with no HZAR-"
+            "parameterized variant. Pass hzar_tail=False (the default)."
+        )
     x0 = _initial_guess(transect, tail_type, hzar_tail=hzar_tail).as_array(tail_type)
     bounds = _bounds_for(transect, tail_type, hzar_tail=hzar_tail)
 

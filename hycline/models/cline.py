@@ -27,6 +27,18 @@ variance model made checking against the real source unavoidable, and
 ported here once verified). Use `hzar_cline_function` when exact HZAR
 parity matters; `cline_function` remains the default for `fit`/
 `fit-multi` and everywhere else in this project that doesn't opt in.
+
+NOTE ON THE T-CLINE MODEL
+--------------------------
+`t_cline_function` (below) is a third, structurally different cline
+model: Baird & Daley (2025)'s Student's-t-distribution-based family,
+continuous everywhere (no corners), addressing a real, documented
+convergence difficulty the tripartite tail models above have under
+gradient-based (NUTS) Bayesian fitting -- see BACKEND_PHASE2.md
+section 12. Not a tail bolted onto the logistic core the way
+`TailType.LEFT`/`RIGHT`/`BOTH`/`MIRROR` are; see `t_cline_function`'s
+own docstring for the full model and its current (symmetric-only)
+scope.
 """
 
 from __future__ import annotations
@@ -36,6 +48,7 @@ from enum import Enum
 from typing import Optional
 
 import numpy as np
+from scipy import stats as _stats
 
 
 class TailType(str, Enum):
@@ -44,6 +57,12 @@ class TailType(str, Enum):
     LEFT = "left"         # exponential tail on the left only
     RIGHT = "right"       # exponential tail on the right only
     BOTH = "both"         # independent exponential tails on both sides
+    T_CLINE = "t-cline"   # Student's-t-based continuous stepped-cline alternative
+                           # (Baird & Daley 2025) -- see `t_cline_function` below.
+                           # NOT a tail bolted onto the logistic core the way the
+                           # other four members are: a standalone continuous shape
+                           # model. `cline_function`/`hzar_cline_function` both
+                           # reject it explicitly rather than mishandle it.
 
 
 @dataclass
@@ -58,6 +77,10 @@ class ClineParams:
     pmax : frequency/trait value far to the right of the cline
     delta_l, tau_l : left-tail height fraction and decay length (TailType.LEFT/BOTH/MIRROR)
     delta_r, tau_r : right-tail height fraction and decay length (TailType.RIGHT/BOTH)
+    t_shape : T-cline shape/steepness parameter (TailType.T_CLINE only -- the
+        Student's-t distribution's degrees of freedom, matching Baird & Daley
+        (2025)'s own `v`). Must be > 0. Symmetric-only in this implementation
+        (no asymmetry parameter yet -- see `t_cline_function`'s docstring).
     """
 
     center: float
@@ -68,6 +91,7 @@ class ClineParams:
     tau_l: Optional[float] = None
     delta_r: Optional[float] = None
     tau_r: Optional[float] = None
+    t_shape: Optional[float] = None
 
     def as_array(self, tail_type: TailType) -> np.ndarray:
         """Flatten to a parameter vector for the optimizer, in a fixed
@@ -79,6 +103,8 @@ class ClineParams:
             vec += [self.delta_r, self.tau_r]
         if tail_type == TailType.MIRROR:
             vec += [self.delta_l, self.tau_l]
+        if tail_type == TailType.T_CLINE:
+            vec += [self.t_shape]
         return np.array(vec, dtype=float)
 
     @staticmethod
@@ -96,6 +122,8 @@ class ClineParams:
         elif tail_type == TailType.MIRROR:
             kwargs["delta_l"], kwargs["tau_l"] = rest[0], rest[1]
             kwargs["delta_r"], kwargs["tau_r"] = rest[0], rest[1]
+        elif tail_type == TailType.T_CLINE:
+            kwargs["t_shape"] = rest[0]
         return ClineParams(**kwargs)
 
     def n_params(self, tail_type: TailType) -> int:
@@ -124,6 +152,14 @@ def cline_function(x: np.ndarray, params: ClineParams,
     -------
     np.ndarray of predicted frequencies/trait values at each x, same shape as x.
     """
+    if tail_type == TailType.T_CLINE:
+        raise ValueError(
+            "cline_function does not handle TailType.T_CLINE -- the T-cline is a "
+            "standalone continuous shape model, not a tail added to the logistic "
+            "core the way NONE/LEFT/RIGHT/BOTH/MIRROR are. Use t_cline_function "
+            "instead."
+        )
+
     x = np.asarray(x, dtype=float)
     core = _sigmoid_core(x, params.center, params.width, params.pmin, params.pmax)
 
@@ -195,6 +231,12 @@ def hzar_cline_function(x: np.ndarray, params: ClineParams,
     reproduce the same, unambiguous sigmoid core -- see
     `_sigmoid_core`).
     """
+    if tail_type == TailType.T_CLINE:
+        raise ValueError(
+            "hzar_cline_function does not handle TailType.T_CLINE -- the T-cline "
+            "has no HZAR-parameterized variant. Use t_cline_function instead."
+        )
+
     x = np.asarray(x, dtype=float)
     core = _sigmoid_core(x, params.center, params.width, params.pmin, params.pmax)
 
@@ -238,6 +280,100 @@ def hzar_cline_function(x: np.ndarray, params: ClineParams,
     return out
 
 
+def _t_cline_scale(t_shape: float) -> float:
+    """Peak density of the standard (zero-centered, unit-scale) Student's-t
+    PDF with `t_shape` degrees of freedom -- the factor that converts a
+    width-normalized x into the standard Student's-t CDF's own native
+    argument, chosen so the resulting cline's maximum gradient is exactly
+    1/width (this project's existing HZAR/Barton width convention:
+    "width" = inverse of the cline's maximum gradient).
+
+    Derivation: for `p(x) = F_t((x-center)/(width*S); t_shape)` (F_t the
+    standard, unscaled Student's-t CDF), the chain rule gives
+    `dp/dx|x=center = f_t(0; t_shape) / (width*S)`. Setting `S = f_t(0;
+    t_shape)` makes this exactly `1/width`, matching the tripartite core's
+    own convention (`_sigmoid_core`'s factor of 4, chosen the same way for
+    the logistic case) -- verified directly by finite-difference check in
+    `tests/test_cline.py`, not just asserted.
+
+    Cross-checked against the reference Python implementation this model
+    is ported from (Baird & Daley 2023, `Clinalyse`,
+    github.com/Studenecivb/clinalyse, `equations.py`): its own
+    `PreparationGosset._studentcdfgrad(x) = gamma((x+1)/2) /
+    (sqrt(pi*x)*gamma(x/2))` is exactly `f_t(0; x)` in closed form --
+    `scipy.stats.t.pdf(0, df=t_shape)` computes the same quantity via
+    scipy's own numerically robust Student's-t implementation instead of
+    a hand-evaluated Gamma-function ratio (safer for large `t_shape`,
+    where `gamma()` alone can overflow before the ratio is taken)."""
+    return float(_stats.t.pdf(0.0, df=t_shape))
+
+
+def t_cline_function(x: np.ndarray, params: ClineParams) -> np.ndarray:
+    """T-cline: Baird & Daley (2025)'s Student's-t-distribution-based
+    alternative to the tripartite tail model above (`cline_function`/
+    `hzar_cline_function` with a tail type other than NONE) -- continuous
+    everywhere, with no corners at all, addressing the real, documented
+    NUTS convergence difficulty those two functions' tail models have
+    (see this module's own top-level docstring and BACKEND_PHASE2.md
+    section 12: "the tail model is continuous... but not smooth... a kink
+    is a real obstacle" for gradient-based samplers). Baird & Daley give
+    the underlying structural reason: the tripartite model's sigmoid-core-
+    meets-exponential-tail joins are genuine mathematical discontinuities
+    ("corners"), not a numerical inconvenience specific to any particular
+    optimizer or sampler.
+
+    `params.t_shape` (matching the paper's own `v`, the Student's-t
+    distribution's degrees of freedom) slides the cline continuously
+    through a family of shapes, calibrated directly against the paper's
+    own Table 1:
+    - `t_shape=1`: exactly the Cauchy distribution CDF -- the most
+      "stepped" (thick-tailed) symmetric member of this family.
+    - `t_shape=2`: Gavrilets (1997)'s single-locus viability-selection
+      stepped-cline extreme.
+    - `t_shape=6.67`: matches the ordinary logistic/Bazykin sigmoid cline
+      (`cline_function`'s own default core shape) to within a maximum
+      absolute difference of 0.001 (Table 1's own calibration) -- the
+      natural "no steepening" reference point for this family.
+    - `t_shape -> infinity`: the Normal distribution CDF, effectively
+      indistinguishable from `t_shape=30` onward (Table 1: `t_shape=116`
+      matches Normal to MAD 0.001).
+
+    A REAL, NAMED LIMITATION, stated plainly rather than left implicit:
+    this implements only the SYMMETRIC T-cline (`T(v)` in the paper's own
+    notation) -- the paper's fully general asymmetric `T(v, alpha)`
+    family (needed to reproduce its own headline validation result on
+    Fisher's 1937 wave-of-advance data, `T(8.365, 1.367)`, an 18-fold MAD
+    improvement over the best tripartite fit) is NOT yet implemented here.
+    A symmetric T-cline already has no corners and already offers real
+    flexibility the plain logistic core doesn't (continuously variable
+    steepness), but a user who specifically needs *asymmetric* barrier
+    strength (different behavior on each side) should still reach for
+    `hzar_cline_function`'s tail types, with their own documented
+    convergence caveat, until asymmetric T-cline support lands -- see
+    README.md's Tier 1 backlog.
+
+    Ported from, and cross-checked directly against, the reference Python
+    implementation for the symmetric case (Baird & Daley 2023,
+    `Clinalyse`, github.com/Studenecivb/clinalyse, `equations.py`'s
+    `gossetbar_cline`, which evaluates `scipy.stats.t.cdf(x, shape,
+    scale=prep[shape])` with `prep[shape]` precomputed as exactly
+    `_t_cline_scale` above computes it) -- see `references/Molecular
+    Ecology - 2025 - Baird - The Shapes of Clines and Wavefronts.pdf`,
+    Table 1's "T-cline T(v)" row, for the full derivation.
+    """
+    if params.t_shape is None or params.t_shape <= 0:
+        raise ValueError("t_cline_function requires params.t_shape > 0, got "
+                          f"{params.t_shape!r}")
+    if params.width <= 0:
+        raise ValueError(f"t_cline_function requires params.width > 0, got {params.width!r}")
+
+    x = np.asarray(x, dtype=float)
+    raw = (x - params.center) / params.width
+    scale = _t_cline_scale(params.t_shape)
+    cdf = _stats.t.cdf(raw, df=params.t_shape, scale=scale)
+    return params.pmin + (params.pmax - params.pmin) * cdf
+
+
 # Human-readable parameter names, in the same order as ClineParams.as_array(),
 # used for reporting fitted results.
 def param_names(tail_type: TailType) -> list[str]:
@@ -248,4 +384,6 @@ def param_names(tail_type: TailType) -> list[str]:
         names += ["delta_r", "tau_r"]
     if tail_type == TailType.MIRROR:
         names += ["delta_m", "tau_m"]
+    if tail_type == TailType.T_CLINE:
+        names += ["t_shape"]
     return names
