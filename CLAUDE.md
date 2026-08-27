@@ -2,7 +2,7 @@
 
 A Python successor to the R package HZAR (Derryberry et al. 2014) for hybrid
 zone cline analysis, extended to genomic clines, quantitative trait clines,
-and coupling/concordance analysis. 410 tests, all passing as of this file's
+and coupling/concordance analysis. 431 tests, all passing as of this file's
 last update. CLI entry point: `hycline` (or `python run_hycline.py`).
 
 **Before doing anything else, read `README.md` in full** -- particularly the
@@ -38,12 +38,18 @@ Tier 1 section for full detail:
    incompatibilities specifically (0.81-0.95 false discovery rate in
    Gompert & Buerkle 2011's own simulations).
 
-Also worth reading before building on top of them further: Fitzpatrick
-(2013), the original logit-logistic genomic cline paper HyCline's own model
-is built from, and Firneno et al. 2023, which already shapes the
-`--pool-center` reparameterization and `coupling-genomic`'s theta
-calibration -- both are cited repeatedly by papers already read for this
-project, but neither has been read directly yet. Worth closing that gap.
+**Correction: both have now been read directly** (commit `b83afc0`), closing
+the gap this paragraph used to flag -- Fitzpatrick (2013), the original
+logit-logistic genomic cline paper HyCline's own model is built from, and
+Firneno et al. 2023, which already shapes the `--pool-center`
+reparameterization and `coupling-genomic`'s theta calibration. Findings are
+folded into `references/README.md`, README.md's Tier 1 candidate-flagging
+spec (Fitzpatrick's own precision/sensitivity numbers and outlier-detection
+method), and `hycline/analysis/coupling.py`'s docstring plus
+`HyCline_UserGuide_Coupling.md` (Firneno's migration-rate-sensitivity
+caveat on the theta calibration). Every specific claim in
+`references/README.md` attributed to these two papers was checked directly
+against the PDF text (not just trusted) before this correction was written.
 
 ## References folder
 

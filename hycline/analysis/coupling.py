@@ -348,6 +348,32 @@ def _fit_theta_calibration_from_firneno2023_table1() -> np.ndarray:
       Firneno et al. themselves caution that their theta estimates "should
       be taken as estimates given the specific simulation conditions and
       linear model used."
+    - **This isn't a hedge -- the paper's own robustness check quantifies
+      it, and the number is large.** Firneno et al. re-ran their
+      simulations at a lower migration rate (m=0.05, vs. m=0.1/0.2 for
+      the calibration this module implements) and found the sigma_c/
+      sigma_v-to-theta relationship measurably weaker there on its own
+      (linear r^2 dropped from 0.523 to 0.415), and, more strikingly,
+      that a model *fit* at m=0.1/0.2 essentially failed to predict theta
+      for the m=0.05 simulations at all when cross-applied (random-forest
+      out-of-bag variance explained ~0%; the linear-model cross-
+      application did little better, explaining only 22.5% of the
+      variance in the true m=0.05 theta values) -- despite the same
+      m=0.1-vs-m=0.2 cross-application working well in both directions.
+      In practice: this calibration should be treated as most reliable
+      for hybrid zones with migration/dispersal on a scale broadly
+      similar to the reference data set's own simulated hybrid zones
+      (see `calibration_data_range()`), not assumed to generalize across
+      migration regimes generally -- a genomic cline shaped by unusually
+      low gene flow between demes is exactly the case this robustness
+      check found the calibration degrades on. Genetic map size has a
+      smaller, still-quantified version of the same sensitivity: across
+      0.5/1/2-Morgan simulated chromosomes, sigma_c/sigma_v alone
+      explained only 37% of theta's variance (vs. 52.3% in the main
+      calibration), rising to 53.4% only once an explicit map-size
+      interaction term was added -- a term this module's calibration does
+      not include, since it is fit purely from Table 1's published
+      (sigma_c, sigma_v, theta) triples with no map-size column.
     """
     global _theta_calibration_coefs
     if _theta_calibration_coefs is None:

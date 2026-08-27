@@ -188,6 +188,35 @@ in the JSON output) rather than returning a believable-looking but
 meaningless number silently. When this happens, **treat the raw
 `sigma_c`/`sigma_v` values as the reliable output**, not theta itself.
 
+**A second, separate caveat on theta, beyond the calibration-range one
+above: the migration rate assumed by Firneno et al.'s own simulations
+matters, and they quantified how much.** The calibration this module
+implements comes from simulations at migration rate m=0.1/0.2 between
+neighboring demes. Firneno et al. also ran a robustness check at a lower
+migration rate (m=0.05) and found the relationship between `sigma_c`/
+`sigma_v` and theta measurably weaker there on its own (their linear
+model's r-squared dropped from 0.523 to 0.415), and, more strikingly,
+that a model *fit* at m=0.1/0.2 essentially failed when cross-applied to
+predict theta for the m=0.05 simulations (their random-forest model's
+out-of-bag variance explained dropped to roughly 0%; even their linear
+model, cross-applied the same way, explained only 22.5% of the true
+variance) -- despite an m=0.1-vs-m=0.2 cross-application working well in
+both directions. In practice, this means `coupling-genomic`'s theta
+estimate is best trusted for hybrid zones with dispersal/migration on a
+scale broadly similar to the reference data set (real published hybrid
+zones spanning many taxa, not a single migration regime -- see the table
+in `hycline/analysis/coupling.py::FIRNENO_2023_TABLE1`), and should be
+treated with more caution than the calibration-range check alone implies
+for a hybrid zone you have independent reason to think has unusually
+restricted gene flow between demes -- exactly the regime this robustness
+check found the calibration degrades on, even when `sigma_c`/`sigma_v`
+themselves still fall inside the calibration's bounding box. Genetic map
+size has a smaller version of the same sensitivity (37% vs. the main
+calibration's 52.3% variance explained across different simulated
+chromosome sizes) -- see `hycline/analysis/coupling.py`'s
+`_fit_theta_calibration_from_firneno2023_table1` docstring for the full
+numbers on both.
+
 ### Flags
 
 | Flag | Meaning |

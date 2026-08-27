@@ -56,16 +56,16 @@ rather than a secondhand summary of it.
   reparameterization) and `coupling-genomic`'s theta calibration
   (`hycline/analysis/coupling.py::FIRNENO_2023_TABLE1`, confirmed against
   the paper's own Table 1 digit-for-digit during this read). One caveat
-  from the main text not yet reflected in HyCline's own coupling-module
-  docs: the paper's own robustness checks found the sigma-to-theta
-  relationship is sensitive to the migration rate and genetic map size
-  assumed in the calibration simulations -- a model fit at one migration
-  rate had ~0% out-of-bag explanatory power when applied to data simulated
-  at a lower migration rate, and the linear model's R^2 dropped from 0.523
-  to 0.415 under a lower-gene-flow regime. Worth folding into
-  `coupling-geographic`/`coupling-genomic`'s own caveat documentation
-  (already planned in `README.md` Tier 1) as a concrete instance of "shape
-  mismatch" beyond the Baird & Daley angle already covered there.
+  from the main text, since folded into HyCline's own coupling-module
+  docs (`hycline/analysis/coupling.py`'s theta-calibration docstring and
+  `HyCline_UserGuide_Coupling.md`'s `coupling-genomic` section): the
+  paper's own robustness checks found the sigma-to-theta relationship is
+  sensitive to the migration rate and genetic map size assumed in the
+  calibration simulations -- a model fit at one migration rate had ~0%
+  out-of-bag explanatory power when applied to data simulated at a lower
+  migration rate, and the linear model's R^2 dropped from 0.523 to 0.415
+  under a lower-gene-flow regime; genetic map size showed a smaller
+  version of the same sensitivity (37% vs. 52.3% variance explained).
 
 ## Read directly, newly added, not yet reflected in this project's design docs
 
