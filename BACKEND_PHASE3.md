@@ -440,3 +440,44 @@ it) works end to end, not just each piece separately.
   matching or case-insensitivity, so a naming mismatch (e.g. `Locus1` vs
   `locus1`) produces the same "no row for locus" error as a genuinely
   missing locus, rather than a more specific "did you mean" suggestion.
+
+### 9.4 A real, critical bug found and fixed: cross-locus orientation
+
+`estimate_hybrid_index`'s own docstring (section 5) requires that dosage
+be oriented consistently -- "population 1" must mean the same thing (the
+higher-frequency-in-population-1 allele) at every locus before averaging
+across loci. The CLI never enforced this. REF/ALT assignment in a VCF is
+arbitrary with respect to which parental population carries which allele
+(an ordinary consequence of variant calling, not a data-quality problem),
+so a real multi-locus input will routinely have some loci where
+population 1 carries the higher-frequency allele and others where
+population 0 does. Averaging un-reoriented dosage across such loci pulls
+every individual's estimate toward 0.5 regardless of true ancestry -- the
+more loci with mixed orientation, the worse the distortion.
+
+This went undetected by the very validation described in section 9.2
+above, because that synthetic dataset (and every other hybrid-index test
+in the suite at the time) built every locus with the *same* orientation
+by construction -- exactly the case this bug doesn't affect. It surfaced
+during a code-review pass that asked, directly, whether the CLI actually
+satisfied `estimate_hybrid_index`'s own documented precondition; checking
+found it did not.
+
+**Fix**: `hycline.data.hybrid_index.polarize_genotypes` compares the two
+parental frequencies per locus and flips dosage (`n - dosage`, frequency
+`1 - freq`) for any locus where population 0's frequency exceeds
+population 1's, so every locus feeds into the average in the same
+direction. `cmd_estimate_hybrid_index` calls it, for both Mode 1 and
+Mode 2, immediately before the `estimate_hybrid_index` call, and prints
+how many loci were re-oriented (see `HyCline_UserGuide_Genomic.md`'s
+Step 2 for the exact message).
+
+**Verified with a deliberately mixed-orientation VCF**, not just the
+already-passing same-orientation cases:
+`tests/test_cli.py::test_cli_estimate_hybrid_index_polarizes_mixed_orientation_loci`
+builds a 2-locus VCF where one locus has population 1 homozygous for ALT
+(normal orientation) and the other has population 1 homozygous for REF
+(reversed) -- exactly what arbitrary REF/ALT assignment produces in
+practice -- and confirms parental reference individuals, which have known
+pure ancestry by construction, land exactly at the extremes (0.0/1.0)
+after the fix, where they landed at 0.5 before it.

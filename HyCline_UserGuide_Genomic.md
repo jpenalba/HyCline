@@ -118,6 +118,21 @@ Parental reference individuals are included in the output alongside your
 test individuals, specifically so you can sanity-check them landing near
 0 or 1.
 
+**Per-locus allele dosage is automatically re-oriented to a consistent
+direction before averaging.** REF/ALT assignment in a VCF is arbitrary
+with respect to which parental population carries which allele -- a
+normal consequence of variant calling, not a data problem -- so some loci
+will have population 1 carrying the higher-frequency allele and others
+will have population 0 carrying it. `estimate-hybrid-index` detects this
+per locus (comparing the two parental frequencies) and flips dosage for
+any locus where population 0's frequency exceeds population 1's, so every
+locus contributes in the same direction. When this happens, you'll see a
+line like `Re-orienting 3/7 loci where population 0 (not population 1)
+carries the higher-frequency allele` before the final estimate is
+written; seeing 0 re-oriented loci is equally normal (it just means every
+locus in this particular file already happened to be oriented the same
+way).
+
 **VCF input uses each individual's hard GT dosage directly. Beagle input
 uses each individual's expected dosage under their own genotype
 likelihoods** (posterior mean, not an argmax point estimate) -- there's
