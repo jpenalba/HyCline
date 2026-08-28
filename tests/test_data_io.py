@@ -822,6 +822,36 @@ def test_read_trait_csv_missing_mean_col_actionable_error(tmp_path):
         read_trait_csv(str(csv_path))
 
 
+def test_read_trait_csv_blank_cell_raises_instead_of_silent_nan(tmp_path):
+    # Regression test: read_trait_csv used to parse trait_mean/n/sd via
+    # raw pandas .to_numpy(dtype=float) instead of the shared
+    # _numeric_col() helper, so a blank cell silently became NaN with no
+    # error at all -- and TraitTransect's own n<=0/sd<0 validation checks
+    # both evaluate False for NaN, so the bad value passed through
+    # unnoticed and would have silently poisoned fit_mle_trait's
+    # likelihood.
+    from hycline.data.io import read_trait_csv, TransectCSVError
+
+    csv_path = tmp_path / "trait.csv"
+    csv_path.write_text("distance,trait_mean,n\n0,1.5,10\n10,,8\n20,2.0,12\n")
+    with pytest.raises(TransectCSVError, match="missing"):
+        read_trait_csv(str(csv_path))
+
+
+def test_read_trait_csv_non_numeric_value_raises_transect_csv_error(tmp_path):
+    # Regression test: a non-numeric value in trait_mean/n/sd used to
+    # raise a bare pandas ValueError ("could not convert string to
+    # float") instead of TransectCSVError -- which every CLI call site
+    # that loads a trait transect catches specifically, so the raw
+    # ValueError propagated as an unhandled traceback to CLI users.
+    from hycline.data.io import read_trait_csv, TransectCSVError
+
+    csv_path = tmp_path / "trait.csv"
+    csv_path.write_text("distance,trait_mean,n\n0,1.5,10\n10,oops,8\n20,2.0,12\n")
+    with pytest.raises(TransectCSVError, match="non-numeric"):
+        read_trait_csv(str(csv_path))
+
+
 def test_read_multi_trait_wide_csv_auto_detects_traits(tmp_path):
     from hycline.data.io import read_multi_trait_wide_csv
 
@@ -852,6 +882,19 @@ def test_read_multi_trait_wide_csv_drops_missing_rows_independently_per_trait(tm
     traits = read_multi_trait_wide_csv(str(csv_path))
     assert len(traits["mass"]) == 2  # row 1 dropped (missing mass.mean)
     assert len(traits["beak"]) == 3  # unaffected
+
+
+def test_read_multi_trait_wide_csv_non_numeric_value_raises_transect_csv_error(tmp_path):
+    # Regression test: a non-numeric value in a trait's .mean/.n/.sd
+    # column used to raise a bare pandas ValueError instead of
+    # TransectCSVError (missing values were already handled correctly
+    # here via the isnan mask).
+    from hycline.data.io import read_multi_trait_wide_csv, TransectCSVError
+
+    csv_path = tmp_path / "multi.csv"
+    csv_path.write_text("distance,mass.mean,mass.n\n0,1.5,10\n10,oops,8\n")
+    with pytest.raises(TransectCSVError, match="non-numeric"):
+        read_multi_trait_wide_csv(str(csv_path))
 
 
 def test_read_multi_trait_wide_csv_no_traits_detected_actionable_error(tmp_path):
@@ -955,6 +998,19 @@ def test_read_raw_trait_csv_missing_trait_col_actionable_error(tmp_path):
     csv_path = tmp_path / "raw.csv"
     csv_path.write_text("site,distance\nA,0\n")
     with pytest.raises(TransectCSVError, match="--trait-col"):
+        read_raw_trait_csv(str(csv_path))
+
+
+def test_read_raw_trait_csv_non_numeric_value_raises_transect_csv_error(tmp_path):
+    # Regression test: trait_col used to be parsed via raw
+    # .to_numpy(dtype=float) instead of _numeric_col, so a non-numeric
+    # per-individual trait value raised a bare ValueError instead of the
+    # module's standard actionable TransectCSVError.
+    from hycline.data.io import read_raw_trait_csv, TransectCSVError
+
+    csv_path = tmp_path / "raw.csv"
+    csv_path.write_text("distance,trait_value\n0,1.5\n0,oops\n10,2.0\n")
+    with pytest.raises(TransectCSVError, match="non-numeric"):
         read_raw_trait_csv(str(csv_path))
 
 

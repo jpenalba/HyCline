@@ -38,7 +38,8 @@ _EPS = 1e-6
 
 
 def _derive_pmin_pmax(distance: np.ndarray, n_alleles: np.ndarray,
-                       n_focal: np.ndarray, n_edge_sites: int = 3) -> tuple:
+                       n_focal: np.ndarray, n_edge_sites: int = 3,
+                       locus_names: Optional[list] = None) -> tuple:
     """Derive per-locus pmin/pmax from the observed frequencies near the
     transect's geographic extremes.
 
@@ -68,8 +69,27 @@ def _derive_pmin_pmax(distance: np.ndarray, n_alleles: np.ndarray,
     n_focal_sorted = n_focal[:, order]
     k = min(n_edge_sites, n_alleles_sorted.shape[1])
 
-    pmin = n_focal_sorted[:, :k].sum(axis=1) / n_alleles_sorted[:, :k].sum(axis=1)
-    pmax = n_focal_sorted[:, -k:].sum(axis=1) / n_alleles_sorted[:, -k:].sum(axis=1)
+    left_n = n_alleles_sorted[:, :k].sum(axis=1)
+    right_n = n_alleles_sorted[:, -k:].sum(axis=1)
+    bad = (left_n <= 0) | (right_n <= 0)
+    if np.any(bad):
+        bad_idx = np.flatnonzero(bad)
+        names = (locus_names if locus_names is not None
+                 else [f"locus_{i}" for i in range(n_alleles.shape[0])])
+        bad_names = [names[i] for i in bad_idx]
+        raise ValueError(
+            f"Cannot derive pmin/pmax for locus(-i) {bad_names}: zero sampled "
+            f"alleles across the nearest {k} edge site(s) on at least one side "
+            f"of the transect. This locus is too sparse for fixed-scaling "
+            f"pmin/pmax derivation (see _derive_pmin_pmax's docstring) -- "
+            f"increase n_edge_sites, pass pmin/pmax explicitly for this locus, "
+            f"or drop it from the batch. Aborting before this reaches NUTS, "
+            f"where a NaN probability would otherwise crash the entire batched "
+            f"fit for every locus, not just this one."
+        )
+
+    pmin = n_focal_sorted[:, :k].sum(axis=1) / left_n
+    pmax = n_focal_sorted[:, -k:].sum(axis=1) / right_n
     return pmin, pmax
 
 
@@ -205,7 +225,8 @@ def fit_hierarchical_batch(distance: np.ndarray, n_alleles: np.ndarray,
 
     if pmin is None or pmax is None:
         derived_pmin, derived_pmax = _derive_pmin_pmax(distance, n_alleles, n_focal,
-                                                         n_edge_sites=n_edge_sites)
+                                                         n_edge_sites=n_edge_sites,
+                                                         locus_names=locus_names)
         pmin = derived_pmin if pmin is None else pmin
         pmax = derived_pmax if pmax is None else pmax
 

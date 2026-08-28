@@ -73,3 +73,12 @@ def test_check_site_coordinate_consistency_raises_when_inconsistent():
     from hycline.data.geo import check_site_coordinate_consistency
     with pytest.raises(ValueError, match="inconsistent coordinates"):
         check_site_coordinate_consistency(["S1", "S1"], [10.0, 10.1], [5.0, 5.0])
+
+
+def test_check_site_coordinate_consistency_treats_shared_nan_as_consistent():
+    # Regression test: this check used tuple `!=` comparison, which
+    # treats NaN != NaN as True -- so two individuals at the same site
+    # who both genuinely have missing (NaN) lat/lon used to raise a
+    # spurious "inconsistent coordinates" error.
+    from hycline.data.geo import check_site_coordinate_consistency
+    check_site_coordinate_consistency(["A", "A"], [np.nan, np.nan], [np.nan, np.nan])

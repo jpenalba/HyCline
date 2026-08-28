@@ -486,20 +486,45 @@ a perfectly-converging fit and a badly-failing one is whether tail
 parameters are present at all. This is about as close to a controlled
 experiment as this kind of investigation gets.
 
-**The likely mechanism**: the tail model is mathematically continuous at
-the join between the sigmoid core and the exponential tail (the tail
-value equals the core value exactly at `x = center +/- width/2`, by
-construction), but not smooth there -- the *derivative* generally differs
-on either side of the join. Gradient-based samplers like NUTS rely on a
-leapfrog integrator that assumes locally smooth log-density; a kink
-introduces a genuine discontinuity in the gradient the integrator has to
-navigate. Critically, the join's *location* (`center +/- width/2`) is
-itself a function of sampled parameters, so the kink moves around in
-data-space as the sampler explores -- meaning there's no fixed "bad
-region" to avoid, the pathology follows the sampler's own current
-parameter values. This is a known, general class of difficulty for
-Hamiltonian Monte Carlo applied to piecewise-smooth models; it is not
-specific to this codebase's implementation.
+**The likely mechanism, corrected** (a later code-review pass re-checked
+this claim directly against the actual formula rather than trusting the
+description below, and found it wrong in a specific, material way --
+stated plainly here rather than quietly revised, per this project's own
+"wrong first diagnosis" principle): the original text below claimed the
+join is "mathematically continuous... by construction," with only the
+*derivative* differing across it. Evaluated directly on both sides of
+the seam (`x = center +/- width/2`), that is false for the tail model
+`fit_mcmc`/`fit_mcmc_batch` actually used at the time this investigation
+was written (the default, non-HZAR tail formula -- `hzar_tail` did not
+yet exist as an option on the Bayesian path; it was added later, in
+section 14): the VALUE itself jumps at the seam for a generic fitted
+`delta_l`/`delta_r` (a live check found a jump from 0.500 to 0.195
+crossing the left seam for one representative parameter set -- not a
+rounding-scale difference). The reason: `delta_l` is a free, independently
+-fitted "tail height fraction" parameter with no constraint tying it to
+the sigmoid core's own value at the seam, so continuity only happens to
+hold for the one specific `delta_l` value that would make it hold, not
+in general. `hzar_cline_function` (the separate, HZAR-parity tail
+formula, selectable via `hzar_tail=True`) is the one that is genuinely
+continuous by construction -- it computes its `alpha` scaling constant
+specifically to force this (see `hycline.models.cline._hzar_tail_alpha`'s
+docstring) -- checked directly the same way and confirmed to agree
+across the seam to floating-point precision. So the real severity here
+is worse than "continuous but with a kink in the gradient": for the
+tail model this investigation exercised, NUTS is integrating across a
+genuine value discontinuity, not just a non-smooth-but-continuous kink,
+which is consistent with the exceptionally poor R-hat/ESS numbers below
+being *worse* than a typical smoothness-only obstacle. This does not
+change the practical conclusion (classic MLE remains the right tool for
+tail-model fitting, section 12.3) or the decision not to redesign
+`cline_function`'s tail formula to fix this (see the reasoning later in
+this section -- changing it would alter previously-fitted results, which
+this project has explicitly chosen not to do); it only corrects the
+description of *why* NUTS struggles so badly. `t_cline_function`'s own
+docstring (section 15) already had this closer to right, independently
+citing Baird & Daley's characterization of the tripartite joins as
+"genuine mathematical discontinuities" -- this correction brings this
+section in line with that, rather than the reverse.
 
 **Why this isn't fixed in this pass, and likely isn't a "fix the code"
 problem at all**: making a piecewise model's log-density fully smooth

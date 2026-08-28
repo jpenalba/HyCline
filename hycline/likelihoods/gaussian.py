@@ -62,17 +62,7 @@ import numpy as np
 
 from hycline.data.schema import TraitTransect
 from hycline.models.cline import ClineParams, TailType
-
-
-def _tail_alpha(delta: float, tau: float, width: float) -> float:
-    """HZAR's own `alphaExpF`: the tail-region scaling constant, chosen
-    so the tail formula is continuous with the center formula at the
-    tail edge (verified directly, not just intended --
-    `tests/test_mle_trait.py::
-    test_hzar_tail_formula_is_continuous_with_center_formula_at_boundary`)."""
-    logit_delta = 4.0 * delta / width
-    logit_delta = np.clip(logit_delta, -700, 700)
-    return np.exp(logit_delta * (tau - 1.0)) / (1.0 + np.exp(-logit_delta))
+from hycline.models.cline import _hzar_tail_alpha as _tail_alpha
 
 
 def _cline_shape(distance: np.ndarray, center: float, width: float,

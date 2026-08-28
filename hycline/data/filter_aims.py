@@ -71,6 +71,14 @@ def match_samples_to_populations(sample_names: list, metadata_df: pd.DataFrame,
     if population_col not in metadata_df.columns:
         raise ValueError(f"--population-col '{population_col}' not found in the metadata file.")
 
+    dup_samples = metadata_df[sample_col][metadata_df[sample_col].duplicated()].unique().tolist()
+    if dup_samples:
+        raise ValueError(
+            f"The metadata file has more than one row for sample(s) {dup_samples} "
+            f"(--sample-col '{sample_col}') -- each sample must appear at most once. "
+            f"Remove or merge the duplicate rows before running this command."
+        )
+
     meta_by_sample = metadata_df.set_index(sample_col)[population_col]
     labels = [meta_by_sample.get(s) for s in sample_names]
     pop1_mask = np.array([l == pop1_label for l in labels])
@@ -204,13 +212,6 @@ def filter_aims_csv(input_path: str, metadata_path: str, output_path: str,
     }
 
 
-def _open_write_maybe_gzip(path: str):
-    import gzip
-    if path.endswith(".gz"):
-        return gzip.open(path, "wt")
-    return open(path, "w")
-
-
 def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
                      sample_col: str = "individual", population_col: str = "population",
                      pop1_label: str = "parent1", pop2_label: str = "parent2",
@@ -240,6 +241,7 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
     familiar reporting story alongside `generate-geographic-input`/
     `generate-genomic-input`).
     """
+    from hycline.data.beagle import _open_maybe_gzip as _open_write_maybe_gzip
     from hycline.data.vcf import _open_maybe_gzip, _parse_gt
 
     metadata_df = pd.read_csv(metadata_path)
@@ -256,7 +258,7 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
     pop1_mask = pop2_mask = None
     header_lines = []
 
-    with _open_maybe_gzip(input_path) as fin, _open_write_maybe_gzip(output_path) as fout:
+    with _open_maybe_gzip(input_path) as fin, _open_write_maybe_gzip(output_path, mode="wt") as fout:
         for line in fin:
             raw_line = line
             line = line.rstrip("\n")

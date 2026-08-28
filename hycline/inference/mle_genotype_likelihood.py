@@ -18,7 +18,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from hycline.data.schema import GenotypeLikelihoodTransect, GenotypeLikelihoodLocusData
-from hycline.inference.mle import FitResult, _numerical_hessian
+from hycline.inference.mle import FitResult, _numerical_hessian, _aicc
 from hycline.inference.mle_genomic import GenomicFitResult
 from hycline.likelihoods.genotype_likelihood import (
     log_likelihood_geographic, negative_log_likelihood_geographic,
@@ -26,13 +26,6 @@ from hycline.likelihoods.genotype_likelihood import (
 )
 from hycline.models.cline import ClineParams, TailType
 from hycline.models.genomic_cline import GenomicClineParams
-
-
-def _aicc(log_lik: float, k: int, n: int) -> float:
-    aic = 2 * k - 2 * log_lik
-    if n - k - 1 <= 0:
-        return np.inf
-    return aic + (2 * k * (k + 1)) / (n - k - 1)
 
 
 def _initial_guess_geographic(transect: GenotypeLikelihoodTransect,

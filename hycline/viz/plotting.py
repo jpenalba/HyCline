@@ -60,8 +60,6 @@ def plot_bayesian_fit(transect: AlleleFreqTransect, fit, ax=None,
         needed for a smooth band).
     credible_prob : width of the shaded credible band (e.g. 0.95 for 95%)
     """
-    import numpy as np
-
     if ax is None:
         fig, ax = plt.subplots(figsize=(7, 4.5))
 
@@ -195,6 +193,30 @@ def plot_multi_locus_overlay(curves: dict, observed: dict | None = None,
     return fig
 
 
+def _grid_axes(n: int, ncols: int, cell_w: float = 4.5, cell_h: float = 3.5):
+    """Shared grid-of-subplots setup for the small-multiples plot
+    functions below: computes nrows from `n`/`ncols` and creates the
+    figure. Returns (fig, axes_flat) with `axes_flat` always at least
+    length `n` -- the caller fills in the first `n` axes, then blanks
+    out any remaining ones with `axes_flat[j].axis("off")`.
+
+    Raises a clear error for `n == 0` instead of letting
+    `math.ceil(0 / ncols) == 0` reach `plt.subplots(0, ncols, ...)`,
+    which matplotlib itself rejects with an unhelpful
+    "Number of rows must be a positive integer, not 0"."""
+    import math
+    if n == 0:
+        raise ValueError(
+            "Nothing to plot -- the results dict is empty. This usually means every "
+            "locus/trait failed to fit; check for FAILED/SKIPPED messages earlier in "
+            "the run before plotting."
+        )
+    ncols = max(1, min(ncols, n))
+    nrows = math.ceil(n / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(cell_w * ncols, cell_h * nrows), squeeze=False)
+    return fig, axes.flatten()
+
+
 def plot_multi_locus_grid(results: dict, ncols: int = 3, method: str = "classic"):
     """Small-multiples plot: one subplot per locus, from a dict of
     {locus_name: (transect, fit)} pairs. `method` selects plot_fit
@@ -202,12 +224,8 @@ def plot_multi_locus_grid(results: dict, ncols: int = 3, method: str = "classic"
     fitting failed should simply be excluded from `results` by the caller
     (see hycline/cli.py::cmd_fit_multi for how per-locus failures are
     tracked and reported separately)."""
-    import math
     n = len(results)
-    ncols = max(1, min(ncols, n))
-    nrows = math.ceil(n / ncols)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 3.5 * nrows), squeeze=False)
-    axes_flat = axes.flatten()
+    fig, axes_flat = _grid_axes(n, ncols)
 
     for i, (locus_name, (transect, fit)) in enumerate(results.items()):
         ax = axes_flat[i]
@@ -274,12 +292,8 @@ def plot_trait_multi_grid(results: dict, ncols: int = 3):
     """Small-multiples plot for multiple traits: one subplot per trait,
     from a dict of {trait_name: (transect, fit)} pairs -- the trait
     analog of `plot_multi_locus_grid`."""
-    import math
     n = len(results)
-    ncols = max(1, min(ncols, n))
-    nrows = math.ceil(n / ncols)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 3.5 * nrows), squeeze=False)
-    axes_flat = axes.flatten()
+    fig, axes_flat = _grid_axes(n, ncols)
 
     for i, (trait_name, (transect, fit)) in enumerate(results.items()):
         ax = axes_flat[i]
@@ -336,12 +350,8 @@ def plot_genomic_multi_locus_grid(results: dict, ncols: int = 3):
     """Small-multiples plot: one subplot per locus, from a dict of
     {locus_name: (data, fit)} pairs -- the genomic-cline analog of
     plot_multi_locus_grid."""
-    import math
     n = len(results)
-    ncols = max(1, min(ncols, n))
-    nrows = math.ceil(n / ncols)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 3.5 * nrows), squeeze=False)
-    axes_flat = axes.flatten()
+    fig, axes_flat = _grid_axes(n, ncols)
 
     for i, (locus_name, (data, fit)) in enumerate(results.items()):
         ax = axes_flat[i]
@@ -368,17 +378,14 @@ def plot_hierarchical_geographic_grid(distance, n_alleles, n_focal, locus_names,
     estimates only (posterior means), not full posterior uncertainty --
     for the full posterior, use the Python API's `HierarchicalFitResult.
     idata` directly."""
-    import math
     n = len(locus_names)
-    ncols = max(1, min(ncols, n))
-    nrows = math.ceil(n / ncols)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 3.5 * nrows), squeeze=False)
-    axes_flat = axes.flatten()
+    fig, axes_flat = _grid_axes(n, ncols)
 
     x_smooth = np.linspace(distance.min(), distance.max(), 200)
     for i, name in enumerate(locus_names):
         ax = axes_flat[i]
-        obs_freq = n_focal[i] / n_alleles[i]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            obs_freq = np.where(n_alleles[i] > 0, n_focal[i] / n_alleles[i], np.nan)
         sizes = 15 + 40 * (n_alleles[i] / n_alleles[i].max())
         ax.scatter(distance, obs_freq, s=sizes, alpha=0.6, color="#2b6cb0",
                    edgecolor="white", linewidth=0.5, zorder=2)
@@ -406,19 +413,16 @@ def plot_hierarchical_genomic_grid(hybrid_index, n_alleles, n_focal, locus_names
     """Small-multiples plot for a hierarchical genomic batch fit -- the
     genomic-cline analog of `plot_hierarchical_geographic_grid`. No
     pmin/pmax needed (genomic clines have no free asymptotes)."""
-    import math
     from hycline.models.genomic_cline import GenomicClineParams, genomic_cline_function
 
     n = len(locus_names)
-    ncols = max(1, min(ncols, n))
-    nrows = math.ceil(n / ncols)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 3.5 * nrows), squeeze=False)
-    axes_flat = axes.flatten()
+    fig, axes_flat = _grid_axes(n, ncols)
 
     h_smooth = np.linspace(0.001, 0.999, 200)
     for i, name in enumerate(locus_names):
         ax = axes_flat[i]
-        obs_freq = n_focal[i] / n_alleles[i]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            obs_freq = np.where(n_alleles[i] > 0, n_focal[i] / n_alleles[i], np.nan)
         sizes = 15 + 30 * (n_alleles[i] / n_alleles[i].max())
         ax.scatter(hybrid_index, obs_freq, s=sizes, alpha=0.5, color="#2b6cb0",
                    edgecolor="white", linewidth=0.3, zorder=2)
@@ -454,14 +458,10 @@ def plot_gl_multi_locus_grid(results: dict, ncols: int = 3):
     Marker positions use each individual's most-likely genotype (argmax of
     the GL triple) for display only -- the fit itself used the full
     genotype-likelihood marginalization."""
-    import math
     from hycline.models.cline import TailType, cline_function
 
     n = len(results)
-    ncols = max(1, min(ncols, n))
-    nrows = math.ceil(n / ncols)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 3.5 * nrows), squeeze=False)
-    axes_flat = axes.flatten()
+    fig, axes_flat = _grid_axes(n, ncols)
 
     for i, (locus_name, (transect, fit)) in enumerate(results.items()):
         ax = axes_flat[i]
@@ -491,14 +491,10 @@ def plot_genomic_gl_multi_locus_grid(results: dict, ncols: int = 3):
     genomic cline fits -- the genomic-cline analog of
     `plot_gl_multi_locus_grid`. `results` is a dict of
     {locus_name: (GenotypeLikelihoodLocusData, GenomicFitResult)}."""
-    import math
     from hycline.models.genomic_cline import genomic_cline_function
 
     n = len(results)
-    ncols = max(1, min(ncols, n))
-    nrows = math.ceil(n / ncols)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 3.5 * nrows), squeeze=False)
-    axes_flat = axes.flatten()
+    fig, axes_flat = _grid_axes(n, ncols)
 
     h_smooth = np.linspace(0.001, 0.999, 200)
     for i, (locus_name, (data, fit)) in enumerate(results.items()):

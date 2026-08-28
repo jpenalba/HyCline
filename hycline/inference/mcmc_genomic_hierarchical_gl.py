@@ -38,6 +38,7 @@ from numpyro.infer import MCMC, NUTS
 
 from hycline.inference.mcmc_genomic_hierarchical import (
     HierarchicalGenomicFitResult, _genomic_cline_core_jax,
+    _warn_if_hybrid_index_distribution_uneven,
 )
 from hycline.inference.mcmc_hierarchical_gl import _marginal_log_likelihood_jax
 
@@ -137,4 +138,10 @@ def fit_hierarchical_genomic_batch_gl(hybrid_index, log_gl0, log_gl1, log_gl2,
 
     idata = az.from_numpyro(mcmc, coords={"locus": locus_names},
                              dims={"u": ["locus"], "log_v": ["locus"]})
-    return HierarchicalGenomicFitResult(idata=idata, locus_names=locus_names)
+    result = HierarchicalGenomicFitResult(idata=idata, locus_names=locus_names)
+
+    locus_df = result.locus_summary()
+    _warn_if_hybrid_index_distribution_uneven(
+        hybrid_index, locus_df["locus"], locus_df["u_mean"], locus_df["v_mean"])
+
+    return result

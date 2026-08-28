@@ -26,6 +26,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from hycline.data.schema import values_consistent
+
 
 @dataclass
 class BeagleData:
@@ -167,7 +169,7 @@ def _join_beagle_metadata(beagle_data: BeagleData, metadata_df, sample_col: str,
     sample_to_idx = {s: i for i, s in enumerate(beagle_data.sample_names)}
     indices = [sample_to_idx[s] for s in common_samples]
 
-    n_dropped = len(beagle_data.sample_names) - len(set(common_samples) & beagle_sample_set)
+    n_dropped = len(beagle_data.sample_names) - len(set(common_samples))
     return common_samples, indices, meta_subset, n_dropped
 
 
@@ -198,9 +200,21 @@ def _beagle_most_likely_dosage(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray
     hard-count output (see that function's docstring) -- kept here
     because `write_beagle_genomic_hard_count_csv` still uses it, and
     because argmax dosage may still be a reasonable, explicit choice for
-    a caller who wants it directly."""
+    a caller who wants it directly.
+
+    Individuals with a missing/uninformative genotype likelihood --
+    ANGSD's own convention for this is a flat/tied triple, e.g.
+    (0.333333, 0.333333, 0.333333) rather than NaN -- get NaN dosage
+    here instead of an arbitrary argmax pick. Without this, `np.argmax`
+    on an exact or near-exact tie always resolves to index 0 (dosage 0),
+    silently reporting a missing individual as a confident, fully
+    -genotyped reference homozygote."""
     stacked = np.stack([gl0, gl1, gl2], axis=0)
-    return np.argmax(stacked, axis=0).astype(float)
+    dosage = np.argmax(stacked, axis=0).astype(float)
+    spread = stacked.max(axis=0) - stacked.min(axis=0)
+    missing = spread < 1e-4
+    dosage[missing] = np.nan
+    return dosage
 
 
 def _beagle_expected_dosage(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray) -> np.ndarray:
@@ -306,7 +320,7 @@ def write_beagle_geographic_hard_count_csv(beagle_data: BeagleData, metadata_df,
             site_distance[site] = dist
             site_order.append(site)
             site_positions[site] = []
-        elif site_distance[site] != dist:
+        elif not values_consistent(site_distance[site], dist):
             raise ValueError(
                 f"Site '{site}' has inconsistent {distance_col} values across its "
                 f"individuals in the metadata ({site_distance[site]} vs {dist})."
@@ -358,8 +372,9 @@ def write_beagle_genomic_hard_count_csv(beagle_data: BeagleData, metadata_df, sa
     for j, marker in enumerate(beagle_data.marker_names):
         dosage = _beagle_most_likely_dosage(
             beagle_data.gl0[j, idx_arr], beagle_data.gl1[j, idx_arr], beagle_data.gl2[j, idx_arr])
-        new_columns[f"{marker}.n"] = np.full(len(common_samples), ploidy)
-        new_columns[f"{marker}.freq"] = dosage / ploidy
+        valid = ~np.isnan(dosage)
+        new_columns[f"{marker}.n"] = np.where(valid, ploidy, 0)
+        new_columns[f"{marker}.freq"] = np.where(valid, dosage / ploidy, np.nan)
 
     out = pd.concat([pd.DataFrame(base), pd.DataFrame(new_columns)], axis=1)
 

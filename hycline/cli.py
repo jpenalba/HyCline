@@ -955,26 +955,6 @@ def _build_parser() -> argparse.ArgumentParser:
     flagn_out_g.add_argument("--prefix", default="hycline",
                               help="Filename prefix for all output files (default: hycline)")
 
-    def add_gl_columns_args(g, single_locus=True):
-        g.add_argument("--gl0-col" if single_locus else "--gl0-suffix",
-                        default="log_gl0" if single_locus else ".gl0",
-                        help="Column" + ("" if single_locus else " suffix") +
-                             " for natural-log genotype likelihood of 0 focal-allele "
-                             f"copies (default: {'log_gl0' if single_locus else '.gl0'}).")
-        g.add_argument("--gl1-col" if single_locus else "--gl1-suffix",
-                        default="log_gl1" if single_locus else ".gl1",
-                        help="Same for 1 focal-allele copy "
-                             f"(default: {'log_gl1' if single_locus else '.gl1'}).")
-        g.add_argument("--gl2-col" if single_locus else "--gl2-suffix",
-                        default="log_gl2" if single_locus else ".gl2",
-                        help="Same for 2 focal-allele copies "
-                             f"(default: {'log_gl2' if single_locus else '.gl2'}).")
-        g.add_argument("--phred", action="store_true",
-                        help="Treat the GL columns as Phred-scaled PL values (as "
-                             "GATK/bcftools/ANGSD commonly output), converting to "
-                             "natural-log likelihoods before fitting. Default: "
-                             "columns already hold natural-log values.")
-
     # ---- `estimate-hybrid-index` subcommand ----
     ehi_p = subparsers.add_parser(
         "estimate-hybrid-index",
@@ -1293,6 +1273,45 @@ def _load_transect(args):
         sys.exit(2)
 
 
+def _detect_wide_csv_input_type(path, count_suffix, count_suffix_flags,
+                                 gl0_suffix, source_command):
+    """Shared core for _detect_geographic_input_type/
+    _detect_genomic_input_type: sniff a wide-format CSV's header to tell
+    site-aggregated/per-individual hard counts (columns ending in
+    `count_suffix`) apart from per-individual genotype likelihoods
+    (columns ending in `gl0_suffix`). Returns 'hard_count' or 'gl'; exits
+    with a clear error if the file matches both conventions or neither."""
+    import pandas as pd
+    try:
+        header_cols = list(pd.read_csv(path, nrows=0).columns)
+    except Exception as e:
+        print(f"\nERROR reading input data: {e}\n", file=sys.stderr)
+        sys.exit(2)
+
+    has_hard_count = any(c.endswith(count_suffix) for c in header_cols)
+    has_gl = any(c.endswith(gl0_suffix) for c in header_cols)
+
+    if has_hard_count and has_gl:
+        print(f"\nERROR: '{path}' has columns matching both the hard-count "
+              f"convention (ending in '{count_suffix}') and the genotype-"
+              f"likelihood convention (ending in '{gl0_suffix}') -- can't "
+              f"auto-detect which this file is. This shouldn't happen with a file "
+              f"from '{source_command}' -- check whether it was hand-"
+              f"edited or combined from two different sources.\n", file=sys.stderr)
+        sys.exit(2)
+    if has_gl:
+        return "gl"
+    if has_hard_count:
+        return "hard_count"
+    print(f"\nERROR: could not detect the input type of '{path}' -- no "
+          f"columns ending in '{count_suffix}' (hard counts) or "
+          f"'{gl0_suffix}' (genotype likelihoods) found. Was this file "
+          f"produced by '{source_command}'? If your columns use "
+          f"different suffixes, pass them explicitly ({count_suffix_flags}/"
+          f"--gl0-suffix).\n", file=sys.stderr)
+    sys.exit(2)
+
+
 def _detect_geographic_input_type(args):
     """Sniff a generate-geographic-input CSV's header to determine
     whether it holds site-aggregated hard counts (columns ending in
@@ -1304,36 +1323,10 @@ def _detect_geographic_input_type(args):
     (not hardcoded literals), so this still works for a hand-renamed
     wide-format file. Returns 'hard_count' or 'gl'; exits with a clear
     error if the file matches both conventions or neither."""
-    import pandas as pd
-    try:
-        header_cols = list(pd.read_csv(args.input, nrows=0).columns)
-    except Exception as e:
-        print(f"\nERROR reading input data: {e}\n", file=sys.stderr)
-        sys.exit(2)
-
     n_alleles_suffix = args.n_ind_suffix if args.n_ind_suffix else args.n_alleles_suffix
-    has_hard_count = any(c.endswith(n_alleles_suffix) for c in header_cols)
-    has_gl = any(c.endswith(args.gl0_suffix) for c in header_cols)
-
-    if has_hard_count and has_gl:
-        print(f"\nERROR: '{args.input}' has columns matching both the hard-count "
-              f"convention (ending in '{n_alleles_suffix}') and the genotype-"
-              f"likelihood convention (ending in '{args.gl0_suffix}') -- can't "
-              f"auto-detect which this file is. This shouldn't happen with a file "
-              f"from 'generate-geographic-input' -- check whether it was hand-"
-              f"edited or combined from two different sources.\n", file=sys.stderr)
-        sys.exit(2)
-    if has_gl:
-        return "gl"
-    if has_hard_count:
-        return "hard_count"
-    print(f"\nERROR: could not detect the input type of '{args.input}' -- no "
-          f"columns ending in '{n_alleles_suffix}' (hard counts) or "
-          f"'{args.gl0_suffix}' (genotype likelihoods) found. Was this file "
-          f"produced by 'generate-geographic-input'? If your columns use "
-          f"different suffixes, pass them explicitly (--n-alleles-suffix/"
-          f"--gl0-suffix).\n", file=sys.stderr)
-    sys.exit(2)
+    return _detect_wide_csv_input_type(
+        args.input, n_alleles_suffix, "--n-alleles-suffix", args.gl0_suffix,
+        "generate-geographic-input")
 
 
 def _load_multi_locus_transects(args):
@@ -1358,59 +1351,23 @@ def _load_multi_locus_transects(args):
         sys.exit(2)
 
 
-def _load_genomic_data(args):
-    from hycline.data.io import read_genomic_cline_csv, TransectCSVError
-
-    try:
-        return read_genomic_cline_csv(
-            args.input, hybrid_index_col=args.hybrid_index_col,
-            n_alleles_col=args.n_alleles_col, ploidy=args.ploidy,
-            n_focal_col=(None if args.freq_col else args.n_focal_col),
-            freq_col=args.freq_col, individual_col=args.individual_col,
-        )
-    except TransectCSVError as e:
-        print(f"\nERROR reading input data: {e}\n", file=sys.stderr)
-        sys.exit(2)
-
-
 def _detect_genomic_input_type(args):
     """Sniff a generate-genomic-input CSV's header to determine whether
-    it holds hard counts (columns ending in --n-alleles-suffix, default
-    '.n', or --freq-suffix, default '.freq') or per-individual genotype
-    likelihoods (columns ending in --gl0-suffix, default '.gl0') -- same
-    auto-detection philosophy as _detect_geographic_input_type. Returns
-    'hard_count' or 'gl'; exits with a clear error if the file matches
-    both conventions or neither."""
-    import pandas as pd
-    try:
-        header_cols = list(pd.read_csv(args.input, nrows=0).columns)
-    except Exception as e:
-        print(f"\nERROR reading input data: {e}\n", file=sys.stderr)
-        sys.exit(2)
-
+    it holds hard counts (columns ending in --n-focal-suffix, default
+    '.freq' via --freq-suffix if --n-focal-suffix isn't given) or
+    per-individual genotype likelihoods (columns ending in --gl0-suffix,
+    default '.gl0') -- same auto-detection philosophy as
+    _detect_geographic_input_type, but checking the focal-count/frequency
+    side rather than the n-alleles side (--n-alleles-suffix is not
+    consulted here; _detect_geographic_input_type checks the analogous
+    n-alleles-side suffix instead for its own format, an intentional
+    asymmetry between the two formats' detectors, not an oversight).
+    Returns 'hard_count' or 'gl'; exits with a clear error if the file
+    matches both conventions or neither."""
     focal_suffix = args.n_focal_suffix if args.n_focal_suffix else args.freq_suffix
-    has_hard_count = any(c.endswith(focal_suffix) for c in header_cols)
-    has_gl = any(c.endswith(args.gl0_suffix) for c in header_cols)
-
-    if has_hard_count and has_gl:
-        print(f"\nERROR: '{args.input}' has columns matching both the hard-count "
-              f"convention (ending in '{focal_suffix}') and the genotype-likelihood "
-              f"convention (ending in '{args.gl0_suffix}') -- can't auto-detect which "
-              f"this file is. This shouldn't happen with a file from "
-              f"'generate-genomic-input' -- check whether it was hand-edited or "
-              f"combined from two different sources.\n", file=sys.stderr)
-        sys.exit(2)
-    if has_gl:
-        return "gl"
-    if has_hard_count:
-        return "hard_count"
-    print(f"\nERROR: could not detect the input type of '{args.input}' -- no columns "
-          f"ending in '{focal_suffix}' (hard counts) or '{args.gl0_suffix}' "
-          f"(genotype likelihoods) found. Was this file produced by "
-          f"'generate-genomic-input'? If your columns use different suffixes, pass "
-          f"them explicitly (--freq-suffix/--n-focal-suffix/--gl0-suffix).\n",
-          file=sys.stderr)
-    sys.exit(2)
+    return _detect_wide_csv_input_type(
+        args.input, focal_suffix, "--freq-suffix/--n-focal-suffix", args.gl0_suffix,
+        "generate-genomic-input")
 
 
 def _load_genomic_multi_locus_data(args):
@@ -1459,38 +1416,6 @@ def _load_genomic_gl_multi_locus_data(args):
             args.input, hybrid_index_col=args.hybrid_index_col,
             gl0_suffix=args.gl0_suffix, gl1_suffix=args.gl1_suffix, gl2_suffix=args.gl2_suffix,
             phred=args.phred, individual_col=args.individual_col, loci=loci,
-        )
-    except TransectCSVError as e:
-        print(f"\nERROR reading input data: {e}\n", file=sys.stderr)
-        sys.exit(2)
-
-
-def _load_gl_transect(args):
-    from hycline.data.io import read_gl_csv, TransectCSVError
-
-    try:
-        return read_gl_csv(
-            args.input,
-            distance_col=(None if (args.lat_col and args.lon_col) else args.distance_col),
-            lat_col=args.lat_col, lon_col=args.lon_col,
-            transect_method=args.transect_method,
-            reference_lat=args.reference_lat, reference_lon=args.reference_lon,
-            gl0_col=args.gl0_col, gl1_col=args.gl1_col, gl2_col=args.gl2_col,
-            phred=args.phred, individual_col=args.individual_col,
-        )
-    except TransectCSVError as e:
-        print(f"\nERROR reading input data: {e}\n", file=sys.stderr)
-        sys.exit(2)
-
-
-def _load_genomic_gl_data(args):
-    from hycline.data.io import read_genomic_gl_csv, TransectCSVError
-
-    try:
-        return read_genomic_gl_csv(
-            args.input, hybrid_index_col=args.hybrid_index_col,
-            gl0_col=args.gl0_col, gl1_col=args.gl1_col, gl2_col=args.gl2_col,
-            phred=args.phred, individual_col=args.individual_col,
         )
     except TransectCSVError as e:
         print(f"\nERROR reading input data: {e}\n", file=sys.stderr)
@@ -1605,21 +1530,48 @@ def _try_stack_dense(data_dict, covariate_attr, count_attrs):
     happens to already be dense, not required).
 
     Order, not just the set of covariate values, matters for stacking
-    correctly -- but every locus here originates from the same
-    wide-format CSV's row order (`read_multi_locus_wide_csv`/
+    correctly. Every locus here originates from the same wide-format
+    CSV's row order (`read_multi_locus_wide_csv`/
     `read_genomic_cline_multi_locus_wide_csv` drop missing rows
     independently per locus, but never reorder the rows that remain), so
-    two loci with the exact same *set* of covariate values are
-    guaranteed to have them in the same relative order too -- checking
-    the sorted values match is sufficient here, not a shortcut that
-    risks silent misalignment.
+    this compares covariate arrays for EXACT (not sorted) equality.
+    Checking only the *sorted* values match was tried first and found
+    unsafe: if two different physical sites/individuals happen to share
+    the exact same covariate value (a real possibility for a derived
+    transect distance, e.g. two sites at the same round-numbered
+    distance), independent per-locus row-dropping can make two loci's
+    retained covariate arrays contain the same multiset of values in a
+    different actual order, which a sorted comparison cannot detect --
+    verified directly with a constructed repro before switching to exact
+    comparison. Exact comparison is strictly safer, with no added false
+    -positive risk for genuinely dense data (identical order trivially
+    compares equal), and catches that specific reordering case.
+
+    A REAL, STILL-OPEN LIMITATION, stated plainly rather than papered
+    over with a check that doesn't actually catch it (an earlier version
+    of this fix added a "duplicate covariate value" warning here, tried
+    against a constructed repro, and found it does NOT fire in the
+    scenario it was meant to catch: when each locus independently drops
+    a *different* one of two same-valued sites, every individual
+    locus's own retained array has no internal duplicate at all -- the
+    tie is only visible in the union of what was dropped, which this
+    function never sees). In that specific scenario -- two loci sharing
+    a covariate value at the same retained position but backed by two
+    different physical sites -- exact comparison still reports "dense"
+    and silently pairs them, since values alone cannot distinguish which
+    physical site backs a given slot once a tie has independently
+    "resolved" the same way in every locus's own data. Closing this
+    fully would require passing real site/individual identifiers (e.g.
+    `--site-col`-derived names, when given) through the per-locus
+    readers and comparing those instead of/alongside raw covariate
+    values -- not implemented in this pass.
     """
     locus_names = list(data_dict.keys())
     reference = getattr(data_dict[locus_names[0]], covariate_attr)
 
     for name in locus_names[1:]:
         cov = getattr(data_dict[name], covariate_attr)
-        if len(cov) != len(reference) or not np.allclose(np.sort(cov), np.sort(reference)):
+        if len(cov) != len(reference) or not np.allclose(cov, reference):
             return False, None, None, None
 
     stacked = {}
@@ -1629,11 +1581,24 @@ def _try_stack_dense(data_dict, covariate_attr, count_attrs):
     return True, locus_names, reference, stacked
 
 
-def _stack_for_hierarchical(data_dict, covariate_attr, count_attrs, kind_label):
+def _stack_for_hierarchical(data_dict, covariate_attr, count_attrs, kind_label,
+                             unit_label=None):
     """Convert a dict of per-locus data containers (as returned by
     `read_multi_locus_wide_csv`/`read_genomic_cline_multi_locus_wide_csv`)
     into the dense, stacked (n_loci, n_sites_or_individuals) arrays the
     hierarchical batch-fitting functions need.
+
+    `kind_label` ("geographic" or "genomic") selects which sibling
+    command (`fit-geographic`/`fit-genomic`) the error message suggests
+    as a fallback. `unit_label` ("sites" or "individuals") independently
+    selects the noun used for the covariate's unit -- these two are NOT
+    always the same choice: geographic hard-count data is per-site, but
+    geographic genotype-likelihood data is per-individual, so a GL
+    geographic caller passes kind_label="geographic" (for the right
+    fallback command) with unit_label="individuals" (for the right
+    noun). Defaults to matching `kind_label`'s own convention
+    ("geographic"->"sites", "genomic"->"individuals") when not given, so
+    existing hard-count callers don't need to change.
 
     Hierarchical batch fitting has no per-locus missing-data masking (see
     BACKEND_PHASE4.md sections 2 and 6) -- every locus must share the
@@ -1647,8 +1612,12 @@ def _stack_for_hierarchical(data_dict, covariate_attr, count_attrs, kind_label):
     dimension mismatch here would otherwise fail deep inside NumPyro with
     a much less useful error, or (worse) silently broadcast incorrectly.
     """
+    if unit_label is None:
+        unit_label = "sites" if kind_label == "geographic" else "individuals"
+
     is_dense, locus_names, reference, stacked = _try_stack_dense(
         data_dict, covariate_attr, count_attrs)
+
     if not is_dense:
         all_names = list(data_dict.keys())
         # find one mismatching locus to name in the error, matching the
@@ -1657,12 +1626,12 @@ def _stack_for_hierarchical(data_dict, covariate_attr, count_attrs, kind_label):
         bad_name = all_names[0]
         for name in all_names[1:]:
             cov = getattr(data_dict[name], covariate_attr)
-            if len(cov) != len(ref) or not np.allclose(np.sort(cov), np.sort(ref)):
+            if len(cov) != len(ref) or not np.allclose(cov, ref):
                 bad_name = name
                 break
         print(
             f"\nERROR: hierarchical batch fitting requires every locus to have data "
-            f"at exactly the same {'sites' if kind_label == 'geographic' else 'individuals'} "
+            f"at exactly the same {unit_label} "
             f"(no per-locus missing-data masking) -- locus '{bad_name}' has a different "
             f"{covariate_attr} pattern than locus '{all_names[0]}'. This usually "
             f"means your input CSV has missing values for some loci but not others.\n"
@@ -1746,6 +1715,14 @@ def _fit_single_locus_core(transect, args, tail_type, use_fixed, pmin_fixed, pma
                     "currently-unclosed gap, not a silently-ignored flag -- see "
                     "BACKEND_TRAIT.md section 5. Use estimated scaling (the default) with "
                     "--hzar-tail, or drop --hzar-tail to use fixed extremes."
+                )
+            if tail_type != TailType.NONE:
+                raise UnsupportedFitConfiguration(
+                    f"--tail {tail_type.value} is not supported together with --scaling "
+                    f"fixed / --pmin / --pmax -- fit_mle_fixed_extremes currently only "
+                    f"supports --tail none. Use estimated scaling (the default, drop "
+                    f"--scaling fixed / --pmin / --pmax) for tail models, or drop --tail "
+                    f"for fixed scaling."
                 )
             return fit_mle_fixed_extremes(transect, tail_type=tail_type,
                                            pmin=pmin_fixed, pmax=pmax_fixed,
@@ -1895,7 +1872,7 @@ def cmd_fit_trait_multi(args) -> int:
     from hycline.data.io import read_multi_trait_wide_csv, TransectCSVError
     from hycline.inference.mle_trait import fit_mle_trait
     from hycline.viz.plotting import plot_trait_multi_grid
-    from hycline.models.cline import TailType
+    from hycline.models.cline import TailType, param_names as _cline_param_names
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1966,9 +1943,20 @@ def cmd_fit_trait_multi(args) -> int:
         row["var_l"] = fit.var_l
         row["var_r"] = fit.var_r
         row["var_h"] = fit.var_h
-        for i, name in enumerate(["center", "width", "pmin", "pmax"]):
-            if fit.std_errors is not None and i < len(fit.std_errors) and np.isfinite(fit.std_errors[i]):
-                row[f"{name}_se"] = fit.std_errors[i]
+        if fit.std_errors is not None:
+            cline_param_count = fit.n_params - 3
+            se_names = _cline_param_names(tail_type)[:cline_param_count] + [
+                "var_l", "var_r", "var_h"]
+            if tail_type == TailType.MIRROR:
+                # See the matching note in _fit_geographic_hard_count:
+                # param_names() labels MIRROR's shared tail param
+                # "delta_m"/"tau_m", but the point estimates above are
+                # written under "delta_l"/"tau_l" (mp.delta_l/tau_l).
+                se_names = ["delta_l" if n == "delta_m" else
+                            "tau_l" if n == "tau_m" else n for n in se_names]
+            for i, name in enumerate(se_names):
+                if i < len(fit.std_errors) and np.isfinite(fit.std_errors[i]):
+                    row[f"{name}_se"] = fit.std_errors[i]
         summary_rows.append(row)
         plot_results[trait_name] = (transect, fit)
 
@@ -2313,6 +2301,16 @@ def _fit_geographic_hard_count(args, out_dir, prefix) -> int:
                              else _cline_param_names(
                                  tail_type, asymmetric=fit.params.t_skew is not None
                              )[:len(fit.std_errors)])
+                    if tail_type == TailType.MIRROR:
+                        # param_names() labels MIRROR's shared tail param
+                        # "delta_m"/"tau_m", but the point estimates above
+                        # (fit.params.delta_l/tau_l) are written under
+                        # "delta_l"/"tau_l" -- match that so the *_se
+                        # columns pair up with the right point-estimate
+                        # column instead of naming a column that doesn't
+                        # exist.
+                        names = ["delta_l" if n == "delta_m" else
+                                 "tau_l" if n == "tau_m" else n for n in names]
                     for i, name in enumerate(names):
                         if np.isfinite(fit.std_errors[i]):
                             row[f"{name}_se"] = float(fit.std_errors[i])
@@ -2395,6 +2393,13 @@ def _fit_geographic_gl(args, out_dir, prefix) -> int:
     import pandas as pd
     from hycline.models.cline import param_names as _cline_param_names
     fitted_param_names = _cline_param_names(tail_type)
+    if tail_type == TailType.MIRROR:
+        # See the matching note in _fit_geographic_hard_count: param_names()
+        # labels MIRROR's shared tail param "delta_m"/"tau_m", but the
+        # point estimates below are written under "delta_l"/"tau_l".
+        fitted_param_names = ["delta_l" if n == "delta_m" else
+                               "tau_l" if n == "tau_m" else n
+                               for n in fitted_param_names]
     summary_rows = []
     curve_rows = []
     failures = {}
@@ -2834,7 +2839,8 @@ def _fit_hierarchical_geographic_gl(args, out_dir, prefix) -> int:
 
     locus_names, distance, stacked = _stack_for_hierarchical(
         transects, covariate_attr="distance",
-        count_attrs=["log_gl0", "log_gl1", "log_gl2"], kind_label="geographic")
+        count_attrs=["log_gl0", "log_gl1", "log_gl2"], kind_label="geographic",
+        unit_label="individuals")
     log_gl0, log_gl1, log_gl2 = stacked["log_gl0"], stacked["log_gl1"], stacked["log_gl2"]
     print(f"  All {len(locus_names)} loci share {len(distance)} individuals -- ready for "
           f"hierarchical fitting.")
@@ -2927,6 +2933,15 @@ def _fit_hierarchical_genomic_gl(args, out_dir, prefix) -> int:
     from hycline.inference.mcmc_genomic_hierarchical_gl import fit_hierarchical_genomic_batch_gl
     from hycline.diagnostics.convergence import check
     from hycline.viz.plotting import plot_multi_locus_overlay
+
+    if getattr(args, "pool_center", False):
+        print(
+            "\nERROR: --pool-center is not supported for genotype-likelihood input -- "
+            "fit_hierarchical_genomic_batch_gl has no pool_center parameter (only the "
+            "hard-count path, fit_hierarchical_genomic_batch, supports it). Convert to "
+            "hard-count input first, or drop --pool-center to use the default "
+            "(unpooled-center) model with genotype-likelihood input.\n", file=sys.stderr)
+        return 2
 
     all_data = _load_genomic_gl_multi_locus_data(args)
     print(f"  {len(all_data)} loci detected: {_format_loci_list(all_data.keys())}")
@@ -3339,6 +3354,9 @@ def cmd_estimate_hybrid_index(args) -> int:
     genotypes = dosage_by_locus[locus_idx, :].T  # (n_samples, n_loci)
 
     if mode1:
+        if not Path(args.metadata).exists():
+            print(f"\nERROR: --metadata file not found: '{args.metadata}'\n", file=sys.stderr)
+            return 2
         metadata_df = pd.read_csv(args.metadata)
         from hycline.data.filter_aims import match_samples_to_populations
         try:
@@ -3373,10 +3391,28 @@ def cmd_estimate_hybrid_index(args) -> int:
                   f"{missing_loci} -- every locus in --input needs a matching "
                   f"{args.freq_locus_col} entry in --parental-freq-csv.\n", file=sys.stderr)
             return 2
+        dup_loci = [l for l in loci if (freq_by_locus.index == l).sum() > 1]
+        if dup_loci:
+            print(f"\nERROR: {args.parental_freq_csv} has more than one row for "
+                  f"locus(-i) {dup_loci} (--freq-locus-col '{args.freq_locus_col}') -- "
+                  f"each locus needs exactly one row. Remove or merge the duplicate "
+                  f"rows before running this command.\n", file=sys.stderr)
+            return 2
 
         parental_freq_pop0 = freq_by_locus.loc[loci, args.freq_pop0_col].to_numpy(dtype=float)
         parental_freq_pop1 = freq_by_locus.loc[loci, args.freq_pop1_col].to_numpy(dtype=float)
         print(f"  Matched precomputed frequencies for all {len(loci)} loci.")
+
+    from hycline.data.hybrid_index import polarize_genotypes
+    n_flipped = int(np.sum(parental_freq_pop0 > parental_freq_pop1))
+    if n_flipped:
+        print(f"  Re-orienting {n_flipped}/{len(loci)} loci where population 0 (not "
+              f"population 1) carries the higher-frequency allele -- REF/ALT "
+              f"assignment in variant calling is arbitrary with respect to which "
+              f"parental population carries which allele, so this is expected and "
+              f"necessary, not a data problem.")
+    genotypes, parental_freq_pop0, parental_freq_pop1 = polarize_genotypes(
+        genotypes, parental_freq_pop0, parental_freq_pop1, ploidy=args.ploidy)
 
     try:
         h = estimate_hybrid_index(
@@ -3405,10 +3441,11 @@ def cmd_estimate_hybrid_index(args) -> int:
 def _report_vcf_parse_summary(vcf_data, extract_pl):
     print(f"  {len(vcf_data)} biallelic SNPs parsed, {len(vcf_data.sample_names)} samples.")
     n_skipped = vcf_data.n_skipped_multiallelic + vcf_data.n_skipped_indel
-    if n_skipped or vcf_data.n_skipped_no_gt:
+    n_skipped_invariant = getattr(vcf_data, "n_skipped_invariant", 0)
+    if n_skipped or vcf_data.n_skipped_no_gt or n_skipped_invariant:
         print(f"  Skipped: {vcf_data.n_skipped_multiallelic} multiallelic, "
-              f"{vcf_data.n_skipped_indel} indel, {vcf_data.n_skipped_no_gt} without a "
-              f"GT field.")
+              f"{vcf_data.n_skipped_indel} indel, {n_skipped_invariant} invariant "
+              f"(ALT='.'), {vcf_data.n_skipped_no_gt} without a GT field.")
     if n_skipped:
         total = len(vcf_data) + n_skipped
         pct = 100 * n_skipped / total if total > 0 else 0

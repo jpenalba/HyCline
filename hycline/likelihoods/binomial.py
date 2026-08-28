@@ -61,6 +61,8 @@ def negative_log_likelihood(param_vec: np.ndarray, transect: AlleleFreqTransect,
         return np.inf
     if tail_type == TailType.T_CLINE and (params.t_shape is None or params.t_shape <= 0):
         return np.inf
+    if tail_type == TailType.T_CLINE and hzar_tail:
+        return np.inf
     if hzar_tail:
         for name in ("delta_l", "delta_r", "tau_l", "tau_r"):
             val = getattr(params, name, None)
@@ -70,7 +72,8 @@ def negative_log_likelihood(param_vec: np.ndarray, transect: AlleleFreqTransect,
 
 
 def hzar_style_log_likelihood(transect: AlleleFreqTransect, params: ClineParams,
-                               tail_type: TailType = TailType.NONE) -> float:
+                               tail_type: TailType = TailType.NONE,
+                               hzar_tail: bool = False) -> float:
     """Log-likelihood reported the way HZAR itself reports it -- NOT the raw
     binomial log-likelihood used internally by `log_likelihood()` above.
 
@@ -94,7 +97,7 @@ def hzar_style_log_likelihood(transect: AlleleFreqTransect, params: ClineParams,
     HZAR-comparable units; `log_likelihood()` remains the function actually
     used for optimization and internal AICc computation.
     """
-    p_est = predicted_freq(transect, params, tail_type)
+    p_est = predicted_freq(transect, params, tail_type, hzar_tail=hzar_tail)
     p_obs = np.clip(transect.n_focal / transect.n_alleles, _EPS, 1.0 - _EPS)
     n = transect.n_alleles
 

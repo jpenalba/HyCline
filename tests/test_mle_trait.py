@@ -303,3 +303,16 @@ def test_compare_trait_models_selects_true_no_tail_model():
     transect = _simulate_hzar(true_mean_params, 1.0, 1.2, 0.8, n_sites=30, seed=531)
     comparison = compare_trait_models(transect)
     assert comparison.best_model == TailType.NONE
+
+
+def test_fit_mle_trait_rejects_t_cline_with_clear_error():
+    # Regression test: fit_mle_trait used to have no guard against
+    # TailType.T_CLINE (unlike fit_mle, which validates this explicitly),
+    # so it fell through to a confusing scipy-internal error ("The number
+    # of bounds is not compatible with the length of x0") instead of a
+    # clear, purpose-built one -- the T-cline was built for allele
+    # -frequency clines and has no trait-cline counterpart.
+    transect = TraitTransect(distance=[0., 10., 20.], trait_mean=[1., 2., 3.],
+                              n=[10., 10., 10.], trait_sd=[1., 1., 1.])
+    with pytest.raises(ValueError, match="T_CLINE"):
+        fit_mle_trait(transect, tail_type=TailType.T_CLINE)

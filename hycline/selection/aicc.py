@@ -9,6 +9,7 @@ number of parameters in the more flexible tail models.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable, Union
 
 import pandas as pd
 
@@ -20,7 +21,7 @@ from hycline.models.cline import TailType
 
 @dataclass
 class ModelComparisonResult:
-    results: dict[TailType, FitResult]
+    results: dict[TailType, Union[FitResult, TraitFitResult]]
     table: pd.DataFrame
     best_model: TailType
 
@@ -28,6 +29,31 @@ class ModelComparisonResult:
         lines = [self.table.to_string(index=False),
                  f"\nBest model by AICc: {self.best_model.value}"]
         return "\n".join(lines)
+
+
+def _compare_models(candidates: list[TailType],
+                     fit_one: Callable[[TailType], Union[FitResult, TraitFitResult]]
+                     ) -> ModelComparisonResult:
+    """Shared core for `compare_models`/`compare_trait_models`: fit each
+    candidate tail type via `fit_one`, then rank by AICc."""
+    results = {tail_type: fit_one(tail_type) for tail_type in candidates}
+
+    rows = []
+    aiccs = {tt: r.aicc for tt, r in results.items()}
+    min_aicc = min(aiccs.values())
+    for tt, r in results.items():
+        rows.append({
+            "model": tt.value,
+            "k": r.n_params,
+            "logL": r.log_likelihood,
+            "AICc": r.aicc,
+            "delta_AICc": r.aicc - min_aicc,
+            "converged": r.success,
+        })
+    table = pd.DataFrame(rows).sort_values("AICc").reset_index(drop=True)
+    best_model = TailType(table.iloc[0]["model"])
+
+    return ModelComparisonResult(results=results, table=table, best_model=best_model)
 
 
 def compare_models(transect: AlleleFreqTransect,
@@ -42,27 +68,7 @@ def compare_models(transect: AlleleFreqTransect,
     """
     if candidates is None:
         candidates = [TailType.NONE, TailType.MIRROR, TailType.BOTH]
-
-    results: dict[TailType, FitResult] = {}
-    for tail_type in candidates:
-        results[tail_type] = fit_mle(transect, tail_type)
-
-    rows = []
-    aiccs = {tt: r.aicc for tt, r in results.items()}
-    min_aicc = min(aiccs.values())
-    for tt, r in results.items():
-        rows.append({
-            "model": tt.value,
-            "k": r.n_params,
-            "logL": r.log_likelihood,
-            "AICc": r.aicc,
-            "delta_AICc": r.aicc - min_aicc,
-            "converged": r.success,
-        })
-    table = pd.DataFrame(rows).sort_values("AICc").reset_index(drop=True)
-    best_model = TailType(table.iloc[0]["model"])
-
-    return ModelComparisonResult(results=results, table=table, best_model=best_model)
+    return _compare_models(candidates, lambda tt: fit_mle(transect, tt))
 
 
 def compare_trait_models(transect: TraitTransect,
@@ -73,24 +79,4 @@ def compare_trait_models(transect: TraitTransect,
     """
     if candidates is None:
         candidates = [TailType.NONE, TailType.MIRROR, TailType.BOTH]
-
-    results: dict[TailType, TraitFitResult] = {}
-    for tail_type in candidates:
-        results[tail_type] = fit_mle_trait(transect, tail_type)
-
-    rows = []
-    aiccs = {tt: r.aicc for tt, r in results.items()}
-    min_aicc = min(aiccs.values())
-    for tt, r in results.items():
-        rows.append({
-            "model": tt.value,
-            "k": r.n_params,
-            "logL": r.log_likelihood,
-            "AICc": r.aicc,
-            "delta_AICc": r.aicc - min_aicc,
-            "converged": r.success,
-        })
-    table = pd.DataFrame(rows).sort_values("AICc").reset_index(drop=True)
-    best_model = TailType(table.iloc[0]["model"])
-
-    return ModelComparisonResult(results=results, table=table, best_model=best_model)
+    return _compare_models(candidates, lambda tt: fit_mle_trait(transect, tt))

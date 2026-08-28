@@ -87,23 +87,30 @@ def _initial_guess(transect: AlleleFreqTransect, tail_type: TailType,
 
     params = ClineParams(center=center_guess, width=width_guess,
                           pmin=pmin_guess, pmax=pmax_guess)
-    if hzar_tail:
-        if tail_type in (TailType.LEFT, TailType.BOTH, TailType.MIRROR):
-            params.delta_l, params.tau_l = width_guess / 2.0, 0.5
-        if tail_type in (TailType.RIGHT, TailType.BOTH):
-            params.delta_r, params.tau_r = width_guess / 2.0, 0.5
-    elif tail_type == TailType.T_CLINE:
+    if tail_type == TailType.T_CLINE:
         # 6.67: Baird & Daley (2025) Table 1's own calibration point --
         # T(6.67) matches the ordinary logistic/Bazykin sigmoid (this
         # project's existing default core shape) to MAD 0.001, so it's
         # the natural "no steepening yet" starting value, not an
-        # arbitrary guess.
+        # arbitrary guess. Checked before `hzar_tail` (rather than in an
+        # `elif` chained off it) so this still fires correctly even if a
+        # caller passes hzar_tail=True alongside T_CLINE directly -- the
+        # T-cline has no HZAR-parameterized variant, so hzar_tail is
+        # simply not meaningful for it, but this helper stays internally
+        # consistent (t_shape always set) either way; `fit_mle` itself
+        # already rejects that combination with a clear error before
+        # ever reaching this function.
         params.t_shape = 6.67
         if t_cline_asymmetric:
             # 0.0: start symmetric, let the optimizer discover any real
             # skew from the data rather than biasing the search with an
             # arbitrary nonzero guess.
             params.t_skew = 0.0
+    elif hzar_tail:
+        if tail_type in (TailType.LEFT, TailType.BOTH, TailType.MIRROR):
+            params.delta_l, params.tau_l = width_guess / 2.0, 0.5
+        if tail_type in (TailType.RIGHT, TailType.BOTH):
+            params.delta_r, params.tau_r = width_guess / 2.0, 0.5
     else:
         if tail_type in (TailType.LEFT, TailType.BOTH, TailType.MIRROR):
             params.delta_l, params.tau_l = 0.1, width_guess
@@ -121,7 +128,30 @@ def _bounds_for(transect: AlleleFreqTransect, tail_type: TailType,
         (0.0, 1.0),                                                            # pmin
         (0.0, 1.0),                                                            # pmax
     ]
-    if hzar_tail:
+    if tail_type == TailType.T_CLINE:
+        # Checked before `hzar_tail` (see the matching note in
+        # `_initial_guess`) so this always produces the right bound count
+        # for T_CLINE regardless of hzar_tail -- fit_mle itself already
+        # rejects hzar_tail=True with T_CLINE before reaching here.
+        # Lower bound 0.05: well past Cauchy (t_shape=1, already the
+        # thickest-tailed named case in Baird & Daley Table 1) into
+        # more extreme steepness, without reaching numerically
+        # unstable near-zero degrees of freedom. Upper bound 500:
+        # well past the paper's own T(116)=Normal calibration point,
+        # so the optimizer has room to converge to "no steepening
+        # detectable" without hitting the bound.
+        bounds += [(0.05, 500.0)]
+        if t_cline_asymmetric:
+            # +/-20: comfortably covers Fisher's own fitted asymmetry
+            # (1.367, Baird & Daley's own headline result) with a lot
+            # of headroom, while keeping the optimizer's search
+            # (and `_t_cline_asymmetric_mode_and_peak`'s own
+            # alpha-centered numerical peak-finding bracket, which
+            # this range was chosen to stay well inside of) in the
+            # verified-safe region -- see
+            # hycline.models.cline.t_cline_function's docstring.
+            bounds += [(-20.0, 20.0)]
+    elif hzar_tail:
         # delta is a raw distance (center +/- delta defines the tail
         # edge) here, not a [0,1] height fraction -- tau bounded
         # strictly positive (the tail formula's exp(u*tau) blows up for
@@ -139,25 +169,6 @@ def _bounds_for(transect: AlleleFreqTransect, tail_type: TailType,
             bounds += [(0.0, 1.0), (1e-3, d_span * 10 + 1e-3)]
         if tail_type == TailType.MIRROR:
             bounds += [(0.0, 1.0), (1e-3, d_span * 10 + 1e-3)]
-        if tail_type == TailType.T_CLINE:
-            # Lower bound 0.05: well past Cauchy (t_shape=1, already the
-            # thickest-tailed named case in Baird & Daley Table 1) into
-            # more extreme steepness, without reaching numerically
-            # unstable near-zero degrees of freedom. Upper bound 500:
-            # well past the paper's own T(116)=Normal calibration point,
-            # so the optimizer has room to converge to "no steepening
-            # detectable" without hitting the bound.
-            bounds += [(0.05, 500.0)]
-            if t_cline_asymmetric:
-                # +/-20: comfortably covers Fisher's own fitted asymmetry
-                # (1.367, Baird & Daley's own headline result) with a lot
-                # of headroom, while keeping the optimizer's search
-                # (and `_t_cline_asymmetric_mode_and_peak`'s own
-                # alpha-centered numerical peak-finding bracket, which
-                # this range was chosen to stay well inside of) in the
-                # verified-safe region -- see
-                # hycline.models.cline.t_cline_function's docstring.
-                bounds += [(-20.0, 20.0)]
     return bounds
 
 

@@ -7,6 +7,31 @@ from dataclasses import dataclass
 import numpy as np
 
 
+def values_consistent(a, b) -> bool:
+    """True if `a` and `b` should be treated as the same value for a
+    per-site/per-individual consistency check -- ordinary equality, plus
+    NaN treated as consistent with NaN (a site/individual where every
+    record genuinely has the same missing value is not an inconsistency
+    to report). Two different NaN-producing inputs (e.g. two truly
+    different missing values) are indistinguishable from each other once
+    they're NaN, which is the same limitation any NaN-as-missing
+    convention has -- this function doesn't try to work around that,
+    only avoids the opposite, more common failure of a spurious
+    "inconsistent" error firing on `nan != nan` itself.
+
+    Shared by every reader/writer that aggregates individuals into sites
+    (or checks per-individual consistency) and needs to tolerate this --
+    `hycline.data.vcf`, `.beagle`, `.converter`, `.io`, `.geo` all have
+    their own copy of the same site-aggregation loop with this exact
+    comparison at its core."""
+    if a == b:
+        return True
+    try:
+        return bool(np.isnan(a)) and bool(np.isnan(b))
+    except TypeError:
+        return False
+
+
 @dataclass
 class AlleleFreqTransect:
     """Allele-count data along a geographic transect (the classical HZAR
@@ -33,6 +58,10 @@ class AlleleFreqTransect:
 
         if not (self.distance.shape == self.n_alleles.shape == self.n_focal.shape):
             raise ValueError("distance, n_alleles, and n_focal must have the same shape")
+        if len(self.distance) == 0:
+            raise ValueError("Need at least one site")
+        if np.any(self.n_focal < 0):
+            raise ValueError("n_focal cannot be negative at any site")
         if np.any(self.n_focal > self.n_alleles):
             raise ValueError("n_focal cannot exceed n_alleles at any site")
         if np.any(self.n_alleles <= 0):
@@ -98,6 +127,8 @@ class TraitTransect:
         if len(set(shapes)) != 1:
             raise ValueError(
                 "distance, trait_mean, n, and trait_sd (if given) must have the same shape")
+        if len(self.distance) == 0:
+            raise ValueError("Need at least one site")
         if np.any(self.n <= 0):
             raise ValueError("n must be positive at every site")
         if self.trait_sd is not None and np.any(self.trait_sd < 0):
@@ -149,6 +180,10 @@ class HybridIndexLocusData:
 
         if not (self.hybrid_index.shape == self.n_alleles.shape == self.n_focal.shape):
             raise ValueError("hybrid_index, n_alleles, and n_focal must have the same shape")
+        if len(self.hybrid_index) == 0:
+            raise ValueError("Need at least one individual")
+        if np.any(self.n_focal < 0):
+            raise ValueError("n_focal cannot be negative for any individual")
         if np.any(self.n_focal > self.n_alleles):
             raise ValueError("n_focal cannot exceed n_alleles for any individual")
         if np.any(self.n_alleles <= 0):

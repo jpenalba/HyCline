@@ -15,17 +15,26 @@ provided for clines that do not plateau cleanly outside the sigmoid core.
 NOTE ON THE TAIL MODEL
 -----------------------
 `cline_function`'s tail parameterization (below) follows a general form
-described in the hybrid-zone cline literature (a continuous exponential
-decay grafted onto the sigmoid core at x = c +/- w/2) -- this is NOT
-HZAR's own tail parameterization, and this function's default behavior
-is deliberately left unchanged to avoid silently altering any previously
--fitted results. `hzar_cline_function` (below) is the actual,
-bit-verified-against-HZAR's-R-source alternative -- see its own
-docstring, and BACKEND_TRAIT.md sections 1-2 for the full derivation and
-verification (built first for quantitative trait clines, where the
-variance model made checking against the real source unavoidable, and
-ported here once verified). Use `hzar_cline_function` when exact HZAR
-parity matters; `cline_function` remains the default for `fit`/
+described in the hybrid-zone cline literature (an exponential decay
+grafted onto the sigmoid core at x = c +/- w/2) -- this is NOT HZAR's
+own tail parameterization, and this function's default behavior is
+deliberately left unchanged to avoid silently altering any previously
+-fitted results. A REAL LIMITATION, checked directly and stated plainly
+(not the "continuous" join a first read of this parameterization might
+suggest): because `delta_l`/`delta_r` are free, independently-fitted
+tail-height-fraction parameters with no constraint tying them to the
+sigmoid core's own value at the join, the tail value generally does NOT
+equal the core value at the seam for a generic fit -- a real value jump,
+not just a derivative kink (see BACKEND_PHASE2.md section 12.2's
+corrected description for a concrete verified example and the NUTS-
+convergence consequences this has). `hzar_cline_function` (below) is the
+one that IS genuinely continuous at the join by construction (verified
+directly, not just intended) -- see its own docstring, and BACKEND_TRAIT.md
+sections 1-2 for the full derivation and verification (built first for
+quantitative trait clines, where the variance model made checking against
+the real source unavoidable, and ported here once verified). Use
+`hzar_cline_function` when exact HZAR parity -- or a genuinely continuous
+tail join -- matters; `cline_function` remains the default for `fit`/
 `fit-multi` and everywhere else in this project that doesn't opt in.
 
 NOTE ON THE T-CLINE MODEL
@@ -311,20 +320,12 @@ def hzar_cline_function(x: np.ndarray, params: ClineParams,
             frac = alpha * np.exp(u)
             out[mask] = params.pmin + (params.pmax - params.pmin) * frac
 
-    if tail_type in (TailType.RIGHT, TailType.BOTH):
-        dr = params.delta_r
-        tr = params.tau_r
+    if tail_type in (TailType.RIGHT, TailType.BOTH, TailType.MIRROR):
+        # MIRROR reuses delta_l/tau_l for both tails, matching cline_function's
+        # own MIRROR convention -- see the module docstring above.
+        dr = params.delta_r if tail_type != TailType.MIRROR else params.delta_l
+        tr = params.tau_r if tail_type != TailType.MIRROR else params.tau_l
         right_edge = params.center + dr
-        mask = x > right_edge
-        if np.any(mask):
-            alpha = _hzar_tail_alpha(dr, tr, params.width)
-            u = np.clip(-4.0 * (x[mask] - params.center) / params.width * tr, -700, 700)
-            frac_r = alpha * np.exp(u)
-            out[mask] = params.pmin + (params.pmax - params.pmin) * (1.0 - frac_r)
-
-    if tail_type == TailType.MIRROR:
-        dr, tr = params.delta_l, params.tau_l  # shared value for both tails, matching
-        right_edge = params.center + dr        # cline_function's own MIRROR convention
         mask = x > right_edge
         if np.any(mask):
             alpha = _hzar_tail_alpha(dr, tr, params.width)
@@ -422,9 +423,12 @@ def t_cline_function(x: np.ndarray, params: ClineParams) -> np.ndarray:
     everywhere, with no corners at all, addressing the real, documented
     NUTS convergence difficulty those two functions' tail models have
     (see this module's own top-level docstring and BACKEND_PHASE2.md
-    section 12: "the tail model is continuous... but not smooth... a kink
-    is a real obstacle" for gradient-based samplers). Baird & Daley give
-    the underlying structural reason: the tripartite model's sigmoid-core-
+    section 12, whose original "continuous but not smooth" description
+    was itself checked directly and corrected -- for `cline_function`'s
+    default, non-HZAR tail formula, the join is a genuine VALUE
+    discontinuity for a generic fitted delta, not just a derivative
+    kink). Baird & Daley give the underlying structural reason,
+    independently and correctly: the tripartite model's sigmoid-core-
     meets-exponential-tail joins are genuine mathematical discontinuities
     ("corners"), not a numerical inconvenience specific to any particular
     optimizer or sampler.

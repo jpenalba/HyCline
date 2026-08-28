@@ -21,6 +21,7 @@ import pandas as pd
 from hycline.data.schema import (
     AlleleFreqTransect, HybridIndexLocusData,
     GenotypeLikelihoodTransect, GenotypeLikelihoodLocusData, TraitTransect,
+    values_consistent,
 )
 
 
@@ -861,17 +862,17 @@ def read_trait_csv(path: str,
 
     if mean_col not in df.columns:
         raise TransectCSVError(f"--mean-col '{mean_col}' not found in '{path}'.")
-    trait_mean = df[mean_col].to_numpy(dtype=float)
+    trait_mean = _numeric_col(df, mean_col, path)
 
     if n_col not in df.columns:
         raise TransectCSVError(f"--n-col '{n_col}' not found in '{path}'.")
-    n = df[n_col].to_numpy(dtype=float)
+    n = _numeric_col(df, n_col, path)
 
     trait_sd = None
     if sd_col is not None:
         if sd_col not in df.columns:
             raise TransectCSVError(f"--sd-col '{sd_col}' not found in '{path}'.")
-        trait_sd = df[sd_col].to_numpy(dtype=float)
+        trait_sd = _numeric_col(df, sd_col, path)
 
     site_names = None
     if site_col is not None:
@@ -950,7 +951,7 @@ def read_raw_trait_csv(path: str, trait_col: str = "trait_value",
 
     if trait_col not in df.columns:
         raise TransectCSVError(f"--trait-col '{trait_col}' not found in '{path}'.")
-    trait_value = df[trait_col].to_numpy(dtype=float)
+    trait_value = _numeric_col(df, trait_col, path, allow_missing=True)
 
     if site_col is not None:
         if site_col not in df.columns:
@@ -967,7 +968,7 @@ def read_raw_trait_csv(path: str, trait_col: str = "trait_value",
             site_distance[site] = distance[i]
             site_order.append(site)
             site_values[site] = []
-        elif site_distance[site] != distance[i]:
+        elif not values_consistent(site_distance[site], distance[i]):
             raise TransectCSVError(
                 f"Site '{site}' has inconsistent {distance_col or 'distance'} values "
                 f"({site_distance[site]} vs {distance[i]}) across its individuals in "
@@ -1051,9 +1052,10 @@ def read_multi_trait_wide_csv(path: str,
                 f"Trait '{trait}' is missing its '{mean_suffix}' or '{n_suffix}' column in "
                 f"'{path}'."
             )
-        trait_mean = df[mean_col].to_numpy(dtype=float)
-        n = df[n_col].to_numpy(dtype=float)
-        trait_sd = df[sd_col].to_numpy(dtype=float) if sd_col in df.columns else None
+        trait_mean = _numeric_col(df, mean_col, path, allow_missing=True)
+        n = _numeric_col(df, n_col, path, allow_missing=True)
+        trait_sd = (_numeric_col(df, sd_col, path, allow_missing=True)
+                    if sd_col in df.columns else None)
 
         mask = ~(np.isnan(trait_mean) | np.isnan(n))
         if trait_sd is not None:

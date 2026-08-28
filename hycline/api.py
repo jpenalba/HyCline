@@ -51,10 +51,17 @@ def fit_cline(transect: AlleleFreqTransect,
         likelihood surface isn't well-approximated by a Gaussian (common
         for `width` with sparse data -- see BACKEND_PHASE2.md section 9
         for a worked example on real data).
-    tail_type : cline tail configuration. Both methods currently only
-        support TailType.NONE for the Bayesian path (BACKEND_PHASE2.md
-        section 10); the classic path supports the full tail family via
-        `hycline.selection.aicc.compare_models` separately.
+    tail_type : cline tail configuration. The classic path supports the
+        full tail family (including TailType.T_CLINE), also available
+        via `hycline.selection.aicc.compare_models` for model selection.
+        The Bayesian path supports TailType.NONE/LEFT/RIGHT/BOTH/MIRROR
+        (with a real, documented NUTS convergence difficulty for the
+        non-NONE cases -- a UserWarning fires and BACKEND_PHASE2.md
+        section 12.2 has the full investigation) but not
+        TailType.T_CLINE, which raises a clear error instead of silently
+        fitting a plain sigmoid (a real JAX/betainc gradient limitation --
+        see `hycline.models.cline.t_cline_function`'s docstring and
+        BACKEND_PHASE2.md section 15.3).
     pmin_fixed, pmax_fixed : if given, held fixed rather than estimated,
         matching HZAR's "scaling=fixed" mode in both methods. For
         method="classic" this dispatches to `fit_mle_fixed_extremes`

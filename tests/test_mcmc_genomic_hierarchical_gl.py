@@ -142,3 +142,25 @@ def test_extreme_depth_contrast_gl_aware_achieves_better_coverage():
 
     assert gl_covers
     assert not hard_covers
+
+
+def test_fit_hierarchical_genomic_batch_gl_calls_uneven_sampling_warning():
+    # Regression test: fit_hierarchical_genomic_batch_gl never called
+    # _warn_if_hybrid_index_distribution_uneven (the Bailey 2024
+    # steep-cline/sparse-hybrid-index check), so the warning silently
+    # never fired for genotype-likelihood input, only for hard-count
+    # input via fit_hierarchical_genomic_batch. Verified here at the
+    # call-site level (mocked, with minimal MCMC settings for speed) --
+    # the full end-to-end statistical behavior of the warning itself is
+    # already covered by the hard-count path's own dedicated tests.
+    from unittest.mock import patch
+    import hycline.inference.mcmc_genomic_hierarchical_gl as mod
+
+    (hybrid_index, log_gl0, log_gl1, log_gl2, *_rest) = _simulate_multi_locus_genomic_gl(
+        seed=7, n_loci=2, n_ind=20)
+
+    with patch.object(mod, "_warn_if_hybrid_index_distribution_uneven") as mock_warn:
+        mod.fit_hierarchical_genomic_batch_gl(
+            hybrid_index, log_gl0, log_gl1, log_gl2,
+            num_warmup=20, num_samples=20, num_chains=1, seed=0)
+        mock_warn.assert_called_once()

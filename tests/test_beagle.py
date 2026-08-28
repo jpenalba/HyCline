@@ -201,6 +201,39 @@ def test_write_beagle_genomic_gl_csv_hybrid_index_validation(beagle_path, tmp_pa
                                      str(tmp_path / "out.csv"))
 
 
+def test_write_beagle_genomic_hard_count_csv_masks_missing_gl_individuals(
+        beagle_metadata_df, tmp_path):
+    # Regression test: this writer used to never mask missing/
+    # uninformative genotype likelihoods, unlike every sibling hard-count
+    # writer. ANGSD's real missing-data convention is a flat/tied triple
+    # (e.g. 0.333333,0.333333,0.333333) -- np.argmax on an exact tie
+    # always picks index 0, so a missing individual was silently written
+    # out as a fully-genotyped, confident reference homozygote (.n=ploidy,
+    # .freq=0.0) instead of excluded.
+    from hycline.data.beagle import BeagleData
+
+    data = BeagleData(
+        marker_names=["locus1"], sample_names=["ind0", "ind1", "ind2"],
+        allele1=["A"], allele2=["T"],
+        gl0=np.array([[0.9, 0.333333, 0.1]]),
+        gl1=np.array([[0.05, 0.333333, 0.1]]),
+        gl2=np.array([[0.05, 0.333333, 0.8]]),
+    )
+    out_path = tmp_path / "out.csv"
+    write_beagle_genomic_hard_count_csv(data, beagle_metadata_df, "individual",
+                                         "hybrid_index", str(out_path))
+    out_df = pd.read_csv(out_path)
+
+    # ind1 (row index 1) has the tied/missing GL triple -- must be
+    # excluded (n=0, freq=NaN), not reported as a confident ref-homozygote.
+    row = out_df.set_index("individual").loc["ind1"]
+    assert row["locus1.n"] == 0
+    assert np.isnan(row["locus1.freq"])
+    # ind0 and ind2 have real signal and should still be reported normally.
+    assert out_df.set_index("individual").loc["ind0", "locus1.n"] == 2
+    assert out_df.set_index("individual").loc["ind2", "locus1.n"] == 2
+
+
 def test_write_beagle_genomic_hard_count_csv_basic(beagle_path, beagle_metadata_df, tmp_path):
     data = read_beagle(beagle_path)
     out_path = tmp_path / "out.csv"

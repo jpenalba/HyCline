@@ -124,6 +124,8 @@ def geographic_cline_variance(locus_widths) -> GeographicClineVariance:
     GeographicClineVariance
     """
     widths = np.asarray(locus_widths, dtype=float)
+    if not np.all(np.isfinite(widths)):
+        raise ValueError("Cline widths must be finite (no NaN/Inf).")
     if np.any(widths <= 0):
         raise ValueError("Cline widths must be positive.")
     if len(widths) < 2:
@@ -132,7 +134,9 @@ def geographic_cline_variance(locus_widths) -> GeographicClineVariance:
     slopes = 4.0 / widths
     mean_slope = float(np.mean(slopes))
     sd_slope = float(np.std(slopes, ddof=1))
-    cv_slope = float(sd_slope / abs(mean_slope)) if mean_slope != 0 else float("inf")
+    # mean_slope is always > 0 here (widths are already validated positive
+    # and finite above, so 4/widths is too) -- no divide-by-zero guard needed.
+    cv_slope = float(sd_slope / mean_slope)
 
     return GeographicClineVariance(mean_slope=mean_slope, sd_slope=sd_slope,
                                     cv_slope=cv_slope, n_loci=len(widths))
@@ -164,7 +168,12 @@ class GenomicClineVariance:
                               "of the 31 reference data points the calibration was fit on "
                               "(see calibration_data_range()) -- theta here is an extrapolation, "
                               "treat it with extra caution.")
-            if self.theta_estimate <= 0:
+            if not np.isfinite(self.theta_estimate):
+                lines.append("    WARNING: theta is not a finite number (NaN/Inf) -- this "
+                              "means sigma_c and/or sigma_v themselves were not finite, so "
+                              "no coupling interpretation is possible. Check the raw "
+                              "sigma_c/sigma_v inputs.")
+            elif self.theta_estimate <= 0:
                 lines.append("    WARNING: theta is a ratio of selection to recombination "
                               "(s/r) and is theoretically always positive -- a non-positive "
                               "estimate here means this (sigma_c, sigma_v) combination falls "
@@ -222,6 +231,8 @@ def genomic_cline_variance(locus_u, locus_v,
         raise ValueError("locus_u and locus_v must have the same length.")
     if len(u) < 2:
         raise ValueError("Need at least 2 loci to compute across-locus variance.")
+    if not (np.all(np.isfinite(u)) and np.all(np.isfinite(v))):
+        raise ValueError("locus_u and locus_v must be finite (no NaN/Inf) for every locus.")
     if np.any(v <= 0):
         raise ValueError("v must be positive for every locus.")
 

@@ -179,3 +179,22 @@ def test_locus_summary_and_population_summary_are_consistent_shapes():
 
     s = result.summary()
     assert "population-level" in s.lower()
+
+
+def test_derive_pmin_pmax_raises_clear_error_for_zero_coverage_locus():
+    # Regression test: _derive_pmin_pmax divided by the summed allele
+    # count over edge sites with no zero-guard, producing NaN pmin/pmax
+    # for a locus with zero sampled alleles at its edge sites -- which
+    # then crashed the ENTIRE batched hierarchical fit deep inside NUTS
+    # initialization (a NaN probability for one locus aborting every
+    # locus in the batch), instead of a clear, locus-identifying error
+    # raised before ever reaching the sampler.
+    distance = np.array([0., 10., 20., 30., 40.])
+    n_alleles = np.array([[0., 0., 0., 20., 20.],
+                           [10., 10., 10., 10., 10.]])
+    n_focal = np.array([[0., 0., 0., 10., 10.],
+                         [5., 5., 5., 5., 5.]])
+
+    with pytest.raises(ValueError, match="sparse_locus"):
+        _derive_pmin_pmax(distance, n_alleles, n_focal, n_edge_sites=3,
+                           locus_names=["sparse_locus", "ok_locus"])

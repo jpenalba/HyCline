@@ -306,6 +306,45 @@ def test_cli_fit_without_hzar_tail_flag_shows_no_hzar_label(tmp_path):
     assert run_config["hzar_tail"] is False
 
 
+def test_cli_fit_geographic_classic_mirror_se_columns_match_point_estimate_names(tmp_path):
+    """Regression test: param_names() labels MIRROR's shared tail param
+    "delta_m"/"tau_m", but the classic-MLE summary CSV's point-estimate
+    columns are written under "delta_l"/"tau_l" (fit.params.delta_l/
+    tau_l). Before the fix, the *_se columns were named "delta_m_se"/
+    "tau_m_se" -- orphaned names that don't pair with any point-estimate
+    column in the same CSV. Now they're remapped to match."""
+    import numpy as np
+    from hycline.models.cline import ClineParams, TailType, cline_function
+
+    rng = np.random.default_rng(1009)
+    n_sites = 30
+    distance = np.sort(rng.uniform(0, 100, n_sites))
+    n_alleles = rng.integers(20, 40, n_sites)
+    true_params = ClineParams(center=50, width=20, pmin=0.1, pmax=0.9, delta_l=0.15, tau_l=8.0)
+    p_true = cline_function(distance, true_params, TailType.MIRROR)
+    n_focal = rng.binomial(n_alleles, np.clip(p_true, 0, 1))
+
+    input_path = tmp_path / "genotypes.csv"
+    pd.DataFrame({"distance": distance, "locus0.nSamples": n_alleles,
+                  "locus0.A": n_focal / n_alleles}).to_csv(input_path, index=False)
+    out_dir = tmp_path / "out"
+
+    result = _run_cli([
+        "fit-geographic", "--input", str(input_path), "--tail", "mirror",
+        "--method", "classic", "--output-dir", str(out_dir),
+    ])
+    assert result.returncode == 0, result.stderr
+
+    summary_df = pd.read_csv(out_dir / "hycline_summary.csv")
+    assert "delta_l" in summary_df.columns and "tau_l" in summary_df.columns
+    assert "delta_m" not in summary_df.columns and "tau_m" not in summary_df.columns
+    # the *_se columns must pair with the point-estimate columns above,
+    # not the orphaned "delta_m_se"/"tau_m_se" the pre-fix code produced.
+    assert "delta_l_se" in summary_df.columns and "tau_l_se" in summary_df.columns
+    assert "delta_m_se" not in summary_df.columns
+    assert "tau_m_se" not in summary_df.columns
+
+
 def test_cli_fit_classic_on_real_manakin_data(tmp_path):
     out_dir = tmp_path / "out"
     result = _run_cli([
@@ -1008,6 +1047,28 @@ def test_cli_fit_hierarchical_genomic_gl_runs_end_to_end(tmp_path):
     assert (out_dir / "test_hierarchical_overlay.png").exists()
 
 
+def test_cli_fit_hierarchical_genomic_gl_pool_center_gives_actionable_error(tmp_path):
+    """Regression test: --pool-center used to be accepted by
+    fit-hierarchical-genomic's parser for GL input too, but
+    fit_hierarchical_genomic_batch_gl's underlying NumPyro model has no
+    pool_center parameter at all (no mu_center/sigma_center sampling
+    sites) -- passing --pool-center with GL input either crashed with a
+    confusing TypeError deep inside the model, or silently ignored the
+    flag depending on the code path. Now it fails fast with a clear
+    message instead."""
+    csv_path = tmp_path / "gl_genomic.csv"
+    _write_gl_genomic_csv(csv_path)
+
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "fit-hierarchical-genomic", "--input", str(csv_path),
+        "--individual-col", "individual", "--pool-center",
+        "--output-dir", str(out_dir),
+    ])
+    assert result.returncode != 0
+    assert "--pool-center is not supported for genotype-likelihood input" in result.stderr
+
+
 def test_cli_fit_hierarchical_geographic_gl_actionable_error_on_missing_data(tmp_path):
     import pandas as pd
     import numpy as np
@@ -1021,6 +1082,62 @@ def test_cli_fit_hierarchical_geographic_gl_actionable_error_on_missing_data(tmp
     out_dir = tmp_path / "out"
     result = _run_cli([
         "fit-hierarchical-geographic", "--input", str(csv_path), "--individual-col", "individual",
+        "--output-dir", str(out_dir),
+    ])
+    assert result.returncode != 0
+    assert "hierarchical batch fitting requires every locus" in result.stderr
+    # Regression test for the kind_label/unit_label split fix: GL
+    # geographic data is per-individual (unlike hard-count geographic
+    # data, which is per-site), but should still suggest the geographic
+    # sibling command (fit-geographic), not fit-genomic, as the
+    # per-locus fallback. Before the fix, unit_label was derived from
+    # kind_label alone, so this message either used the wrong noun
+    # ("sites" for per-individual GL data) or (if kind_label had been
+    # hacked to "genomic" to get the right noun) suggested the wrong
+    # fallback command.
+    assert "at exactly the same individuals" in result.stderr
+    assert "hycline fit-geographic" in result.stderr
+
+
+def test_cli_fit_hierarchical_geographic_detects_reordered_covariate_mismatch(tmp_path):
+    """Regression test for _try_stack_dense's sorted-vs-exact covariate
+    comparison fix (a real, verified improvement -- see its docstring
+    for the honestly-documented residual limitation this does NOT
+    close). Built so a *sorted* comparison of the two loci's retained
+    distance arrays would incorrectly consider them a match (same
+    sorted values) while the correct *exact*, positional comparison
+    catches that they are not actually aligned:
+
+    Input has 4 sites in un-sorted-by-distance order [10, 20, 30, 20]
+    (two different physical sites happen to share distance=20). locusA
+    is missing data at the FIRST distance=20 site (row 1); locusB is
+    missing data at the SECOND distance=20 site (row 3). After each
+    locus independently drops its own missing row:
+      locusA retains rows [0, 2, 3] -> distances [10, 30, 20]
+      locusB retains rows [0, 1, 2] -> distances [10, 20, 30]
+    These are permutations of each other (same sorted values [10, 20,
+    30]) but genuinely misaligned position-by-position -- stacking them
+    as if dense would silently pair the wrong individuals' data across
+    loci. Before the fix (sorted comparison), this was silently treated
+    as dense and would have proceeded with misaligned data instead of
+    raising this error."""
+    import pandas as pd
+    import numpy as np
+
+    df = pd.DataFrame({
+        "locationID": ["site0", "site1", "site2", "site3"],
+        "distance": [10.0, 20.0, 30.0, 20.0],
+        "locusA.nSamples": [20, 20, 20, 20],
+        "locusA.A": [0.5, np.nan, 0.5, 0.5],
+        "locusB.nSamples": [20, 20, 20, 20],
+        "locusB.A": [0.5, 0.5, 0.5, np.nan],
+    })
+    csv_path = tmp_path / "reordered_tie.csv"
+    df.to_csv(csv_path, index=False)
+
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "fit-hierarchical-geographic", "--input", str(csv_path), "--site-col", "locationID",
         "--output-dir", str(out_dir),
     ])
     assert result.returncode != 0
@@ -1556,6 +1673,71 @@ def test_cli_estimate_hybrid_index_recovers_known_true_hybrid_index(tmp_path):
     assert np.mean(np.abs(hybrid_h - true_h)) < 0.1
 
 
+def test_cli_estimate_hybrid_index_polarizes_mixed_orientation_loci(tmp_path):
+    """Regression test for a real, CRITICAL bug found during a code
+    -review pass and verified live end-to-end through this exact CLI
+    command: estimate-hybrid-index never polarized/re-oriented per-locus
+    allele dosage to a consistent "population-1 allele" direction before
+    averaging across loci, even though estimate_hybrid_index's own
+    docstring requires that. REF/ALT assignment in a real VCF is
+    arbitrary with respect to which parental population carries which
+    allele -- a completely normal consequence of variant calling, not an
+    edge case -- so a multi-locus input with some loci oriented one way
+    and some the other used to pull every individual's estimated hybrid
+    index toward 0.5 regardless of true ancestry.
+
+    Every OTHER hybrid-index test in this file uses
+    _write_hybrid_index_input_vcf, which deliberately builds every locus
+    with the SAME orientation (true_freq_pop1 uniformly high, pop0
+    uniformly low) -- exactly why this defect went undetected until a
+    direct live check with a genuinely mixed-orientation VCF was run.
+    This test is that mixed-orientation VCF, built directly (not via the
+    shared helper) so the orientation of each locus is explicit and
+    controlled."""
+    import pandas as pd
+
+    vcf_path = tmp_path / "mixed_orientation.vcf"
+    metadata_path = tmp_path / "metadata.csv"
+    header = ("##fileformat=VCFv4.2\n"
+               "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"
+               "pop0_a\tpop0_b\tpop1_a\tpop1_b\ttest_ind\n")
+    # locusA: normal orientation (pop1 homozygous ALT, pop0 homozygous REF)
+    # locusB: reversed orientation (pop1 homozygous REF, pop0 homozygous ALT)
+    # -- exactly what arbitrary REF/ALT assignment produces in practice.
+    lines = [
+        header,
+        "chr1\t100\tlocusA\tA\tT\t99\tPASS\t.\tGT\t0/0\t0/0\t1/1\t1/1\t1/1\n",
+        "chr1\t200\tlocusB\tA\tT\t99\tPASS\t.\tGT\t1/1\t1/1\t0/0\t0/0\t0/0\n",
+    ]
+    with open(vcf_path, "w") as f:
+        f.writelines(lines)
+    pd.DataFrame([
+        {"individual": "pop0_a", "population": "pop0"},
+        {"individual": "pop0_b", "population": "pop0"},
+        {"individual": "pop1_a", "population": "pop1"},
+        {"individual": "pop1_b", "population": "pop1"},
+    ]).to_csv(metadata_path, index=False)
+
+    output_path = tmp_path / "hybrid_index.csv"
+    result = _run_cli([
+        "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
+        "--population-col", "population", "--pop0-label", "pop0",
+        "--pop1-label", "pop1", "--output", str(output_path),
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "Re-orienting 1/2 loci" in result.stdout
+
+    out_df = pd.read_csv(output_path).set_index("individual")
+    # The concrete, verified fix: parental reference individuals -- known
+    # pure ancestry by construction -- now land exactly at the extremes,
+    # not 0.5 as they did before this fix.
+    assert out_df.loc["pop0_a", "hybrid_index"] == pytest.approx(0.0)
+    assert out_df.loc["pop0_b", "hybrid_index"] == pytest.approx(0.0)
+    assert out_df.loc["pop1_a", "hybrid_index"] == pytest.approx(1.0)
+    assert out_df.loc["pop1_b", "hybrid_index"] == pytest.approx(1.0)
+    assert out_df.loc["test_ind", "hybrid_index"] == pytest.approx(1.0)
+
+
 def test_cli_estimate_hybrid_index_weight_by_differentiation_runs(tmp_path):
     vcf_path = tmp_path / "genotypes.vcf"
     metadata_path = tmp_path / "metadata.csv"
@@ -1761,6 +1943,33 @@ def test_cli_estimate_hybrid_index_missing_locus_in_freq_csv_actionable_error(tm
     assert "no row for locus" in result.stderr
 
 
+def test_cli_estimate_hybrid_index_duplicate_locus_row_in_freq_csv_actionable_error(tmp_path):
+    """Regression test: --parental-freq-csv (Mode 2) used to crash with
+    pandas' own unhelpful error (a duplicate-index .loc[] lookup returns
+    a DataFrame instead of a Series, breaking the downstream .to_numpy()
+    call) when the CSV had more than one row for the same locus -- a
+    realistic data-entry mistake (e.g. a locus accidentally appended
+    twice while merging frequency tables from different runs). Now
+    fails fast with a clear message naming the offending locus."""
+    import pandas as pd
+
+    vcf_path = tmp_path / "genotypes.vcf"
+    metadata_path = tmp_path / "metadata.csv"
+    _write_hybrid_index_input_vcf(vcf_path, metadata_path, n_loci=5)
+    freq_path = tmp_path / "freq.csv"
+    pd.DataFrame({"locus": ["locus0", "locus0", "locus1", "locus2", "locus3", "locus4"],
+                  "freq_pop0": [0.1, 0.15, 0.1, 0.1, 0.1, 0.1],
+                  "freq_pop1": [0.9, 0.85, 0.9, 0.9, 0.9, 0.9]}).to_csv(freq_path, index=False)
+
+    result = _run_cli([
+        "estimate-hybrid-index", "--input", str(vcf_path),
+        "--parental-freq-csv", str(freq_path), "--output", str(tmp_path / "out.csv"),
+    ])
+    assert result.returncode != 0
+    assert "more than one row for" in result.stderr
+    assert "locus0" in result.stderr
+
+
 def test_cli_estimate_hybrid_index_mode1_requires_metadata(tmp_path):
     """Regression test for a real design consequence of moving to VCF/
     beagle input: --population-col (Mode 1) now requires --metadata,
@@ -1775,6 +1984,29 @@ def test_cli_estimate_hybrid_index_mode1_requires_metadata(tmp_path):
     ])
     assert result.returncode != 0
     assert "requires --metadata" in result.stderr
+
+
+def test_cli_estimate_hybrid_index_mode1_metadata_file_not_found_actionable_error(tmp_path):
+    """Regression test: Mode 1 (--population-col) used to pass a
+    nonexistent --metadata path straight to pd.read_csv, producing
+    pandas' own raw FileNotFoundError traceback instead of the same
+    clear, actionable error every other input path in this command
+    gives for a missing file (--input, --parental-freq-csv already
+    checked existence; --metadata did not)."""
+    vcf_path = tmp_path / "genotypes.vcf"
+    metadata_path = tmp_path / "metadata.csv"
+    _write_hybrid_index_input_vcf(vcf_path, metadata_path)
+    missing_metadata_path = tmp_path / "does_not_exist.csv"
+
+    result = _run_cli([
+        "estimate-hybrid-index", "--input", str(vcf_path),
+        "--metadata", str(missing_metadata_path),
+        "--population-col", "population", "--pop0-label", "house",
+        "--pop1-label", "spanish", "--output", str(tmp_path / "out.csv"),
+    ])
+    assert result.returncode != 0
+    assert "--metadata file not found" in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 def test_cli_estimate_hybrid_index_beagle_input_works(tmp_path):
@@ -2988,6 +3220,46 @@ def test_cli_fit_trait_multi_fits_multiple_traits_and_recovers_known_cline(tmp_p
     assert (out_dir / "hycline_trait_multi_grid.png").exists()
 
 
+def test_cli_fit_trait_multi_mirror_se_columns_match_point_estimate_names(tmp_path):
+    """Regression test for the same MIRROR SE-naming bug as
+    test_cli_fit_geographic_classic_mirror_se_columns_match_point_estimate_names,
+    but in fit-trait-multi's own separate SE-writing code path (a
+    distinct fix site, not shared code with fit-geographic)."""
+    import numpy as np
+    from hycline.models.cline import TailType
+    from hycline.likelihoods.gaussian import mean_cline, variance_cline
+
+    rng = np.random.default_rng(1012)
+    n_sites = 30
+    distance = np.sort(rng.uniform(0, 150, n_sites))
+    n_per_site = rng.integers(40, 80, n_sites)
+    mu = mean_cline(distance, 60.0, 20.0, 5.0, 15.0, TailType.MIRROR, delta_l=0.1, tau_l=5.0)
+    var = variance_cline(distance, 60.0, 20.0, 0.3, 0.5, 0.3, TailType.NONE)
+
+    means, sds = [], []
+    for i in range(n_sites):
+        obs = rng.normal(mu[i], np.sqrt(var[i]), n_per_site[i])
+        means.append(obs.mean())
+        sds.append(obs.std())
+    data = {"distance": distance, "wing.mean": means, "wing.n": n_per_site, "wing.sd": sds}
+    input_path = tmp_path / "multi_trait.csv"
+    pd.DataFrame(data).to_csv(input_path, index=False)
+
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "fit-trait-multi", "--input", str(input_path), "--tail", "mirror",
+        "--output-dir", str(out_dir),
+    ])
+    assert result.returncode == 0, result.stderr
+
+    summary_df = pd.read_csv(out_dir / "hycline_trait_multi_summary.csv")
+    assert "delta_l" in summary_df.columns and "tau_l" in summary_df.columns
+    assert "delta_m" not in summary_df.columns and "tau_m" not in summary_df.columns
+    assert "delta_l_se" in summary_df.columns and "tau_l_se" in summary_df.columns
+    assert "delta_m_se" not in summary_df.columns
+    assert "tau_m_se" not in summary_df.columns
+
+
 def test_cli_fit_trait_multi_skips_trait_missing_sd_column(tmp_path):
     import numpy as np
     from hycline.models.cline import TailType
@@ -3053,3 +3325,25 @@ def test_cli_fit_hzar_tail_with_fixed_scaling_gives_actionable_error(tmp_path):
     assert "--hzar-tail is not supported together with --scaling fixed" in result.stdout
     assert "no loci fit successfully" in result.stderr
     assert "Traceback" not in result.stdout and "Traceback" not in result.stderr  # handled, not a crash
+
+
+def test_cli_fit_non_hzar_tail_with_fixed_scaling_gives_actionable_error(tmp_path):
+    """Regression test: the --scaling fixed guard only special-cased
+    --hzar-tail, not any other non-NONE --tail -- so
+    `--tail mirror --scaling fixed` (without --hzar-tail) used to hit
+    fit_mle_fixed_extremes's raw NotImplementedError ("FAILED to fit:
+    fit_mle_fixed_extremes currently only supports TailType.NONE")
+    instead of the same graceful SKIPPED path the --hzar-tail case gets."""
+    input_path = tmp_path / "genotypes.csv"
+    pd.DataFrame({"distance": [0, 50, 100], "locus0.nSamples": [30, 30, 30],
+                  "locus0.A": [0.1, 0.5, 0.9]}).to_csv(input_path, index=False)
+
+    result = _run_cli([
+        "fit-geographic", "--input", str(input_path), "--tail", "mirror",
+        "--scaling", "fixed", "--pmin", "0.05", "--pmax", "0.95",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    assert result.returncode == 1
+    assert "--tail mirror is not supported together with --scaling fixed" in result.stdout
+    assert "no loci fit successfully" in result.stderr
+    assert "Traceback" not in result.stdout and "Traceback" not in result.stderr

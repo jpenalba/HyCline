@@ -38,6 +38,7 @@ import numpy as np
 import pandas as pd
 
 from hycline.data.genotype_likelihood import phred_to_log_likelihood
+from hycline.data.schema import values_consistent
 
 
 @dataclass
@@ -51,6 +52,7 @@ class VCFData:
     n_skipped_multiallelic: int = 0
     n_skipped_indel: int = 0
     n_skipped_no_gt: int = 0
+    n_skipped_invariant: int = 0  # ALT="." -- no alternate allele, not a real SNP
     n_loci_without_pl: int = 0  # loci where PL was requested but missing for every sample
 
     def __len__(self) -> int:
@@ -115,6 +117,7 @@ def read_vcf(path: str, samples: list | None = None, extract_pl: bool = False,
     n_skipped_multiallelic = 0
     n_skipped_indel = 0
     n_skipped_no_gt = 0
+    n_skipped_invariant = 0
     n_loci_without_pl = 0
 
     header_samples = None
@@ -152,6 +155,12 @@ def read_vcf(path: str, samples: list | None = None, extract_pl: bool = False,
             fields = line.split("\t")
             chrom, pos, variant_id, ref, alt = fields[0], fields[1], fields[2], fields[3], fields[4]
 
+            if alt == ".":
+                # No-alternate-allele/invariant-site marker (VCF spec) --
+                # common in gVCF-derived joint-genotyped call sets. Not a
+                # real SNP, so not counted as multiallelic or indel.
+                n_skipped_invariant += 1
+                continue
             alt_alleles = alt.split(",")
             if len(alt_alleles) != 1:
                 n_skipped_multiallelic += 1
@@ -208,7 +217,8 @@ def read_vcf(path: str, samples: list | None = None, extract_pl: bool = False,
     if not locus_names:
         raise ValueError(
             f"No biallelic SNPs found in '{path}' (after skipping "
-            f"{n_skipped_multiallelic} multiallelic and {n_skipped_indel} indel sites). "
+            f"{n_skipped_multiallelic} multiallelic, {n_skipped_indel} indel, and "
+            f"{n_skipped_invariant} invariant (ALT='.') sites). "
             f"Check the file is a valid VCF with biallelic SNP records."
         )
 
@@ -221,6 +231,7 @@ def read_vcf(path: str, samples: list | None = None, extract_pl: bool = False,
         n_skipped_multiallelic=n_skipped_multiallelic,
         n_skipped_indel=n_skipped_indel,
         n_skipped_no_gt=n_skipped_no_gt,
+        n_skipped_invariant=n_skipped_invariant,
         n_loci_without_pl=n_loci_without_pl,
     )
 
@@ -263,7 +274,7 @@ def _join_metadata(vcf_data: VCFData, metadata_df, sample_col: str,
     sample_to_vcf_idx = {s: i for i, s in enumerate(vcf_data.sample_names)}
     vcf_indices = [sample_to_vcf_idx[s] for s in common_samples]
 
-    n_dropped = len(vcf_data.sample_names) - len(set(common_samples) & vcf_sample_set)
+    n_dropped = len(vcf_data.sample_names) - len(set(common_samples))
     return common_samples, vcf_indices, meta_subset, n_dropped
 
 
@@ -409,7 +420,7 @@ def write_geographic_hard_count_csv(vcf_data: VCFData, metadata_df, sample_col: 
             site_distance[site] = dist
             site_order.append(site)
             site_sample_positions[site] = []
-        elif site_distance[site] != dist:
+        elif not values_consistent(site_distance[site], dist):
             raise ValueError(
                 f"Site '{site}' has inconsistent {distance_col} values across its "
                 f"individuals in the metadata ({site_distance[site]} vs {dist}) -- every "

@@ -49,6 +49,17 @@ def test_geographic_cline_variance_requires_at_least_two_loci():
         geographic_cline_variance([10.0])
 
 
+def test_geographic_cline_variance_rejects_non_finite_widths():
+    # Regression test: np.any(widths <= 0) does not catch NaN/Inf (NaN
+    # comparisons are always False), so a non-finite width used to
+    # silently produce NaN mean_slope/sd_slope/cv_slope instead of
+    # raising -- realistic input, since a divergent hierarchical MCMC
+    # chain can write NaN straight into the locus-summary column this
+    # function consumes.
+    with pytest.raises(ValueError, match="finite"):
+        geographic_cline_variance([10.0, np.nan, 15.0])
+
+
 def test_geographic_cline_variance_summary_runs_and_has_no_theta():
     result = geographic_cline_variance([10.0, 15.0, 20.0])
     s = result.summary()
@@ -93,6 +104,27 @@ def test_genomic_cline_variance_estimate_theta_flag():
     without_theta = genomic_cline_variance(u, v, estimate_theta=False)
     assert with_theta.theta_estimate is not None
     assert without_theta.theta_estimate is None
+
+
+def test_genomic_cline_variance_rejects_non_finite_u_or_v():
+    # Regression test: same NaN/Inf blind spot as
+    # geographic_cline_variance for v, and u was never validated at all.
+    with pytest.raises(ValueError, match="finite"):
+        genomic_cline_variance([1.0, 2.0, np.nan], [2.0, 3.0, 4.0])
+    with pytest.raises(ValueError, match="finite"):
+        genomic_cline_variance([1.0, 2.0, 3.0], [2.0, np.inf, 4.0])
+
+
+def test_genomic_cline_variance_summary_flags_nan_theta_instead_of_misclassifying():
+    # Regression test: the theta classification (<=0 / >1 / else) had no
+    # NaN branch, so a NaN theta_estimate silently fell into the `else`
+    # clause and printed a false, specific biological claim ("theta < 1:
+    # consistent with weaker/partial coupling").
+    result = GenomicClineVariance(sd_logit_center=0.5, sd_log_v=0.5, n_loci=5,
+                                   theta_estimate=np.nan, within_calibration_range=True)
+    s = result.summary()
+    assert "not a finite number" in s
+    assert "weaker/partial coupling" not in s
 
 
 def test_genomic_cline_variance_summary_flags_negative_theta():

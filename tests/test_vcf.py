@@ -290,3 +290,50 @@ def test_all_four_writer_outputs_are_directly_readable(test_vcf_path, test_metad
     write_genomic_gl_csv(vcf_data, test_metadata_df, "individual", "hybrid_index", str(p4))
     result4 = read_genomic_gl_multi_locus_wide_csv(str(p4), individual_col="individual")
     assert len(result4) == 2
+
+
+def test_read_vcf_skips_invariant_alt_dot_records(tmp_path):
+    # Regression test: VCF records with ALT="." (the spec's no-alternate
+    # -allele/invariant-site marker, common in gVCF-derived joint
+    # -genotyped call sets) used to pass both the multiallelic filter
+    # (alt.split(",") on "." gives a length-1 list) and the indel filter
+    # (len(".") == 1) undetected, getting parsed as spurious "SNPs"
+    # instead of being skipped as the non-variant sites they are.
+    content = (
+        "##fileformat=VCFv4.2\n"
+        "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tsampleA\tsampleB\n"
+        "chr1\t100\tlocusA\tA\tT\t.\tPASS\t.\tGT\t0/0\t1/1\n"
+        "chr1\t200\tinvariant1\tA\t.\t.\tPASS\t.\tGT\t0/0\t0/0\n"
+    )
+    path = tmp_path / "invariant.vcf"
+    path.write_text(content)
+
+    data = read_vcf(str(path))
+
+    assert "invariant1" not in data.locus_names
+    assert data.locus_names == ["locusA"]
+    assert data.n_skipped_invariant == 1
+    assert data.n_skipped_multiallelic == 0
+    assert data.n_skipped_indel == 0
+
+
+def test_write_geographic_hard_count_csv_shared_missing_distance_not_inconsistent(tmp_path):
+    # Regression test: the site-distance consistency check used `!=`
+    # against possibly-NaN values, so a site where every individual
+    # genuinely has a missing (NaN) distance always raised a spurious
+    # "inconsistent distance values (nan vs nan)" error instead of
+    # treating identically-missing values as consistent.
+    from hycline.data.vcf import write_geographic_hard_count_csv
+    import pandas as pd
+
+    vcf_data = VCFData(locus_names=["locus1"], sample_names=["ind1", "ind2"],
+                        dosage=np.array([[1.0, 1.0]]))
+    metadata_df = pd.DataFrame({
+        "individual": ["ind1", "ind2"], "site": ["S1", "S1"],
+        "distance": [np.nan, np.nan],
+    })
+    out_path = tmp_path / "out.csv"
+    info = write_geographic_hard_count_csv(vcf_data, metadata_df, "individual", "site",
+                                            "distance", str(out_path))
+    assert info["n_sites"] == 1

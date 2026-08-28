@@ -354,3 +354,55 @@ def test_fit_mle_t_cline_asymmetric_warns_when_t_skew_hits_bound():
     with patch.object(mle_mod, "_fit_t_cline_multistart", return_value=_FakeResult()):
         with pytest.warns(UserWarning, match="landed at the search bound"):
             mle_mod.fit_mle(transect, tail_type=TailType.T_CLINE, t_cline_asymmetric=True)
+
+
+def test_initial_guess_and_bounds_agree_for_t_cline_with_hzar_tail():
+    # Regression test: _initial_guess's hzar_tail branch had no T_CLINE
+    # case (only reached when hzar_tail is False, in a separate elif),
+    # so calling it directly with hzar_tail=True and tail_type=T_CLINE
+    # produced a 5-element param vector with a NaN t_shape, while
+    # _bounds_for produced only 4 bounds -- a length mismatch. fit_mle
+    # itself already guards this combination with a clear error, so this
+    # is a defense-in-depth check on the private helpers directly.
+    from hycline.inference.mle import _initial_guess, _bounds_for
+
+    transect = _simulate(ClineParams(center=50.0, width=20.0, pmin=0.05, pmax=0.95))
+    guess = _initial_guess(transect, TailType.T_CLINE, hzar_tail=True)
+    x0 = guess.as_array(TailType.T_CLINE)
+    bounds = _bounds_for(transect, TailType.T_CLINE, hzar_tail=True)
+
+    assert len(x0) == len(bounds)
+    assert np.all(np.isfinite(x0))
+    assert guess.t_shape is not None and np.isfinite(guess.t_shape)
+
+
+def test_hzar_style_log_likelihood_respects_hzar_tail_flag():
+    # Regression test: hzar_style_log_likelihood always called
+    # predicted_freq without forwarding its own hzar_tail argument, so
+    # it silently reported the *original* tail formula's likelihood
+    # even when the caller explicitly asked for the HZAR-parameterized
+    # (hzar_tail=True) one -- wrong for any fit that actually used
+    # hzar_tail=True, since cline_function and hzar_cline_function
+    # generally disagree in the tail region (see cline.py's module
+    # docstring on the two formulas' real discontinuity).
+    from hycline.likelihoods.binomial import hzar_style_log_likelihood
+    from hycline.models.cline import hzar_cline_function
+
+    params = ClineParams(center=50.0, width=20.0, pmin=0.05, pmax=0.95,
+                          delta_l=15.0, tau_l=0.3)
+    rng = np.random.default_rng(11)
+    distance = np.sort(rng.uniform(-30, 130, size=60))
+    n_alleles = rng.integers(20, 50, size=60).astype(float)
+    true_freq = hzar_cline_function(distance, params, TailType.LEFT)
+    n_focal = rng.binomial(n_alleles.astype(int), np.clip(true_freq, 0, 1)).astype(float)
+    transect = AlleleFreqTransect(distance=distance, n_alleles=n_alleles, n_focal=n_focal)
+
+    ll_hzar = hzar_style_log_likelihood(transect, params, TailType.LEFT, hzar_tail=True)
+    ll_original = hzar_style_log_likelihood(transect, params, TailType.LEFT, hzar_tail=False)
+
+    # data was simulated from hzar_cline_function, so the hzar_tail=True
+    # likelihood must fit distinctly better than the (wrong-formula)
+    # hzar_tail=False one -- if the flag were being silently ignored,
+    # these two calls would return the identical value.
+    assert ll_hzar != pytest.approx(ll_original)
+    assert ll_hzar > ll_original

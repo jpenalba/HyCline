@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from hycline.data.schema import values_consistent
+
 EARTH_RADIUS_KM = 6371.0088  # IUGG mean Earth radius
 
 
@@ -77,7 +79,8 @@ def check_site_coordinate_consistency(site_labels, lat, lon) -> None:
     for site, la, lo in zip(site_labels, lat, lon):
         if site not in site_coord:
             site_coord[site] = (la, lo)
-        elif site_coord[site] != (la, lo):
+        elif not (values_consistent(site_coord[site][0], la)
+                  and values_consistent(site_coord[site][1], lo)):
             prev_la, prev_lo = site_coord[site]
             raise ValueError(
                 f"Site '{site}' has inconsistent coordinates across its individuals in "

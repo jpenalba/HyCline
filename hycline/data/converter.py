@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from hycline.data.genotype_likelihood import hard_genotype_to_log_likelihood
+from hycline.data.schema import values_consistent
 
 #: Column names never treated as a locus when auto-detecting locus columns
 #: from a wide genotype-dosage CSV -- covers every reserved column name
@@ -175,7 +176,7 @@ def convert_genotype_csv_to_hard_count_csv(input_path: str, output_path: str,
             site_distance[site] = dist
             site_order.append(site)
             site_row_positions[site] = []
-        elif site_distance[site] != dist:
+        elif not values_consistent(site_distance[site], dist):
             raise ValueError(
                 f"Site '{site}' has inconsistent {distance_col} values across its "
                 f"individuals ({site_distance[site]} vs {dist}) -- every individual at "

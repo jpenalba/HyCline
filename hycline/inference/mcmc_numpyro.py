@@ -164,7 +164,7 @@ def _sample_tail_params_hzar(tail_type, width_bound):
     """The HZAR-parameterized analog of `_sample_tail_params`: `delta` is
     a raw distance (the tail edge is `center +/- delta` directly, not a
     `[0, 1]` height fraction), bounded the same way
-    `hycline.inference.mle_trait._bounds_for_trait_hzar` bounds it for
+    `hycline.inference.mle_trait._bounds_for_trait` bounds it for
     classic MLE trait fitting -- `tau` bounded strictly positive
     (matching `_sample_tail_params`'s own tau bound, reused as-is since
     both parameterizations use `tau` as a decay-rate scale).
@@ -175,7 +175,7 @@ def _sample_tail_params_hzar(tail_type, width_bound):
     transect's own geographic span (`fit_mcmc`'s own default), a
     `*5` multiplier gave a delta prior roughly 50x the data's span,
     dramatically wider than the `d_span * 5` bound
-    `_bounds_for_trait_hzar` actually uses for the same parameter in the
+    `_bounds_for_trait` actually uses for the same parameter in the
     classic MLE case. That mismatch was caught during validation: a real
     fit against known ground truth (true delta_l=15) returned a
     posterior mean around 3000, driven by the sampler wandering into an
@@ -281,6 +281,15 @@ class BayesianFitResult:
         posterior down to a point estimate; use `.idata` directly for
         anything that needs the full uncertainty."""
         post = self.idata.posterior
+        if "locus" in post.dims:
+            raise ValueError(
+                "params is not meaningful on a multi-locus (fit_mcmc_batch) result -- "
+                "averaging posterior samples across the locus batch dimension would "
+                "silently produce a meaningless cross-locus average, not a per-locus "
+                "point estimate. Use .summary_df() for a per-locus table instead, or "
+                "index .idata.posterior by the 'locus' coordinate for a single locus's "
+                "posterior before constructing ClineParams by hand."
+            )
         kwargs = {}
         for name in ("center", "width", "pmin", "pmax", "delta_l", "tau_l", "delta_r", "tau_r"):
             if name in post:
@@ -372,6 +381,17 @@ def fit_mcmc(transect: AlleleFreqTransect, tail_type: TailType = TailType.NONE,
     -------
     BayesianFitResult
     """
+    if tail_type == TailType.T_CLINE:
+        raise ValueError(
+            "fit_mcmc does not support tail_type=TailType.T_CLINE -- Bayesian (NUTS) "
+            "fitting is not available for the T-cline, for a real, verified reason "
+            "(jax.scipy.special.betainc does not support gradients with respect to "
+            "its shape parameters, which t_shape needs -- see "
+            "hycline.models.cline.t_cline_function's own docstring and "
+            "BACKEND_PHASE2.md section 15.3). Use --method classic / "
+            "hycline.inference.mle.fit_mle instead for T-cline fitting."
+        )
+
     d_span = transect.distance.max() - transect.distance.min()
     center_bounds = (float(transect.distance.min() - d_span),
                       float(transect.distance.max() + d_span))
@@ -462,6 +482,14 @@ def fit_mcmc_batch(distance: np.ndarray, n_alleles: np.ndarray, n_focal: np.ndar
     BayesianFitResult whose posterior has a `locus` batch dimension for
     every sampled parameter -- use `.summary_df()` to get a per-locus table.
     """
+    if tail_type == TailType.T_CLINE:
+        raise ValueError(
+            "fit_mcmc_batch does not support tail_type=TailType.T_CLINE -- see "
+            "fit_mcmc's docstring for why Bayesian T-cline fitting is not available "
+            "(a real JAX/betainc gradient limitation, not a todo-list gap). Use "
+            "--method classic / hycline.inference.mle.fit_mle instead."
+        )
+
     distance = jnp.asarray(distance)
     n_alleles = jnp.asarray(n_alleles)
     n_focal = jnp.asarray(n_focal)

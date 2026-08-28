@@ -340,3 +340,94 @@ def test_fit_mcmc_batch_hzar_tail_default_false_matches_original():
     result = fit_mcmc_batch(distance, n_alleles[None, :], n_focal[None, :],
                              num_warmup=200, num_samples=200, num_chains=2, seed=0)
     assert result.hzar_tail is False
+
+
+def test_fit_mcmc_rejects_t_cline_with_clear_error():
+    # Regression test: fit_mcmc had no guard for TailType.T_CLINE, unlike
+    # the NumPy cline_function/hzar_cline_function which reject it
+    # explicitly -- it used to silently fit a plain sigmoid (dropping
+    # t_shape entirely) while still labeling the result "tail=t-cline"
+    # and printing a misleading non-smooth-join warning that doesn't
+    # apply to the T-cline architecture at all. Bayesian T-cline fitting
+    # is genuinely unsupported (a real JAX/betainc gradient limitation),
+    # so this must raise, not silently mis-fit.
+    rng = np.random.default_rng(0)
+    distance = np.sort(rng.uniform(-30, 60, 20))
+    n_alleles = rng.integers(20, 50, 20).astype(float)
+    n_focal = rng.binomial(n_alleles.astype(int), 0.5).astype(float)
+    transect = AlleleFreqTransect(distance=distance, n_alleles=n_alleles, n_focal=n_focal)
+
+    with pytest.raises(ValueError, match="T_CLINE"):
+        fit_mcmc(transect, tail_type=TailType.T_CLINE)
+
+
+def test_fit_mcmc_batch_rejects_t_cline_with_clear_error():
+    rng = np.random.default_rng(0)
+    distance = np.sort(rng.uniform(-30, 60, 20))
+    n_alleles = rng.integers(20, 50, 20).astype(float)
+    n_focal = rng.binomial(n_alleles.astype(int), 0.5).astype(float)
+
+    with pytest.raises(ValueError, match="T_CLINE"):
+        fit_mcmc_batch(distance, n_alleles[None, :], n_focal[None, :],
+                        tail_type=TailType.T_CLINE)
+
+
+def test_fit_cline_bayesian_rejects_t_cline_with_clear_error():
+    # Confirms the guard is reachable through the top-level documented
+    # unified API too, not just fit_mcmc directly -- this is the more
+    # severe reachability path the original finding flagged.
+    from hycline.api import fit_cline
+
+    rng = np.random.default_rng(0)
+    distance = np.sort(rng.uniform(-30, 60, 20))
+    n_alleles = rng.integers(20, 50, 20).astype(float)
+    n_focal = rng.binomial(n_alleles.astype(int), 0.5).astype(float)
+    transect = AlleleFreqTransect(distance=distance, n_alleles=n_alleles, n_focal=n_focal)
+
+    with pytest.raises(ValueError, match="T_CLINE"):
+        fit_cline(transect, method="bayesian", tail_type=TailType.T_CLINE)
+
+
+def test_convergence_check_flags_nan_rhat_from_single_chain():
+    # Regression test: check() used `rhat_max >= RHAT_THRESHOLD`, which is
+    # always False for NaN (e.g. num_chains=1, where R-hat is literally
+    # uncomputable) -- so a single-chain run got a clean "OK" with zero
+    # warnings instead of being flagged, even though the primary
+    # cross-chain convergence check never actually ran.
+    params = ClineParams(center=10.0, width=15.0, pmin=0.1, pmax=0.9)
+    rng = np.random.default_rng(5)
+    distance = np.sort(rng.uniform(-30, 60, 15))
+    n_alleles = rng.integers(20, 50, 15).astype(float)
+    p = cline_function(distance, params, TailType.NONE)
+    n_focal = rng.binomial(n_alleles.astype(int), p).astype(float)
+    transect = AlleleFreqTransect(distance=distance, n_alleles=n_alleles, n_focal=n_focal)
+
+    result = fit_mcmc(transect, num_chains=1, num_samples=300, num_warmup=300, seed=0)
+    report = check(result.idata)
+
+    assert np.isnan(report.rhat_max)
+    assert report.ok is False
+    assert any("NaN" in w for w in report.warnings)
+
+
+def test_bayesian_fit_result_params_rejects_multi_locus_batch():
+    # Regression test: BayesianFitResult.params silently averaged
+    # posterior samples across the "locus" batch dimension for a
+    # fit_mcmc_batch result, returning a meaningless cross-locus average
+    # with no error or warning.
+    rng = np.random.default_rng(11)
+    distance = np.sort(rng.uniform(-30, 130, 20))
+    n_alleles = rng.integers(20, 50, 20).astype(float)
+    centers = [30.0, 50.0, 70.0]
+    n_focal_rows = []
+    for c in centers:
+        p = cline_function(distance, ClineParams(center=c, width=15.0, pmin=0.1, pmax=0.9),
+                            TailType.NONE)
+        n_focal_rows.append(rng.binomial(n_alleles.astype(int), p).astype(float))
+    n_focal = np.stack(n_focal_rows)
+    n_alleles_batch = np.tile(n_alleles, (3, 1))
+
+    result = fit_mcmc_batch(distance, n_alleles_batch, n_focal, num_warmup=200,
+                             num_samples=200, num_chains=2, seed=0)
+    with pytest.raises(ValueError, match="multi-locus"):
+        result.params

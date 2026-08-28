@@ -30,6 +30,72 @@ from __future__ import annotations
 import numpy as np
 
 
+def polarize_genotypes(genotypes: np.ndarray, parental_freq_pop0: np.ndarray,
+                        parental_freq_pop1: np.ndarray, ploidy: int = 2) -> tuple:
+    """Re-orient per-locus allele dosage to consistently count the
+    "population-1" allele, as `estimate_hybrid_index` requires (see its
+    own docstring: "genotypes ... population-1 allele counts").
+
+    A REAL BUG THIS FIXES, not a defensive nicety: which allele a VCF
+    calls REF vs. ALT is arbitrary with respect to which parental
+    population carries more of it -- completely normal, expected variant
+    -calling behavior, not an edge case. Raw ALT-allele dosage (what
+    `hycline.data.vcf`/`hycline.data.beagle` produce) is therefore only
+    "population-1 allele dosage" at loci where population 1 happens to
+    be the more-ALT population; at a locus where population 0 is more
+    -ALT instead, the raw dosage points the opposite direction. Averaging
+    unpolarized dosage across loci with mixed orientations pulls every
+    individual's estimated hybrid index toward 0.5 regardless of true
+    ancestry -- confirmed directly: a synthetic 2-locus VCF with one
+    normally-oriented and one reversed-oriented locus made every
+    individual, including the four known-pure parental reference
+    individuals, come back at hybrid_index=0.500.
+
+    For each locus where `parental_freq_pop0 > parental_freq_pop1`
+    (population 0 is the more-ALT population there), this flips that
+    locus's dosage (`ploidy - dosage`) and complements its parental
+    frequencies (`1 - freq`) so that, after polarization, population 1
+    is always the more-"focal-allele" population at every locus,
+    matching what `estimate_hybrid_index` assumes. Loci where the two
+    parental frequencies are equal (locus provides no orientation
+    information either way) or where either is NaN (e.g. no reference
+    individuals had a non-missing genotype there) are left unflipped --
+    the comparison is False either way, which is the conservative,
+    correct choice since there's nothing to orient by.
+
+    Parameters
+    ----------
+    genotypes : (n_individuals, n_loci) array of raw allele dosage
+        (0..ploidy per individual per locus, NaN for missing).
+    parental_freq_pop0, parental_freq_pop1 : (n_loci,) arrays of each
+        locus's allele frequency in parental reference population 0/1,
+        in the SAME raw orientation `genotypes` uses (i.e. computed
+        directly from the same raw dosage, not already polarized).
+    ploidy : ploidy of the genotype calls (default 2, diploid).
+
+    Returns
+    -------
+    (polarized_genotypes, polarized_freq_pop0, polarized_freq_pop1) --
+    same shapes as the inputs, ready to pass to `estimate_hybrid_index`.
+    """
+    genotypes = np.asarray(genotypes, dtype=float)
+    parental_freq_pop0 = np.asarray(parental_freq_pop0, dtype=float)
+    parental_freq_pop1 = np.asarray(parental_freq_pop1, dtype=float)
+    if genotypes.ndim != 2:
+        raise ValueError("genotypes must be a 2D array (n_individuals, n_loci)")
+    if not (genotypes.shape[1] == parental_freq_pop0.shape[0] == parental_freq_pop1.shape[0]):
+        raise ValueError(
+            "genotypes.shape[1] (n_loci) must match the length of both "
+            "parental_freq_pop0 and parental_freq_pop1."
+        )
+
+    flip = parental_freq_pop0 > parental_freq_pop1  # NaN comparisons are False -- left unflipped
+    polarized_genotypes = np.where(flip, ploidy - genotypes, genotypes)
+    polarized_freq_pop0 = np.where(flip, 1.0 - parental_freq_pop0, parental_freq_pop0)
+    polarized_freq_pop1 = np.where(flip, 1.0 - parental_freq_pop1, parental_freq_pop1)
+    return polarized_genotypes, polarized_freq_pop0, polarized_freq_pop1
+
+
 def estimate_hybrid_index(genotypes: np.ndarray, ploidy: int = 2,
                            parental_freq_pop0: np.ndarray | None = None,
                            parental_freq_pop1: np.ndarray | None = None,

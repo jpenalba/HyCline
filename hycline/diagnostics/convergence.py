@@ -56,11 +56,18 @@ def check(idata: az.InferenceData) -> DiagnosticsReport:
     if "diverging" in idata.get("sample_stats", {}):
         n_divergences = int(np.sum(idata.sample_stats["diverging"].values))
 
-    n_chains = idata.posterior.dims.get("chain", 1)
-    n_draws = idata.posterior.dims.get("draw", 0)
+    n_chains = idata.posterior.sizes.get("chain", 1)
+    n_draws = idata.posterior.sizes.get("draw", 0)
 
     warnings = []
-    if rhat_max >= RHAT_THRESHOLD:
+    if np.isnan(rhat_max):
+        warnings.append(
+            "R-hat is NaN -- most commonly because num_chains=1, which makes the "
+            "cross-chain comparison R-hat measures literally uncomputable (not "
+            "evidence of good convergence). Use num_chains>=2 (the CLI default is "
+            "4) to get a real R-hat check."
+        )
+    elif rhat_max >= RHAT_THRESHOLD:
         warnings.append(
             f"R-hat = {rhat_max:.4f} >= {RHAT_THRESHOLD}. See BACKEND_PHASE2.md section 3: "
             "usually means either the data poorly constrains the cline, or the "

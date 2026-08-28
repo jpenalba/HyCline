@@ -79,6 +79,21 @@ def test_match_samples_to_populations_missing_column_raises():
                                       "parent1", "parent2")
 
 
+def test_match_samples_to_populations_duplicate_sample_row_raises_clear_error():
+    # Regression test: a metadata CSV with more than one row for the same
+    # sample name used to break with an opaque numpy error ("setting an
+    # array element with a sequence... inhomogeneous shape"), because
+    # pandas Series.get() on a non-unique index returns a Series instead
+    # of a scalar -- instead of a clear, actionable duplicate-row error.
+    metadata = pd.DataFrame({
+        "individual": ["ind1", "ind1", "ind2", "ind3"],
+        "population": ["parent1", "parent1", "parent1", "parent2"],
+    })
+    with pytest.raises(ValueError, match="more than one row"):
+        match_samples_to_populations(["ind1", "ind2", "ind3"], metadata, "individual",
+                                      "population", "parent1", "parent2")
+
+
 # ---------------------------------------------------------------------------
 # filter_aims_beagle
 # ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from hycline.data.schema import HybridIndexLocusData
+from hycline.inference.mle import _aicc
 from hycline.likelihoods.genomic_binomial import log_likelihood, negative_log_likelihood
 from hycline.models.genomic_cline import GenomicClineParams, param_names
 
@@ -89,13 +90,6 @@ def _numerical_hessian(fun, x0, eps=1e-4) -> np.ndarray:
             xmm[i] -= eps; xmm[j] -= eps
             hess[i, j] = (fun(xpp) - fun(xpm) - fun(xmp) + fun(xmm)) / (4 * eps * eps)
     return hess
-
-
-def _aicc(log_lik: float, k: int, n: int) -> float:
-    aic = 2 * k - 2 * log_lik
-    if n - k - 1 <= 0:
-        return np.inf
-    return aic + (2 * k * (k + 1)) / (n - k - 1)
 
 
 def null_model_aicc_delta(data, fit: GenomicFitResult,

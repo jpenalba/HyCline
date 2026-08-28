@@ -148,6 +148,13 @@ def fit_mle_trait(transect: TraitTransect, tail_type: TailType = TailType.NONE,
             "measurements) -- HZAR's own quantitative-trait likelihood always uses each "
             "site's observed sample variance as data, not just its mean."
         )
+    if tail_type == TailType.T_CLINE:
+        raise ValueError(
+            "fit_mle_trait does not support tail_type=TailType.T_CLINE -- the T-cline "
+            "(Baird & Daley 2025) was built for geographic/genomic allele-frequency "
+            "clines and has no quantitative-trait variance-model counterpart here. "
+            "Use TailType.NONE/LEFT/RIGHT/BOTH/MIRROR for trait clines instead."
+        )
 
     x0 = _initial_guess_trait(transect, tail_type)
     bounds = _bounds_for_trait(transect, tail_type)
