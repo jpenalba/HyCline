@@ -8,10 +8,13 @@ most loci don't differ much between the two parental populations, and
 including them dilutes real signal without adding power (this is exactly
 the same reason `hycline.data.hybrid_index.estimate_hybrid_index`
 supports `weight_by_differentiation` -- see BACKEND_PHASE3.md section 5).
-Pre-filtering to loci that are strongly differentiated (by default, one
-population's frequency in `[0.9, 1.0]` and the other's in `[0.0, 0.1]`,
-direction-agnostic) is standard practice in this field before any
-downstream cline or hybrid-index analysis. This module does that
+Pre-filtering to loci that are strongly differentiated -- by default, one
+population's frequency in `[0.9, 1.0]` and the other's in `[0.0, 0.1]`
+(`compute_aim_mask`, direction-agnostic), or alternatively any locus with
+at least a given absolute frequency difference between the two
+populations regardless of where each one falls (`compute_aim_mask_by_diff`)
+-- is standard practice in this field before any downstream cline or
+hybrid-index analysis. This module does that
 filtering directly on the two real upstream formats this project's own
 workflow is built around -- a VCF file or ANGSD's own beagle-format
 genotype-likelihood output -- producing a filtered file in the *same*
@@ -34,23 +37,82 @@ from hycline.data.converter import DEFAULT_RESERVED_COLUMNS, detect_genotype_loc
 
 
 def compute_aim_mask(freq_pop1: np.ndarray, freq_pop2: np.ndarray,
-                      low_threshold: float = 0.1, high_threshold: float = 0.9) -> np.ndarray:
+                      high_threshold: float = 0.9) -> np.ndarray:
     """Boolean mask, one entry per locus: True where the locus is a
     strong ancestry-informative marker -- one population's frequency at
     or above `high_threshold` and the other's at or below
-    `low_threshold`, in *either* direction (it doesn't matter which
+    `1 - high_threshold`, in *either* direction (it doesn't matter which
     parental population happens to carry the higher-frequency allele,
-    only that the two populations are strongly differentiated)."""
+    only that the two populations are strongly differentiated).
+
+    Only one threshold, not two: the low side is always `1 -
+    high_threshold`, never independently set -- an asymmetric pair
+    (e.g. `>= 0.9` in one population but `<= 0.2`, not `0.1`, in the
+    other) was never actually used, and carrying two numbers that must
+    always satisfy `low == 1 - high` is redundant, not extra
+    flexibility. See `compute_aim_mask_by_diff` for a genuinely
+    different (not just re-parameterized) criterion: a locus can pass
+    that test without either population being anywhere near the 0/1
+    extremes this function requires."""
     freq_pop1 = np.asarray(freq_pop1, dtype=float)
     freq_pop2 = np.asarray(freq_pop2, dtype=float)
-    if low_threshold >= high_threshold:
+    if not (0.5 < high_threshold <= 1.0):
         raise ValueError(
-            f"--low-threshold ({low_threshold}) must be less than --high-threshold "
-            f"({high_threshold})."
+            f"--high-threshold ({high_threshold}) must be greater than 0.5 and at "
+            f"most 1.0 (the low side is always 1 - --high-threshold, so it must stay "
+            f"below --high-threshold itself)."
         )
+    low_threshold = 1.0 - high_threshold
     direction_a = (freq_pop1 >= high_threshold) & (freq_pop2 <= low_threshold)
     direction_b = (freq_pop1 <= low_threshold) & (freq_pop2 >= high_threshold)
     return direction_a | direction_b
+
+
+def compute_aim_mask_by_diff(freq_pop1: np.ndarray, freq_pop2: np.ndarray,
+                              min_freq_diff: float = 0.5) -> np.ndarray:
+    """Boolean mask, one entry per locus: True where the absolute
+    allele-frequency difference between the two parental populations is
+    at least `min_freq_diff`.
+
+    A genuinely different criterion from `compute_aim_mask`'s two-sided
+    extremes test, not just a different parameterization of the same
+    one: a locus with freq_pop1=0.7, freq_pop2=0.1 has a 0.6 frequency
+    difference (would pass `--min-freq-diff 0.5`) but fails
+    `compute_aim_mask`'s default `--high-threshold 0.9` test outright,
+    since neither population reaches 0.9 or drops to 0.1. Which
+    criterion is more appropriate depends on the downstream use --
+    `compute_aim_mask`'s extremes test favors loci closest to fixed
+    differences (the strongest possible ancestry signal per locus,
+    fewer retained loci); this favors loci with a real, usable
+    difference wherever it falls (more retained loci, weaker signal
+    each)."""
+    freq_pop1 = np.asarray(freq_pop1, dtype=float)
+    freq_pop2 = np.asarray(freq_pop2, dtype=float)
+    if not (0.0 < min_freq_diff <= 1.0):
+        raise ValueError(
+            f"--min-freq-diff ({min_freq_diff}) must be greater than 0.0 and at "
+            f"most 1.0."
+        )
+    return np.abs(freq_pop1 - freq_pop2) >= min_freq_diff
+
+
+def _resolve_aim_mask(freq_pop1: np.ndarray, freq_pop2: np.ndarray,
+                       high_threshold: float | None, min_freq_diff: float | None) -> np.ndarray:
+    """Shared dispatch between `compute_aim_mask`'s two-sided-threshold
+    mode and `compute_aim_mask_by_diff`'s absolute-difference mode --
+    mutually exclusive, matching every other "give exactly one of X or
+    Y" convention in this project (e.g. `estimate-hybrid-index`'s two
+    modes). `high_threshold` defaults to 0.9 (the pre-existing default
+    threshold-mode behavior) when neither is given explicitly."""
+    if high_threshold is not None and min_freq_diff is not None:
+        raise ValueError(
+            "--high-threshold and --min-freq-diff are mutually exclusive -- give "
+            "at most one (default: --high-threshold 0.9 if neither is given)."
+        )
+    if min_freq_diff is not None:
+        return compute_aim_mask_by_diff(freq_pop1, freq_pop2, min_freq_diff)
+    return compute_aim_mask(freq_pop1, freq_pop2,
+                             high_threshold if high_threshold is not None else 0.9)
 
 
 def match_samples_to_populations(sample_names: list, metadata_df: pd.DataFrame,
@@ -116,11 +178,17 @@ def _expected_freq_from_gl(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray) ->
 def filter_aims_beagle(input_path: str, metadata_path: str, output_path: str,
                         sample_col: str = "individual", population_col: str = "population",
                         pop1_label: str = "parent1", pop2_label: str = "parent2",
-                        low_threshold: float = 0.1, high_threshold: float = 0.9) -> dict:
+                        high_threshold: float | None = None,
+                        min_freq_diff: float | None = None) -> dict:
     """Filter an ANGSD beagle-format file down to ancestry-informative
     markers, writing a beagle file with the same column structure and
     unmodified per-individual genotype-likelihood values -- only rows
     (markers) are removed, nothing is recomputed.
+
+    `high_threshold`/`min_freq_diff` select between `compute_aim_mask`'s
+    two-sided-extremes test and `compute_aim_mask_by_diff`'s absolute-
+    difference test -- mutually exclusive, see `_resolve_aim_mask`.
+    Default (both `None`): `compute_aim_mask` with `high_threshold=0.9`.
 
     Returns a dict with `n_total`, `n_retained`, `freq_pop1`, `freq_pop2`
     (per-marker, for every marker -- not just the retained ones, so a
@@ -139,7 +207,7 @@ def filter_aims_beagle(input_path: str, metadata_path: str, output_path: str,
     freq_pop1 = np.nanmean(ind_freq[:, pop1_mask], axis=1)
     freq_pop2 = np.nanmean(ind_freq[:, pop2_mask], axis=1)
 
-    mask = compute_aim_mask(freq_pop1, freq_pop2, low_threshold, high_threshold)
+    mask = _resolve_aim_mask(freq_pop1, freq_pop2, high_threshold, min_freq_diff)
     write_beagle(beagle_data, output_path, mask)
 
     return {
@@ -153,7 +221,7 @@ def filter_aims_beagle(input_path: str, metadata_path: str, output_path: str,
 def filter_aims_csv(input_path: str, metadata_path: str, output_path: str,
                      sample_col: str = "individual", population_col: str = "population",
                      pop1_label: str = "parent1", pop2_label: str = "parent2",
-                     low_threshold: float = 0.1, high_threshold: float = 0.9,
+                     high_threshold: float | None = None, min_freq_diff: float | None = None,
                      ploidy: int = 2, loci: list | None = None,
                      reserved_columns=DEFAULT_RESERVED_COLUMNS) -> dict:
     """Filter a wide genotype-dosage CSV (the same shape
@@ -197,7 +265,7 @@ def filter_aims_csv(input_path: str, metadata_path: str, output_path: str,
     freq_pop1 = np.nanmean(dosage[pop1_mask], axis=0) / ploidy
     freq_pop2 = np.nanmean(dosage[pop2_mask], axis=0) / ploidy
 
-    mask = compute_aim_mask(freq_pop1, freq_pop2, low_threshold, high_threshold)
+    mask = _resolve_aim_mask(freq_pop1, freq_pop2, high_threshold, min_freq_diff)
     retained_loci = [l for l, keep in zip(loci, mask) if keep]
 
     reserved_present = [c for c in geno_df.columns if c not in loci]
@@ -215,7 +283,8 @@ def filter_aims_csv(input_path: str, metadata_path: str, output_path: str,
 def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
                      sample_col: str = "individual", population_col: str = "population",
                      pop1_label: str = "parent1", pop2_label: str = "parent2",
-                     low_threshold: float = 0.1, high_threshold: float = 0.9) -> dict:
+                     high_threshold: float | None = None,
+                     min_freq_diff: float | None = None) -> dict:
     """Filter a VCF file down to ancestry-informative markers, writing a
     VCF file with the same header and unmodified data lines -- only
     lines (variants) are removed; every retained line is copied
@@ -307,9 +376,9 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
 
             freq_pop1 = np.nanmean(dosage_row[pop1_mask]) / 2.0
             freq_pop2 = np.nanmean(dosage_row[pop2_mask]) / 2.0
-            keep = bool(compute_aim_mask(
+            keep = bool(_resolve_aim_mask(
                 np.array([freq_pop1]), np.array([freq_pop2]),
-                low_threshold, high_threshold)[0])
+                high_threshold, min_freq_diff)[0])
 
             locus_name = variant_id if variant_id != "." else f"{chrom}:{pos}"
             locus_names.append(locus_name)

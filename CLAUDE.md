@@ -2,7 +2,7 @@
 
 A Python successor to the R package HZAR (Derryberry et al. 2014) for hybrid
 zone cline analysis, extended to genomic clines, quantitative trait clines,
-and coupling/concordance analysis. 526 tests, all passing as of this file's
+and coupling/concordance analysis. 545 tests, all passing as of this file's
 last update. CLI entry point: `hycline` (or `python run_hycline.py`).
 
 **Before doing anything else, read `README.md` in full** -- particularly the
@@ -70,7 +70,7 @@ to hold itself to throughout (see "Key principles" below).
   `mcmc_genomic_hierarchical.py`, `mcmc_pymc.py`).
 - `hycline/data/` -- readers/writers, VCF/beagle handling, AIM filtering.
 - `hycline/viz/` -- plotting.
-- `tests/` -- 526 tests. `test_cli.py` and the MCMC test files are the
+- `tests/` -- 545 tests. `test_cli.py` and the MCMC test files are the
   slowest; if the environment has tight per-command timeouts, split large
   test runs into batches rather than assuming a single `pytest tests/` call
   will complete.

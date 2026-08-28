@@ -506,12 +506,23 @@ originally and is kept for any direct Python caller, but is no longer
 part of the CLI or the documented pipeline -- VCF/beagle became the only
 supported starting formats once `filter_aims_vcf` was built (see the
 note on this below), matching the rest of this project's own converters.
-Both remaining paths share one filtering function, `compute_aim_mask`: a
-locus is retained if one parental population's allele frequency is at or
-above `--high-threshold` (default 0.9) and the other's is at or below
-`--low-threshold` (default 0.1), checked in *either* direction (it
-doesn't matter which parental population happens to carry the
-higher-frequency allele).
+Both remaining paths share one filtering dispatch, `_resolve_aim_mask`,
+between two mutually exclusive criteria. Default: `compute_aim_mask` --
+a locus is retained if one parental population's allele frequency is at
+or above `--high-threshold` (default 0.9) and the other's is at or below
+`1 - --high-threshold`, checked in *either* direction (it doesn't matter
+which parental population happens to carry the higher-frequency allele).
+Originally took an independent `--low-threshold` too; collapsed into the
+single `--high-threshold` (BACKEND doc update, see the commit that added
+`--min-freq-diff` below) once it was clear the two were never actually
+set independently -- `low == 1 - high` in every real use, so carrying
+both was redundant, not extra flexibility. Alternative:
+`compute_aim_mask_by_diff` (`--min-freq-diff`) -- a locus is retained if
+the two populations' frequencies simply differ by at least the given
+amount, wherever each one falls; a genuinely different criterion, not a
+re-parameterization of the first (a locus at freq_pop1=0.7/freq_pop2=0.1
+has a 0.6 difference but fails the default `--high-threshold 0.9` test
+outright, since neither population reaches 0.9).
 
 **Allele frequency from genotype likelihoods is a simplified, stated
 estimator, not full MLE.** For VCF (hard-called) input, a locus's
@@ -675,3 +686,81 @@ once already in `hycline/data/vcf.py`**: a missing `import pandas as pd`
 in `hycline/data/beagle.py`, caught immediately by the first test run
 (a `NameError`, not a silent wrong answer) and fixed before any of the
 validation above was actually meaningful.
+
+## 10. Automatic geographic-cline polarization
+
+Requested directly, after the hybrid-index analog of this exact bug
+(`hycline.data.hybrid_index.polarize_genotypes`) had already been fixed:
+should HyCline also always re-orient geographic-cline allele frequency so
+it's low near distance 0 and high at the far end, so a multi-locus
+overlay plot doesn't show some loci rising and others falling for no
+biological reason? REF/ALT assignment in a VCF (or whichever allele an
+upstream reader happens to label "focal") is arbitrary with respect to
+geography -- exactly the same underlying problem as the hybrid-index
+case, showing up in a different pipeline.
+
+**Reused the existing edge-site-pooling convention rather than inventing
+a new one.** `hycline.inference.mle._derive_pmin_pmax_single_locus`/
+`hycline.inference.mcmc_hierarchical._derive_pmin_pmax` already define
+"the transect's extremes" as the `n_edge_sites` sites nearest each end,
+pooled by summed counts (used for `--scaling fixed`'s own pmin/pmax
+derivation). `hycline.data.schema.polarize_allele_freq_transect` uses
+the exact same statistic to decide orientation, rather than a second,
+possibly-inconsistent definition of "near the edge." Genotype-likelihood
+input (`polarize_genotype_likelihood_transect`) has no discrete "site" to
+pool (see `GenotypeLikelihoodTransect`'s own docstring -- one entry per
+*individual*), so it reuses the "nearest 20% of individuals by distance"
+convention `hycline.inference.mle_genotype_likelihood.
+_initial_guess_geographic` already uses for its own starting-value guess,
+for the same reason -- one existing convention, not two new ones.
+
+**Verified the flip doesn't change what's actually being fit, not just
+assumed it.** Flipping `n_focal -> n_alleles - n_focal` is a pure
+per-site relabeling; center, width, and log-likelihood are invariant
+under it (only `pmin`/`pmax` swap, since they're literally "the value at
+each end," and the ends' values just swapped which is which). Checked
+directly: `fit_mle` on a reversed-orientation synthetic locus vs. the
+same locus after `polarize_allele_freq_transect`, center/width/logL
+matched to numerical-optimizer precision (`51.11336755.../
+51.11336657...`, `-53.30412099888.../-53.30412099884...`), while
+`pmin`/`pmax` came back correctly swapped (`0.89/0.07` ->
+`0.11/0.93`). This is also why applying polarization unconditionally
+(no `--no-polarize` escape hatch, matching `polarize_genotypes`'s own
+precedent) is safe for `--scaling estimated` fits, not just
+`--scaling fixed` ones -- it changes nothing about fit quality either
+way.
+
+**Wired into every geographic-cline loader, not just the multi-locus
+ones.** `_load_transect` (`compare-tails`, a single `AlleleFreqTransect`),
+`_load_multi_locus_transects` (`fit-geographic`/`fit-hierarchical-
+geographic` hard-count, a dict of one-or-more), and
+`_load_gl_multi_locus_transects` (the genotype-likelihood analog) all
+polarize immediately after reading, before any fitting or `pmin`/`pmax`
+derivation happens -- so `--scaling fixed`'s own derived extremes
+naturally come out already `pmin <= pmax` for any locus with enough data
+to judge, as a side effect of polarizing first rather than a separate
+fix. `compare-tails`'s own parser has no `--n-edge-sites` flag (unlike
+`fit-geographic`'s), so the shared polarization call falls back to
+`n_edge_sites=1` via `getattr(args, "n_edge_sites", 1)` rather than
+requiring every command to expose that flag just for this.
+
+**Deliberately not applied to quantitative trait clines.**
+`_load_trait_transect` is untouched -- a trait's measured value (body
+size, a color score) is a real, meaningful quantity, not an arbitrary
+REF/ALT labeling artifact, so flipping it would falsify the data rather
+than fix a display quirk. This is a geographic allele-frequency-cline-
+specific fix, not a general "orient every geographic transect low-to-high"
+policy.
+
+**Tests**: `tests/test_schema.py` (9 new tests) covers both polarize
+functions directly -- flip/no-flip/tie cases, edge-site pooling actually
+changing the decision (a case where `n_edge_sites=1` alone would miss the
+reversed trend but `n_edge_sites=2` catches it), and confirms
+`AlleleFreqTransect`'s own constructor already guarantees
+`n_alleles > 0` everywhere, so (unlike `_derive_pmin_pmax`, which
+operates on raw, not-yet-validated arrays) no zero-coverage guard is
+needed here. `tests/test_cli.py` adds end-to-end coverage through
+`fit-geographic` (hard-count and GL), `fit-hierarchical-geographic`, and
+`compare-tails` -- confirming the `Re-orienting N/M loci ...` message
+fires correctly and that fitted `pmin < pmax` (or `pmin_fixed <
+pmax_fixed`) for a deliberately reversed-orientation synthetic locus.

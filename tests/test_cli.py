@@ -345,6 +345,130 @@ def test_cli_fit_geographic_classic_mirror_se_columns_match_point_estimate_names
     assert "tau_m_se" not in summary_df.columns
 
 
+def test_cli_fit_geographic_polarizes_reversed_locus(tmp_path):
+    """Real, user-requested behavior: every geographic-cline command
+    should re-orient allele-frequency data so frequency is low near
+    distance 0 and high at the far end -- REF/ALT assignment (which
+    allele is "focal") is arbitrary with respect to geography, so
+    without this, different loci plotted together can trend in opposite
+    directions for no biological reason. Two loci here: locus0 already
+    correctly oriented, locus1 deliberately built reversed (high near
+    distance 0, low at the far end) -- confirms locus1 gets flipped and
+    locus0 doesn't, and that both come out with pmin < pmax after
+    fitting (the fit's own asymptote naming, "far left"/"far right",
+    now matches magnitude too)."""
+    import numpy as np
+    from hycline.models.cline import ClineParams, TailType, cline_function
+
+    rng = np.random.default_rng(21)
+    distance = np.sort(rng.uniform(0, 100, 30))
+    n_alleles = rng.integers(20, 40, 30)
+
+    p0 = cline_function(distance, ClineParams(center=50, width=15, pmin=0.05, pmax=0.95),
+                         TailType.NONE)
+    n_focal0 = rng.binomial(n_alleles, p0)
+    p1 = cline_function(distance, ClineParams(center=50, width=15, pmin=0.95, pmax=0.05),
+                         TailType.NONE)
+    n_focal1 = rng.binomial(n_alleles, p1)
+
+    input_path = tmp_path / "genotypes.csv"
+    pd.DataFrame({
+        "distance": distance, "locus0.nSamples": n_alleles, "locus0.A": n_focal0 / n_alleles,
+        "locus1.nSamples": n_alleles, "locus1.A": n_focal1 / n_alleles,
+    }).to_csv(input_path, index=False)
+    out_dir = tmp_path / "out"
+
+    result = _run_cli(["fit-geographic", "--input", str(input_path), "--output-dir", str(out_dir)])
+    assert result.returncode == 0, result.stderr
+    assert "Re-orienting 1/2 loci" in result.stdout
+
+    summary_df = pd.read_csv(out_dir / "hycline_summary.csv").set_index("locus")
+    assert summary_df.loc["locus0", "pmin"] < summary_df.loc["locus0", "pmax"]
+    assert summary_df.loc["locus1", "pmin"] < summary_df.loc["locus1", "pmax"]
+
+
+def test_cli_fit_geographic_gl_polarizes_reversed_locus(tmp_path):
+    """Genotype-likelihood analog of
+    test_cli_fit_geographic_polarizes_reversed_locus -- the flip is
+    log_gl0<->log_gl2 rather than n_focal->n_alleles-n_focal, a
+    genuinely different code path (polarize_genotype_likelihood_transect,
+    not polarize_allele_freq_transect), so needs its own end-to-end
+    check, not just coverage via the hard-count case above."""
+    import numpy as np
+    import pandas as pd
+    from hycline.models.cline import ClineParams, TailType, cline_function
+    from hycline.data.genotype_likelihood import simulate_genotype_likelihoods
+
+    rng = np.random.default_rng(23)
+    n_ind = 60
+    distance = np.sort(rng.uniform(0, 100, n_ind))
+    df = {"individual": [f"ind{i}" for i in range(n_ind)], "distance": distance}
+    for locus, (pmin, pmax) in [("locusA", (0.05, 0.95)), ("locusB", (0.95, 0.05))]:
+        params = ClineParams(center=50, width=15, pmin=pmin, pmax=pmax)
+        p = cline_function(distance, params, TailType.NONE)
+        u = rng.uniform(size=n_ind)
+        true_geno = np.where(u < (1 - p) ** 2, 0,
+                              np.where(u < (1 - p) ** 2 + 2 * p * (1 - p), 1, 2))
+        gls = simulate_genotype_likelihoods(true_geno, depth=12, error_rate=0.01, rng=rng)
+        df[f"{locus}.gl0"] = gls["log_gl0"]
+        df[f"{locus}.gl1"] = gls["log_gl1"]
+        df[f"{locus}.gl2"] = gls["log_gl2"]
+    input_path = tmp_path / "gl_geo.csv"
+    pd.DataFrame(df).to_csv(input_path, index=False)
+    out_dir = tmp_path / "out"
+
+    result = _run_cli([
+        "fit-geographic", "--input", str(input_path), "--individual-col", "individual",
+        "--output-dir", str(out_dir),
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "Re-orienting 1/2 loci" in result.stdout
+
+    summary_df = pd.read_csv(out_dir / "hycline_summary.csv").set_index("locus")
+    assert summary_df.loc["locusA", "pmin"] < summary_df.loc["locusA", "pmax"]
+    assert summary_df.loc["locusB", "pmin"] < summary_df.loc["locusB", "pmax"]
+
+
+def test_cli_fit_hierarchical_geographic_polarizes_reversed_locus(tmp_path):
+    """Confirms polarization also reaches the hierarchical path (a
+    separate call site, _load_multi_locus_transects, from single-locus
+    fit-geographic's own) -- and that the resulting pmin_fixed/
+    pmax_fixed (derived from the now-already-polarized data) come out
+    correctly ordered too, not just the point estimates."""
+    import numpy as np
+    from hycline.models.cline import ClineParams, TailType, cline_function
+
+    rng = np.random.default_rng(29)
+    distance = np.sort(rng.uniform(0, 100, 40))
+    n_alleles = rng.integers(20, 40, 40)
+
+    p0 = cline_function(distance, ClineParams(center=50, width=15, pmin=0.05, pmax=0.95),
+                         TailType.NONE)
+    n_focal0 = rng.binomial(n_alleles, p0)
+    p1 = cline_function(distance, ClineParams(center=55, width=18, pmin=0.9, pmax=0.1),
+                         TailType.NONE)
+    n_focal1 = rng.binomial(n_alleles, p1)
+
+    input_path = tmp_path / "genotypes.csv"
+    pd.DataFrame({
+        "distance": distance, "locus0.nSamples": n_alleles, "locus0.A": n_focal0 / n_alleles,
+        "locus1.nSamples": n_alleles, "locus1.A": n_focal1 / n_alleles,
+    }).to_csv(input_path, index=False)
+    out_dir = tmp_path / "out"
+
+    result = _run_cli([
+        "fit-hierarchical-geographic", "--input", str(input_path),
+        "--num-warmup", "300", "--num-samples", "300", "--num-chains", "2",
+        "--output-dir", str(out_dir),
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "Re-orienting 1/2 loci" in result.stdout
+
+    locus_df = pd.read_csv(out_dir / "hycline_hierarchical_locus_summary.csv").set_index("locus")
+    assert locus_df.loc["locus0", "pmin_fixed"] < locus_df.loc["locus0", "pmax_fixed"]
+    assert locus_df.loc["locus1", "pmin_fixed"] < locus_df.loc["locus1", "pmax_fixed"]
+
+
 def test_cli_fit_classic_on_real_manakin_data(tmp_path):
     out_dir = tmp_path / "out"
     result = _run_cli([
@@ -531,6 +655,35 @@ def test_cli_compare_tails_on_real_manakin_data(tmp_path):
     csv_text = (out_dir / "cmp_model_comparison.csv").read_text()
     assert "none" in csv_text and "mirror" in csv_text
     assert "AICc" in csv_text
+
+
+def test_cli_compare_tails_polarizes_reversed_locus(tmp_path):
+    """compare-tails uses _load_transect (a single AlleleFreqTransect),
+    a separate call site from the multi-locus dict loaders the other
+    polarization tests exercise -- and one with no --n-edge-sites
+    argument on its own parser, exactly the getattr(args, "n_edge_sites",
+    1) fallback this needs to not crash on."""
+    import numpy as np
+    from hycline.models.cline import ClineParams, TailType, cline_function
+
+    rng = np.random.default_rng(31)
+    distance = np.sort(rng.uniform(0, 100, 30))
+    n_alleles = rng.integers(20, 40, 30)
+    params = ClineParams(center=50, width=15, pmin=0.95, pmax=0.05)  # reversed
+    p = cline_function(distance, params, TailType.NONE)
+    n_focal = rng.binomial(n_alleles, p)
+
+    input_path = tmp_path / "genotypes.csv"
+    pd.DataFrame({"distance": distance, "n_alleles": n_alleles, "n_focal": n_focal}).to_csv(
+        input_path, index=False)
+    out_dir = tmp_path / "out"
+
+    result = _run_cli([
+        "compare-tails", "--input", str(input_path), "--candidates", "none",
+        "--output-dir", str(out_dir),
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "Re-orienting so allele frequency increases with distance" in result.stdout
 
 
 def test_cli_gives_actionable_error_on_missing_column(tmp_path):
@@ -2492,8 +2645,9 @@ def test_cli_generate_geographic_input_vcf_site_aggregation_matches_hand_computa
 def test_cli_filter_aims_help_runs_without_error():
     result = _run_cli(["filter-aims", "--help"])
     assert result.returncode == 0
-    assert "--low-threshold" in result.stdout
+    assert "--low-threshold" not in result.stdout
     assert "--high-threshold" in result.stdout
+    assert "--min-freq-diff" in result.stdout
     assert "--pop1-label" in result.stdout
 
 
@@ -2679,10 +2833,56 @@ def test_cli_filter_aims_custom_thresholds(tmp_path):
     out_path = tmp_path / "filtered.vcf"
     result = _run_cli([
         "filter-aims", "--input", str(input_path), "--metadata", str(metadata_path),
-        "--low-threshold", "0.0", "--high-threshold", "1.0", "--output", str(out_path),
+        "--high-threshold", "1.0", "--output", str(out_path),
     ])
     assert result.returncode == 0, result.stderr
     assert "1 retained" in result.stdout
+
+
+def test_cli_filter_aims_min_freq_diff_mode(tmp_path):
+    # locusA: pop1 (ind0) freq=0.0, pop2 (ind1) freq=1.0 -- a full
+    # 1.0 difference, retained by --min-freq-diff.
+    # locusB: pop1=0.5 (het), pop2=1.0 -- a 0.5 difference, right at
+    # the boundary (>= is inclusive), also retained.
+    header = ("##fileformat=VCFv4.2\n"
+               "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tind0\tind1\n")
+    lines = [
+        "chr1\t100\tlocusA\tA\tT\t99\tPASS\t.\tGT\t0/0\t1/1\n",
+        "chr1\t200\tlocusB\tA\tT\t99\tPASS\t.\tGT\t0/1\t1/1\n",
+    ]
+    input_path = tmp_path / "genotypes.vcf"
+    input_path.write_text(header + "".join(lines))
+    metadata_path = tmp_path / "metadata.csv"
+    pd.DataFrame({"individual": ["ind0", "ind1"],
+                  "population": ["parent1", "parent2"]}).to_csv(metadata_path, index=False)
+
+    out_path = tmp_path / "filtered.vcf"
+    result = _run_cli([
+        "filter-aims", "--input", str(input_path), "--metadata", str(metadata_path),
+        "--min-freq-diff", "0.5", "--output", str(out_path),
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "2 retained" in result.stdout
+    assert "difference >= 0.5" in result.stdout
+
+
+def test_cli_filter_aims_high_threshold_and_min_freq_diff_mutually_exclusive(tmp_path):
+    header = ("##fileformat=VCFv4.2\n"
+               "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tind0\tind1\n")
+    line = "chr1\t100\tlocusA\tA\tT\t99\tPASS\t.\tGT\t0/0\t1/1\n"
+    input_path = tmp_path / "genotypes.vcf"
+    input_path.write_text(header + line)
+    metadata_path = tmp_path / "metadata.csv"
+    pd.DataFrame({"individual": ["ind0", "ind1"],
+                  "population": ["parent1", "parent2"]}).to_csv(metadata_path, index=False)
+
+    result = _run_cli([
+        "filter-aims", "--input", str(input_path), "--metadata", str(metadata_path),
+        "--high-threshold", "0.9", "--min-freq-diff", "0.5",
+        "--output", str(tmp_path / "filtered.vcf"),
+    ])
+    assert result.returncode != 0
+    assert "mutually exclusive" in result.stderr
 
 
 # ---------------------------------------------------------------------------

@@ -493,6 +493,26 @@ full investigation.
   way (a `scipy.stats.nct.cdf` extreme-tail NaN, and the optimizer
   local-optima problem itself).
 - `hycline.data.schema` -- typed container for allele-frequency transect data.
+  `polarize_allele_freq_transect`/`polarize_genotype_likelihood_transect`
+  re-orient each locus so frequency is low near distance 0 and high at
+  the far end, flipping the raw data (`n_focal -> n_alleles - n_focal`,
+  or `log_gl0 <-> log_gl2` for genotype-likelihood input) when it's the
+  other way round. REF/ALT assignment (which allele a variant caller
+  labels "focal") is arbitrary with respect to geography, so without
+  this, different loci plotted together trend in opposite directions for
+  no biological reason -- the same class of bug already fixed for
+  hybrid-index estimation (`hycline.data.hybrid_index.polarize_genotypes`),
+  now closed for geographic clines too. Wired into every geographic-cline
+  CLI command that loads transect data (`fit-geographic`,
+  `fit-hierarchical-geographic`, `compare-tails`, both hard-count and
+  genotype-likelihood input), printing `Re-orienting N/M loci ...` when
+  any locus was flipped. Center, width, and log-likelihood are
+  unaffected by the flip (verified directly, not just reasoned about --
+  see BACKEND_PHASE1.md section 10); only which value is reported as
+  `pmin` vs. `pmax` changes. Quantitative trait clines are deliberately
+  untouched -- a trait's low/high value is a real, meaningful
+  measurement, not an arbitrary labeling artifact, so flipping it would
+  misrepresent the data rather than fix a display quirk.
 - `hycline.likelihoods.binomial` -- binomial likelihood (HZAR's "freq" data type).
 - `hycline.inference.mle` -- maximum-likelihood fitting via `scipy.optimize`,
   with Hessian-based standard errors and confidence intervals.

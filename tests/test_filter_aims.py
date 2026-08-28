@@ -3,7 +3,8 @@ import pandas as pd
 import pytest
 
 from hycline.data.filter_aims import (
-    compute_aim_mask, match_samples_to_populations,
+    compute_aim_mask, compute_aim_mask_by_diff, _resolve_aim_mask,
+    match_samples_to_populations,
     filter_aims_beagle, filter_aims_csv, filter_aims_vcf,
 )
 
@@ -27,16 +28,71 @@ def test_compute_aim_mask_direction_agnostic():
     assert mask[0]
 
 
-def test_compute_aim_mask_custom_thresholds():
+def test_compute_aim_mask_custom_threshold():
+    # Regression test for the --low-threshold/--high-threshold collapse:
+    # the low side is always 1 - high_threshold now, a single knob
+    # instead of two independently-settable ones.
     freq_pop1 = np.array([0.15])
     freq_pop2 = np.array([0.80])
-    assert not compute_aim_mask(freq_pop1, freq_pop2, low_threshold=0.1, high_threshold=0.9)[0]
-    assert compute_aim_mask(freq_pop1, freq_pop2, low_threshold=0.2, high_threshold=0.8)[0]
+    assert not compute_aim_mask(freq_pop1, freq_pop2, high_threshold=0.9)[0]
+    assert compute_aim_mask(freq_pop1, freq_pop2, high_threshold=0.8)[0]
 
 
-def test_compute_aim_mask_invalid_thresholds_raises():
-    with pytest.raises(ValueError, match="must be less than"):
-        compute_aim_mask([0.1], [0.9], low_threshold=0.9, high_threshold=0.1)
+def test_compute_aim_mask_invalid_threshold_raises():
+    with pytest.raises(ValueError, match="must be greater than 0.5"):
+        compute_aim_mask([0.1], [0.9], high_threshold=0.4)
+    with pytest.raises(ValueError, match="must be greater than 0.5"):
+        compute_aim_mask([0.1], [0.9], high_threshold=1.5)
+
+
+# ---------------------------------------------------------------------------
+# compute_aim_mask_by_diff
+# ---------------------------------------------------------------------------
+
+def test_compute_aim_mask_by_diff_basic():
+    # freq_pop1=0.7/freq_pop2=0.1 has a 0.6 difference -- passes
+    # --min-freq-diff 0.5 but would fail compute_aim_mask's default
+    # --high-threshold 0.9 test outright (0.7 < 0.9), the exact
+    # real-world case this mode exists for.
+    freq_pop1 = np.array([0.7, 0.5, 0.95])
+    freq_pop2 = np.array([0.1, 0.5, 0.90])
+    mask = compute_aim_mask_by_diff(freq_pop1, freq_pop2, min_freq_diff=0.5)
+    np.testing.assert_array_equal(mask, [True, False, False])
+    assert not compute_aim_mask(freq_pop1, freq_pop2)[0]  # confirms the threshold mode misses it
+
+
+def test_compute_aim_mask_by_diff_direction_agnostic():
+    assert compute_aim_mask_by_diff(np.array([0.1]), np.array([0.7]), min_freq_diff=0.5)[0]
+    assert compute_aim_mask_by_diff(np.array([0.7]), np.array([0.1]), min_freq_diff=0.5)[0]
+
+
+def test_compute_aim_mask_by_diff_invalid_threshold_raises():
+    with pytest.raises(ValueError, match="must be greater than 0.0"):
+        compute_aim_mask_by_diff([0.1], [0.9], min_freq_diff=0.0)
+    with pytest.raises(ValueError, match="must be greater than 0.0"):
+        compute_aim_mask_by_diff([0.1], [0.9], min_freq_diff=1.5)
+
+
+# ---------------------------------------------------------------------------
+# _resolve_aim_mask (the two-mode dispatch)
+# ---------------------------------------------------------------------------
+
+def test_resolve_aim_mask_defaults_to_threshold_mode():
+    freq_pop1, freq_pop2 = np.array([0.95]), np.array([0.02])
+    result = _resolve_aim_mask(freq_pop1, freq_pop2, None, None)
+    np.testing.assert_array_equal(result, compute_aim_mask(freq_pop1, freq_pop2, 0.9))
+
+
+def test_resolve_aim_mask_uses_diff_mode_when_given():
+    freq_pop1, freq_pop2 = np.array([0.7]), np.array([0.1])
+    result = _resolve_aim_mask(freq_pop1, freq_pop2, None, 0.5)
+    np.testing.assert_array_equal(
+        result, compute_aim_mask_by_diff(freq_pop1, freq_pop2, 0.5))
+
+
+def test_resolve_aim_mask_both_given_is_mutually_exclusive_error():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _resolve_aim_mask(np.array([0.9]), np.array([0.1]), 0.9, 0.5)
 
 
 # ---------------------------------------------------------------------------

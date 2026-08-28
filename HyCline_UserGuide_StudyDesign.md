@@ -27,20 +27,23 @@ referenced here.
 
 `filter-aims` (shared by the geographic and genomic pipelines) retains
 loci where each parental population's allele frequency clears
-`--high-threshold`/`--low-threshold` (default 0.9/0.1). **Small reference
-panels make this threshold noisy, not just imprecise.** In direct
-testing, a locus with a true parental frequency of 0.02/0.98 -- genuinely
-informative -- came back at an *empirical* frequency of 0.875 in one
-population with only 8 reference individuals, narrowly failing the
-default 0.9 cutoff by sampling chance alone, not because the locus wasn't
-real.
+`--high-threshold` (default 0.9, with the low side always `1 -
+--high-threshold`). **Small reference panels make this threshold noisy,
+not just imprecise.** In direct testing, a locus with a true parental
+frequency of 0.02/0.98 -- genuinely informative -- came back at an
+*empirical* frequency of 0.875 in one population with only 8 reference
+individuals, narrowly failing the default 0.9 cutoff by sampling chance
+alone, not because the locus wasn't real.
 
 **Recommendation**: more reference individuals per parental population
 reduces this risk directly (the standard error of a frequency estimate
 shrinks with sample size). If you're constrained to a small reference
 panel, expect to lose some genuinely informative loci to threshold noise,
-and consider loosening `--high-threshold`/`--low-threshold` slightly
-rather than assuming every failed locus is actually uninformative.
+and consider loosening `--high-threshold` slightly, or switching to
+`--min-freq-diff` (retains any locus with a large-enough frequency
+*difference* between populations, without requiring either one to reach
+a fixed extreme) rather than assuming every failed locus is actually
+uninformative.
 
 ### Sequencing depth and the hard-call vs. genotype-likelihood decision
 

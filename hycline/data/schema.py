@@ -76,6 +76,65 @@ class AlleleFreqTransect:
         return len(self.distance)
 
 
+def polarize_allele_freq_transect(transect: "AlleleFreqTransect",
+                                   n_edge_sites: int = 1) -> tuple:
+    """Re-orient a geographic-cline locus so its observed focal-allele
+    frequency is lower at the near (low-distance) end of the transect
+    than at the far (high-distance) end, flipping `n_focal ->
+    n_alleles - n_focal` if the raw data has it the other way round.
+
+    Which physical allele happens to be "focal" (REF vs. ALT in a VCF,
+    or whichever label an upstream reader assigned) is arbitrary with
+    respect to geography -- it doesn't change the underlying biology,
+    or the cline's fit (center/width/log-likelihood are all invariant
+    under this flip; only `pmin`/`pmax` swap). But it matters visually
+    the moment more than one locus is plotted on shared axes
+    (`plot_multi_locus_overlay`, `plot_hierarchical_geographic_grid`,
+    the candidate-overlay plots): with no consistent orientation, some
+    loci's curves rise left-to-right and others fall, which is exactly
+    the "arbitrary REF/ALT direction" bug already fixed for hybrid-index
+    estimation (`hycline.data.hybrid_index.polarize_genotypes`) showing
+    up again in a different pipeline. This is the geographic-cline
+    analog of that fix.
+
+    Uses the same edge-site-pooling convention as
+    `hycline.inference.mle._derive_pmin_pmax_single_locus`/
+    `hycline.inference.mcmc_hierarchical._derive_pmin_pmax` to decide
+    what "the extremes" means (the `n_edge_sites` sites nearest each end
+    of the transect, pooled by summed counts) -- the same statistic
+    already used to derive `pmin`/`pmax` for `--scaling fixed`, reused
+    here rather than inventing a second, inconsistent definition of
+    "near the edge." Unlike that function, this needs no zero-coverage
+    guard: `AlleleFreqTransect`'s own constructor already requires
+    `n_alleles > 0` at every site, so every pooled sum is guaranteed
+    positive.
+
+    Returns `(new_transect, flipped)` -- `new_transect` is a fresh
+    `AlleleFreqTransect` (the input is never mutated in place);
+    `flipped` is `True` iff a flip was actually applied, for the caller
+    to report to the user.
+    """
+    order = np.argsort(transect.distance)
+    n_alleles_sorted = transect.n_alleles[order]
+    n_focal_sorted = transect.n_focal[order]
+    k = min(n_edge_sites, len(n_alleles_sorted))
+    # AlleleFreqTransect's own constructor already requires n_alleles > 0
+    # at every site, so the pooled sums below are always > 0 -- no
+    # zero-coverage guard needed here the way _derive_pmin_pmax's own
+    # (operating on raw, not-yet-validated arrays) needs one.
+    freq_low = n_focal_sorted[:k].sum() / n_alleles_sorted[:k].sum()
+    freq_high = n_focal_sorted[-k:].sum() / n_alleles_sorted[-k:].sum()
+    if freq_low <= freq_high:
+        return transect, False
+
+    flipped = AlleleFreqTransect(
+        distance=transect.distance, n_alleles=transect.n_alleles,
+        n_focal=transect.n_alleles - transect.n_focal,
+        site_names=transect.site_names,
+    )
+    return flipped, True
+
+
 @dataclass
 class TraitTransect:
     """Site-aggregated quantitative trait data along a geographic
@@ -250,6 +309,53 @@ class GenotypeLikelihoodTransect:
 
     def __len__(self) -> int:
         return len(self.distance)
+
+
+def polarize_genotype_likelihood_transect(transect: "GenotypeLikelihoodTransect",
+                                           edge_fraction: float = 0.2) -> tuple:
+    """Genotype-likelihood analog of `polarize_allele_freq_transect`:
+    re-orients a locus so its (argmax-genotype-proxy) focal-allele
+    frequency is lower at the near end of the transect than at the far
+    end, flipping `log_gl0 <-> log_gl2` (dosage 0 and dosage 2 swap;
+    `log_gl1`, the heterozygote, is unaffected by which homozygote is
+    "focal") if the raw data has it the other way round. See
+    `polarize_allele_freq_transect`'s docstring for why this matters and
+    why it doesn't change the fit itself, only which direction it plots.
+
+    GL data is per-individual, not per-site (see
+    `GenotypeLikelihoodTransect`'s own docstring), so there's no
+    `n_edge_sites`-style site count to pool -- instead, this uses the
+    same "nearest `edge_fraction` of individuals by distance" convention
+    `hycline.inference.mle_genotype_likelihood._initial_guess_geographic`
+    already uses for its own pmin/pmax starting-value guess (default
+    20%, i.e. the same "nearest fifth" that helper uses), rather than
+    inventing a second, inconsistent notion of "near the edge" for GL
+    data specifically. The argmax-genotype proxy this (and that
+    function) uses is a rough stand-in only, appropriate for an
+    orientation *decision* -- the fit itself properly marginalizes over
+    the full genotype-likelihood uncertainty regardless of this flip.
+
+    Returns `(new_transect, flipped)`, same convention as
+    `polarize_allele_freq_transect`.
+    """
+    gl_stack = np.stack([transect.log_gl0, transect.log_gl1, transect.log_gl2], axis=0)
+    hard_genotype = np.argmax(gl_stack, axis=0)
+    freq_proxy = hard_genotype / 2.0
+
+    order = np.argsort(transect.distance)
+    freq_sorted = freq_proxy[order]
+    k = max(1, int(len(freq_sorted) * edge_fraction))
+    freq_low = float(np.mean(freq_sorted[:k]))
+    freq_high = float(np.mean(freq_sorted[-k:]))
+    if freq_low <= freq_high:
+        return transect, False
+
+    flipped = GenotypeLikelihoodTransect(
+        distance=transect.distance, log_gl0=transect.log_gl2,
+        log_gl1=transect.log_gl1, log_gl2=transect.log_gl0,
+        individual_names=transect.individual_names,
+    )
+    return flipped, True
 
 
 @dataclass

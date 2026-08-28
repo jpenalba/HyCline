@@ -100,7 +100,8 @@ them.
 | `--sample-col` | Column in `--metadata` holding individual names (default: `individual`). Must match the VCF's own `#CHROM` header row, or ANGSD's own beagle header row |
 | `--population-col` | Column in `--metadata` holding each individual's population label (default: `population`) |
 | `--pop1-label` / `--pop2-label` | Values identifying the two parental reference groups (default: `parent1`/`parent2`) |
-| `--low-threshold` / `--high-threshold` | A locus is retained if one population's frequency is at or below `--low-threshold` (default 0.1) and the other's is at or above `--high-threshold` (default 0.9), in either direction |
+| `--high-threshold` | Threshold mode (default): a locus is retained if one population's frequency is at or above `--high-threshold` (default 0.9) and the other's is at or below `1 - --high-threshold`, in either direction. Mutually exclusive with `--min-freq-diff` |
+| `--min-freq-diff` | Difference mode: a locus is retained if the two populations' allele frequencies differ by at least this much, wherever each one falls (e.g. `--min-freq-diff 0.5` retains freq_pop1=0.7/freq_pop2=0.1, which `--high-threshold`'s default would miss since neither reaches 0.9). Mutually exclusive with `--high-threshold` |
 
 For VCF input, sites are also silently checked against a biallelic-SNP-with-
 GT scope (multiallelic sites, indels, and sites with no `GT` field are
@@ -290,6 +291,20 @@ Genotype-likelihood input is classic MLE only, with independent per-locus
 fitting; `--method bayesian`, `--scaling fixed`/`--pmin`/`--pmax`, and
 `--hzar-tail` all give a clear, actionable error if used with
 genotype-likelihood input rather than being silently ignored.
+
+**Every locus is automatically re-oriented so frequency is low near
+distance 0 and high at the far end** -- the same fix as Step 2's
+hybrid-index re-orientation, applied to geographic clines. REF/ALT
+assignment in a VCF is arbitrary with respect to geography, so a
+multi-locus file will often have some loci naturally rising with
+distance and others falling; without correcting for this, an overlay
+plot shows loci trending in opposite directions for no biological
+reason. `fit-geographic`, `fit-hierarchical-geographic`, and
+`compare-tails` all do this automatically -- you'll see a line like
+`Re-orienting 2/5 loci so allele frequency increases with distance` when
+it applies to your data; seeing 0 re-oriented loci is equally normal.
+This only relabels which value is `pmin` vs. `pmax` -- center, width,
+and the fit's log-likelihood are completely unaffected.
 
 ### Why fitting isn't just "estimate a frequency, then fit"
 

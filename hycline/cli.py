@@ -1210,10 +1210,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Filter whole-genome SNPs to ancestry-informative markers (AIMs).",
         description="Filter a VCF or ANGSD beagle-format file (genome-wide SNP data, "
                      "before any HyCline-specific conversion) down to ancestry-"
-                     "informative markers: loci where one parental population's allele "
-                     "frequency is at or above --high-threshold (default 0.9) and the "
-                     "other's is at or below --low-threshold (default 0.1), in either "
-                     "direction. Most genome-wide SNPs aren't informative for cline "
+                     "informative markers, using one of two mutually exclusive "
+                     "criteria: --high-threshold (default), where one parental "
+                     "population's allele frequency must be at or above this value and "
+                     "the other's at or below 1 - --high-threshold, in either "
+                     "direction; or --min-freq-diff, where the two populations' allele "
+                     "frequencies must simply differ by at least this much, wherever "
+                     "each one falls. Most genome-wide SNPs aren't informative for cline "
                      "analysis -- this is a standard pre-filtering step before "
                      "'generate-geographic-input'/'generate-genomic-input'. Output is "
                      "the same format "
@@ -1254,12 +1257,24 @@ def _build_parser() -> argparse.ArgumentParser:
     faims_p.add_argument("--pop2-label", default="parent2",
                           help="Value in --population-col identifying parental "
                                "population 2's reference individuals (default: parent2).")
-    faims_p.add_argument("--low-threshold", type=float, default=0.1,
-                          help="A locus is retained if one population's frequency is "
-                               "at or below this value and the other's is at or above "
-                               "--high-threshold (default: 0.1).")
-    faims_p.add_argument("--high-threshold", type=float, default=0.9,
-                          help="See --low-threshold (default: 0.9).")
+    faims_p.add_argument("--high-threshold", type=float, default=None,
+                          help="Threshold mode (the default unless --min-freq-diff is "
+                               "given): a locus is retained if one population's "
+                               "frequency is at or above this value and the other's is "
+                               "at or below 1 - --high-threshold, in either direction "
+                               "(default: 0.9, i.e. >=0.9 in one population and <=0.1 "
+                               "in the other). Mutually exclusive with --min-freq-diff.")
+    faims_p.add_argument("--min-freq-diff", type=float, default=None,
+                          help="Difference mode: a locus is retained if the absolute "
+                               "allele-frequency difference between the two parental "
+                               "populations is at least this value (e.g. 0.5). A "
+                               "genuinely different criterion from --high-threshold's "
+                               "two-sided-extremes test, not just a re-parameterization "
+                               "of it -- a locus can pass this test without either "
+                               "population being anywhere near 0 or 1 (e.g. freq_pop1="
+                               "0.7, freq_pop2=0.1 has a 0.6 difference but fails "
+                               "--high-threshold's default 0.9/0.1 test outright). "
+                               "Mutually exclusive with --high-threshold.")
     faims_p.add_argument("--output", required=True, metavar="FILE",
                           help="Path to write the filtered file to, in the same format "
                                "as --input.")
@@ -1269,9 +1284,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _load_transect(args):
     from hycline.data.io import read_allele_freq_csv, TransectCSVError
+    from hycline.data.schema import polarize_allele_freq_transect
 
     try:
-        return read_allele_freq_csv(
+        transect = read_allele_freq_csv(
             args.input,
             distance_col=(None if (args.lat_col and args.lon_col) else args.distance_col),
             lat_col=args.lat_col, lon_col=args.lon_col,
@@ -1285,6 +1301,13 @@ def _load_transect(args):
     except TransectCSVError as e:
         print(f"\nERROR reading input data: {e}\n", file=sys.stderr)
         sys.exit(2)
+
+    transect, flipped = polarize_allele_freq_transect(
+        transect, n_edge_sites=getattr(args, "n_edge_sites", 1))
+    if flipped:
+        print("  Re-orienting so allele frequency increases with distance (REF/ALT "
+              "assignment is arbitrary with respect to geography).")
+    return transect
 
 
 def _detect_wide_csv_input_type(path, count_suffix, count_suffix_flags,
@@ -1345,10 +1368,11 @@ def _detect_geographic_input_type(args):
 
 def _load_multi_locus_transects(args):
     from hycline.data.io import read_multi_locus_wide_csv, TransectCSVError
+    from hycline.data.schema import polarize_allele_freq_transect
 
     loci = [l.strip() for l in args.loci.split(",")] if args.loci else None
     try:
-        return read_multi_locus_wide_csv(
+        transects = read_multi_locus_wide_csv(
             args.input,
             distance_col=(None if (args.lat_col and args.lon_col) else args.distance_col),
             lat_col=args.lat_col, lon_col=args.lon_col,
@@ -1363,6 +1387,18 @@ def _load_multi_locus_transects(args):
     except TransectCSVError as e:
         print(f"\nERROR reading input data: {e}\n", file=sys.stderr)
         sys.exit(2)
+
+    n_edge_sites = getattr(args, "n_edge_sites", 1)
+    n_flipped = 0
+    for name in list(transects.keys()):
+        transects[name], flipped = polarize_allele_freq_transect(
+            transects[name], n_edge_sites=n_edge_sites)
+        n_flipped += flipped
+    if n_flipped:
+        print(f"  Re-orienting {n_flipped}/{len(transects)} loci so allele frequency "
+              f"increases with distance (REF/ALT assignment is arbitrary with respect "
+              f"to geography).")
+    return transects
 
 
 def _detect_genomic_input_type(args):
@@ -1404,10 +1440,11 @@ def _load_genomic_multi_locus_data(args):
 
 def _load_gl_multi_locus_transects(args):
     from hycline.data.io import read_gl_multi_locus_wide_csv, TransectCSVError
+    from hycline.data.schema import polarize_genotype_likelihood_transect
 
     loci = [l.strip() for l in args.loci.split(",")] if args.loci else None
     try:
-        return read_gl_multi_locus_wide_csv(
+        transects = read_gl_multi_locus_wide_csv(
             args.input,
             distance_col=(None if (args.lat_col and args.lon_col) else args.distance_col),
             lat_col=args.lat_col, lon_col=args.lon_col,
@@ -1419,6 +1456,16 @@ def _load_gl_multi_locus_transects(args):
     except TransectCSVError as e:
         print(f"\nERROR reading input data: {e}\n", file=sys.stderr)
         sys.exit(2)
+
+    n_flipped = 0
+    for name in list(transects.keys()):
+        transects[name], flipped = polarize_genotype_likelihood_transect(transects[name])
+        n_flipped += flipped
+    if n_flipped:
+        print(f"  Re-orienting {n_flipped}/{len(transects)} loci so allele frequency "
+              f"increases with distance (REF/ALT assignment is arbitrary with respect "
+              f"to geography).")
+    return transects
 
 
 def _load_genomic_gl_multi_locus_data(args):
@@ -3776,7 +3823,7 @@ def cmd_filter_aims(args) -> int:
                 args.input, args.metadata, str(out_path),
                 sample_col=args.sample_col, population_col=args.population_col,
                 pop1_label=args.pop1_label, pop2_label=args.pop2_label,
-                low_threshold=args.low_threshold, high_threshold=args.high_threshold,
+                high_threshold=args.high_threshold, min_freq_diff=args.min_freq_diff,
             )
         else:
             from hycline.data.filter_aims import filter_aims_vcf
@@ -3784,17 +3831,24 @@ def cmd_filter_aims(args) -> int:
                 args.input, args.metadata, str(out_path),
                 sample_col=args.sample_col, population_col=args.population_col,
                 pop1_label=args.pop1_label, pop2_label=args.pop2_label,
-                low_threshold=args.low_threshold, high_threshold=args.high_threshold,
+                high_threshold=args.high_threshold, min_freq_diff=args.min_freq_diff,
             )
     except ValueError as e:
         print(f"\nERROR: {e}\n", file=sys.stderr)
         return 2
 
+    if args.min_freq_diff is not None:
+        criterion_desc = f"allele-frequency difference >= {args.min_freq_diff}"
+        loosen_hint = "--min-freq-diff"
+    else:
+        high = args.high_threshold if args.high_threshold is not None else 0.9
+        criterion_desc = f">= {high} in one population and <= {1.0 - high} in the other, either direction"
+        loosen_hint = "--high-threshold"
+
     print(f"  {args.pop1_label}: {result['n_pop1_samples']} individuals; "
           f"{args.pop2_label}: {result['n_pop2_samples']} individuals")
     print(f"  {result['n_total']} loci checked, {result['n_retained']} retained "
-          f"(>= {args.high_threshold} in one population and <= {args.low_threshold} in "
-          f"the other, either direction)")
+          f"({criterion_desc})")
     if fmt == "vcf":
         skipped = (result["n_skipped_multiallelic"] + result["n_skipped_indel"]
                    + result["n_skipped_no_gt"])
@@ -3807,8 +3861,8 @@ def cmd_filter_aims(args) -> int:
     if result['n_retained'] == 0:
         print(f"\nWARNING: no loci passed the filter -- the output file has a header "
               f"but no data. Check --pop1-label/--pop2-label match your metadata "
-              f"file's actual values, or consider loosening --low-threshold/"
-              f"--high-threshold.\n", file=sys.stderr)
+              f"file's actual values, or consider loosening {loosen_hint}.\n",
+              file=sys.stderr)
 
     print(f"\nWrote {out_path.resolve()}")
     if fmt == "vcf":
