@@ -790,6 +790,20 @@ command:**
   regardless of which upstream command (and its own, inconsistent naming
   convention -- `width` vs. `width_mean`, etc.) produced it. See
   BACKEND_PHASE4.md section 14 for the full design.
+  Both commands also produce a `<prefix>_candidates_overlay.png` by
+  default (`hycline.viz.plotting.plot_geographic_candidates_overlay`/
+  `plot_genomic_candidates_overlay`, `--no-plot` to skip): every locus's
+  actual fitted cline curve overlaid on one set of axes, colored by
+  candidate category (a fixed, CVD-validated 4-color assignment, not a
+  cycled/arbitrary one) with non-candidate loci drawn in light grey
+  underneath -- shows directly how a flagged locus's cline shape differs
+  from the rest of the locus set, not just its z-scores in a table.
+  `flag-candidates-geographic`'s plot additionally needs each locus's
+  fixed `pmin`/`pmax` (auto-detected from the `pmin_fixed`/`pmax_fixed`
+  columns `fit-hierarchical-geographic` already writes) to evaluate the
+  curve; when a locus summary doesn't have them, the plot is skipped
+  with a clear note rather than failing the whole command, since the CSV
+  output doesn't need them.
 
 **See `BACKEND_PHASE4.md`** for the full design rationale -- why Phase 4
 is split into components, the exact hierarchical models and prior choices

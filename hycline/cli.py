@@ -880,6 +880,14 @@ def _build_parser() -> argparse.ArgumentParser:
     flagg_p.add_argument("--width-col", default=None,
                           help="Column with each locus's fitted cline width. Default: "
                                "auto-detect 'width_mean' then 'width'.")
+    flagg_p.add_argument("--pmin-col", default=None,
+                          help="Column with each locus's fixed pmin (used only for the "
+                               "overlay plot -- the flagging statistics themselves don't "
+                               "need it). Default: auto-detect 'pmin_fixed' "
+                               "(fit-hierarchical-geographic's own convention).")
+    flagg_p.add_argument("--pmax-col", default=None,
+                          help="Column with each locus's fixed pmax, same convention as "
+                               "--pmin-col. Default: auto-detect 'pmax_fixed'.")
     flagg_p.add_argument("--alpha", type=float, default=0.05,
                           help="Family-wise significance level before Bonferroni "
                                "correction across loci (default: 0.05, matching "
@@ -890,6 +898,9 @@ def _build_parser() -> argparse.ArgumentParser:
                                    "(default: ./hycline_output)")
     flagg_out_g.add_argument("--prefix", default="hycline",
                               help="Filename prefix for all output files (default: hycline)")
+    flagg_out_g.add_argument("--no-plot", action="store_true",
+                              help="Skip generating the candidates-overlay PNG plot "
+                                   "(still writes the CSV output).")
 
     # ---- `flag-candidates-genomic` subcommand (Phase 4 Component C) ----
     flagn_p = subparsers.add_parser(
@@ -954,6 +965,9 @@ def _build_parser() -> argparse.ArgumentParser:
                                    "(default: ./hycline_output)")
     flagn_out_g.add_argument("--prefix", default="hycline",
                               help="Filename prefix for all output files (default: hycline)")
+    flagn_out_g.add_argument("--no-plot", action="store_true",
+                              help="Skip generating the candidates-overlay PNG plot "
+                                   "(still writes the CSV output).")
 
     # ---- `estimate-hybrid-index` subcommand ----
     ehi_p = subparsers.add_parser(
@@ -1449,6 +1463,26 @@ def _resolve_summary_col(df, explicit, candidates, path, flag_name):
           f"(tried: {', '.join(candidates)}). Specify {flag_name} explicitly. "
           f"Columns present: {', '.join(df.columns)}\n", file=sys.stderr)
     sys.exit(2)
+
+
+def _resolve_optional_summary_col(df, explicit, candidates, path, flag_name):
+    """Like `_resolve_summary_col`, but returns `None` instead of exiting
+    when auto-detection fails, rather than a hard error -- for columns
+    an optional feature needs (e.g. the candidates-overlay plot's
+    pmin/pmax) where the right response to "not found" is to skip that
+    feature, not abort the whole command. An explicitly-given column
+    name that doesn't exist is still a hard, clear error either way --
+    only the auto-detect-failed case is soft."""
+    if explicit is not None:
+        if explicit not in df.columns:
+            print(f"\nERROR: {flag_name} '{explicit}' not found in '{path}'. "
+                  f"Columns present: {', '.join(df.columns)}\n", file=sys.stderr)
+            sys.exit(2)
+        return explicit
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
 
 
 def _load_population_summary_csv(path, required_vars):
@@ -3140,8 +3174,37 @@ def cmd_flag_candidates_geographic(args) -> int:
             fh.write(f"# {line}\n")
     out_df.to_csv(csv_path, mode="a", index=False)
 
+    plot_path = None
+    if not args.no_plot:
+        pmin_col = _resolve_optional_summary_col(locus_df, args.pmin_col, ["pmin_fixed"],
+                                                  locus_path, "--pmin-col")
+        pmax_col = _resolve_optional_summary_col(locus_df, args.pmax_col, ["pmax_fixed"],
+                                                  locus_path, "--pmax-col")
+        if pmin_col is None or pmax_col is None:
+            print(f"\nNOTE: skipping the candidates-overlay plot -- no 'pmin_fixed'/"
+                  f"'pmax_fixed' columns found in '{locus_path}' (needed to evaluate "
+                  f"each locus's fitted curve). Override with --pmin-col/--pmax-col if "
+                  f"your locus summary uses different column names. CSV output above "
+                  f"is unaffected.")
+        else:
+            from hycline.models.cline import ClineParams
+            from hycline.viz.plotting import plot_geographic_candidates_overlay
+            import matplotlib.pyplot as plt
+            locus_params = {
+                row[args.locus_col]: ClineParams(center=row[center_col], width=row[width_col],
+                                                  pmin=row[pmin_col], pmax=row[pmax_col])
+                for _, row in locus_df.iterrows()
+            }
+            category_by_locus = {f.locus: f.category for f in result.flags}
+            fig = plot_geographic_candidates_overlay(locus_params, category_by_locus)
+            plot_path = out_dir / f"{prefix}_candidates_overlay.png"
+            fig.savefig(plot_path, dpi=150)
+            plt.close(fig)
+
     print(f"\nAll output written to: {out_dir.resolve()}")
     print(f"  {prefix}_candidates.csv  -- one row per locus, all loci included")
+    if plot_path is not None:
+        print(f"  {prefix}_candidates_overlay.png  -- fitted curves colored by candidate category")
     return 0
 
 
@@ -3192,8 +3255,25 @@ def cmd_flag_candidates_genomic(args) -> int:
             fh.write(f"# {line}\n")
     out_df.to_csv(csv_path, mode="a", index=False)
 
+    plot_path = None
+    if not args.no_plot:
+        from hycline.models.genomic_cline import GenomicClineParams
+        from hycline.viz.plotting import plot_genomic_candidates_overlay
+        import matplotlib.pyplot as plt
+        locus_params = {
+            row[args.locus_col]: GenomicClineParams(u=row[u_col], v=row[v_col])
+            for _, row in locus_df.iterrows()
+        }
+        category_by_locus = {f.locus: f.category for f in result.flags}
+        fig = plot_genomic_candidates_overlay(locus_params, category_by_locus)
+        plot_path = out_dir / f"{prefix}_candidates_overlay.png"
+        fig.savefig(plot_path, dpi=150)
+        plt.close(fig)
+
     print(f"\nAll output written to: {out_dir.resolve()}")
     print(f"  {prefix}_candidates.csv  -- one row per locus, all loci included")
+    if plot_path is not None:
+        print(f"  {prefix}_candidates_overlay.png  -- fitted curves colored by candidate category")
     return 0
 
 

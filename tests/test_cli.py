@@ -1342,6 +1342,27 @@ def test_cli_flag_candidates_genomic_end_to_end(tmp_path):
     assert row["L1"]["category"] == "restricted_gene_flow"
     assert row["L2"]["category"] == "asymmetric_gene_flow"
 
+    # Unlike geographic, genomic candidate-overlay plotting needs only
+    # u/v (no pmin/pmax equivalent -- see plot_genomic_candidates_overlay's
+    # docstring), which the flagging step already requires, so the plot
+    # should always be produced by default here.
+    plot_path = out_dir / "flag_candidates_overlay.png"
+    assert plot_path.exists()
+    assert plot_path.stat().st_size > 1000
+    assert "candidates_overlay.png" in result.stdout
+
+
+def test_cli_flag_candidates_genomic_no_plot_skips_png(tmp_path):
+    pop_csv, locus_csv = _write_genomic_hierarchical_summaries(tmp_path, pool_center=False)
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "flag-candidates-genomic", "--no-plot",
+        "--population-summary-csv", str(pop_csv), "--locus-summary-csv", str(locus_csv),
+        "--output-dir", str(out_dir), "--prefix", "flag",
+    ])
+    assert result.returncode == 0, result.stderr
+    assert not (out_dir / "flag_candidates_overlay.png").exists()
+
 
 def test_cli_flag_candidates_genomic_pool_center_flag(tmp_path):
     pop_csv, locus_csv = _write_genomic_hierarchical_summaries(tmp_path, pool_center=True)
@@ -1395,6 +1416,51 @@ def test_cli_flag_candidates_geographic_composes_with_real_fit_hierarchical_outp
     assert set(df["locus"]) == {"ada", "ak2", "gsr", "pgm2", "l5", "pscn3", "mtDNA"}
     assert set(df["category"].dropna()) <= {
         "restricted_gene_flow", "elevated_gene_flow", "asymmetric_gene_flow", "ambiguous"}
+
+    # The overlay plot (one fitted cline curve per locus, colored by
+    # candidate category) needs pmin_fixed/pmax_fixed, which
+    # fit-hierarchical-geographic's own locus_summary.csv always writes
+    # (see _fit_hierarchical_geographic_hard_count) -- so composing real
+    # fit-hierarchical-geographic output should always produce the plot,
+    # unlike the hand-crafted fixture CSVs elsewhere in this file that
+    # don't include those columns.
+    plot_path = flag_out / "hycline_candidates_overlay.png"
+    assert plot_path.exists()
+    assert plot_path.stat().st_size > 1000  # a real rendered PNG, not an empty/broken file
+    assert "candidates_overlay.png" in flag_result.stdout
+
+
+def test_cli_flag_candidates_geographic_no_plot_skips_png(tmp_path):
+    pop_csv, locus_csv = _write_geographic_hierarchical_summaries(tmp_path)
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "flag-candidates-geographic", "--no-plot",
+        "--population-summary-csv", str(pop_csv), "--locus-summary-csv", str(locus_csv),
+        "--output-dir", str(out_dir), "--prefix", "flag",
+    ])
+    assert result.returncode == 0, result.stderr
+    assert not (out_dir / "flag_candidates_overlay.png").exists()
+
+
+def test_cli_flag_candidates_geographic_missing_pmin_pmax_skips_plot_gracefully(tmp_path):
+    # Regression/contract test: _write_geographic_hierarchical_summaries's
+    # locus_csv (used by most tests in this file) has no pmin_fixed/
+    # pmax_fixed columns -- a realistic case for a hand-assembled or
+    # older-format locus summary. Plotting needs those to evaluate each
+    # locus's fitted curve; missing them should skip just the optional
+    # plot with a clear NOTE, not abort the whole command (the CSV
+    # output, the primary deliverable, doesn't need pmin/pmax at all).
+    pop_csv, locus_csv = _write_geographic_hierarchical_summaries(tmp_path)
+    out_dir = tmp_path / "out"
+    result = _run_cli([
+        "flag-candidates-geographic",
+        "--population-summary-csv", str(pop_csv), "--locus-summary-csv", str(locus_csv),
+        "--output-dir", str(out_dir), "--prefix", "flag",
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "skipping the candidates-overlay plot" in result.stdout
+    assert (out_dir / "flag_candidates.csv").exists()
+    assert not (out_dir / "flag_candidates_overlay.png").exists()
 
 
 def test_cli_flag_candidates_geographic_custom_alpha(tmp_path):

@@ -1637,3 +1637,109 @@ correctly skip the ranking table), and
 in isolation across four constructed cases, plus one real end-to-end
 fit that triggers it). Every collected test reconciled against
 `--collect-only`'s total, per this project's own standing practice.
+
+## 17. Candidate-flagging overlay plot: fitted curves colored by category
+
+Section 15 shipped `flag-candidates-geographic`/`flag-candidates-genomic`
+with CSV and printed-summary output only -- no plot. Requested directly:
+"different classes of candidates are a different color and all the
+other loci are a light grey color," and, after a design discussion on
+what "the different classes" should actually show (a z-score scatter in
+the space the flagging decision is made in, vs. the loci's actual fitted
+cline curves), the fitted curves -- more biologically intuitive, and
+needed for both cline types.
+
+### 17.1 What's plotted, and why curves rather than a z-score/parameter scatter
+
+`hycline.viz.plotting.plot_geographic_candidates_overlay`/
+`plot_genomic_candidates_overlay` draw one fitted-curve line per locus on
+a single set of shared axes -- allele frequency vs. geographic distance,
+or phi(h) vs. hybrid index -- colored by the locus's own candidate
+category, with non-candidate loci drawn first, in light grey and
+partially transparent, so flagged loci visually sit on top rather than
+getting lost among the rest of the locus set. This was chosen over a
+z-score scatter (`z_center` vs. `z_rate`, the space the flagging decision
+is actually made in) specifically because it shows *how* a flagged
+locus's shape differs -- steeper, shallower, shifted -- not just that it
+crossed a statistical threshold, which is what a domain reader actually
+wants to see first. `_plot_candidates_overlay` is the shared core both
+wrappers call into, mirroring `_flag_from_z_scores`'s own role as the
+one-statistical-core-two-cline-types pattern this module already uses.
+
+Genomic needs nothing beyond `u`/`v` (hybrid index is always in [0, 1]),
+so `plot_genomic_candidates_overlay` also draws the same neutral-null
+reference diagonal `plot_hierarchical_genomic_grid` already does per
+panel. Geographic needs each locus's fixed `pmin`/`pmax` to evaluate
+`cline_function` (Components A/D still have no tail-model support -- see
+README.md's Tier 1 backlog -- so this is always plotted with
+`TailType.NONE`), and has no observed distance range to fall back to the
+way per-locus fitting commands do (`flag-candidates-geographic` reads
+only the population/locus summary CSVs, not the original per-site data),
+so it defaults to each locus's own `center +/- 3*width`, wide enough to
+show every curve's full transition.
+
+### 17.2 A fixed, CVD-validated category-color assignment, not four arbitrary colors
+
+Read the `dataviz` skill's color-formula guidance before writing any of
+this: categorical hues must be assigned in a fixed order and validated
+for color-vision-deficiency separation, not picked by eye or left to
+matplotlib's default cycle. Ran the skill's own validator
+(`validate_palette.js`) against several 4-hue orderings drawn from the
+project's categorical ramp, under `--pairs all` rather than only
+adjacent-pair mode -- the right mode here, since every category can
+appear simultaneously on one overlay (unlike, say, a stacked bar, where
+only neighboring segments are ever adjacent). blue/orange/aqua/violet
+(`#2a78d6`/`#eb6834`/`#1baf7a`/`#4a3aa7`) is the ordering that actually
+passed: the first 4-hue combination tried (blue/orange/aqua/red) failed
+on the orange-red pair (CVD Delta E 5.6, normal-vision Delta E 7.1, both
+below the required floors). Non-candidate loci use a separate light grey
+(`#c7c6c2`), deliberately outside the categorical ramp so it reads as
+"background," not a fifth category. Assignment is fixed by category
+identity (`_CANDIDATE_CATEGORY_COLORS`, a module-level dict), not by
+whichever order categories happen to appear in a given fit's data, and
+the legend lists categories in that same fixed order -- restricted,
+elevated, asymmetric, ambiguous -- only omitting entries for categories
+absent from the current result, never reordering the ones present.
+
+### 17.3 CLI wiring: on by default, degrading gracefully rather than failing
+
+Both `flag-candidates-geographic`/`flag-candidates-genomic` write
+`<prefix>_candidates_overlay.png` by default alongside the existing CSV;
+`--no-plot` skips it. Geographic's plot needs `pmin_fixed`/`pmax_fixed`
+columns the locus summary CSV may not have (a hand-assembled summary, or
+one from before this feature) -- rather than making the whole command
+fail on a column the CSV output itself never needed,
+`_resolve_optional_summary_col` (a `_resolve_summary_col` variant that
+returns `None` instead of exiting on failed auto-detection, while still
+treating an explicitly-given-but-wrong `--pmin-col`/`--pmax-col` as a
+hard error) lets the command print a clear NOTE and skip just the plot.
+Verified directly: `tests/test_cli.py::
+test_cli_flag_candidates_geographic_missing_pmin_pmax_skips_plot_gracefully`
+confirms this against the exact fixture (`_write_geographic_hierarchical_
+summaries`) every other hand-crafted test in that file already uses,
+which predates this feature and has no `pmin_fixed`/`pmax_fixed` columns
+-- so this also confirms the feature doesn't break any pre-existing test
+input format. Genomic has no such gap (`u`/`v` are already required for
+the flagging statistics themselves), so its plot is unconditional
+whenever `--no-plot` isn't given.
+
+### 17.4 Verification
+
+`tests/test_plotting_candidates.py` (new file, 9 tests) checks the
+plotting functions' actual contract directly -- fixed category-to-color
+assignment, legend order and omission of absent categories, non-flagged
+loci drawn grey and first, the default/explicit distance-range behavior,
+the genomic neutral-reference line -- not just "it runs without an
+exception." `tests/test_cli.py` gained CLI-level coverage: the existing
+`test_cli_flag_candidates_geographic_composes_with_real_fit_hierarchical_
+output` test (real `fit-hierarchical-geographic` output on real Manakin
+data, piped into `flag-candidates-geographic`) extended to assert the
+PNG exists and is non-trivially sized; `test_cli_flag_candidates_genomic_
+end_to_end` extended the same way; plus dedicated `--no-plot` tests for
+both commands and the graceful-degradation test above. Both real plots
+(the Manakin composition run, and a hand-built 5-locus scenario
+constructed to actually produce restricted/elevated/asymmetric outliers)
+were rendered and visually inspected, not just asserted to exist -- the
+flagged loci's curves visibly stand out in their assigned colors against
+the grey background, and the legend lists only the categories present,
+in the fixed order.

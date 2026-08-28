@@ -519,3 +519,165 @@ def plot_genomic_gl_multi_locus_grid(results: dict, ncols: int = 3):
 
     fig.tight_layout()
     return fig
+
+
+# Fixed color assignment for Fitzpatrick (2013)-style candidate categories,
+# shared by plot_geographic_candidates_overlay/plot_genomic_candidates_overlay.
+# A specific 4-hue ordering (not just "4 distinct colors"), chosen from the
+# project's categorical ramp and verified with the color-vision-deficiency
+# validator described in the dataviz skill (`validate_palette.js
+# "#2a78d6,#eb6834,#1baf7a,#4a3aa7" --mode light --pairs all`) -- all-pairs
+# CVD separation and normal-vision floors both pass, which matters here
+# specifically because every category can appear simultaneously on one
+# overlay (unlike an adjacent-only context like a stacked bar), so the
+# stricter "any pair, not just neighbors" check is the right one to hold
+# this ordering to. Colors are assigned by category identity, not by
+# whichever order categories happen to appear in a given fit's data.
+_CANDIDATE_CATEGORY_COLORS = {
+    "restricted_gene_flow": "#2a78d6",
+    "elevated_gene_flow": "#eb6834",
+    "asymmetric_gene_flow": "#1baf7a",
+    "ambiguous": "#4a3aa7",
+}
+_CANDIDATE_CATEGORY_LABELS = {
+    "restricted_gene_flow": "Restricted gene flow",
+    "elevated_gene_flow": "Elevated gene flow",
+    "asymmetric_gene_flow": "Asymmetric gene flow",
+    "ambiguous": "Ambiguous",
+}
+_CANDIDATE_NOT_FLAGGED_COLOR = "#c7c6c2"
+
+
+def _plot_candidates_overlay(curves: dict, category_by_locus: dict,
+                              xlabel: str, ylabel: str):
+    """Shared core for `plot_geographic_candidates_overlay`/
+    `plot_genomic_candidates_overlay`: one fitted-curve line per locus,
+    colored by candidate category (`_CANDIDATE_CATEGORY_COLORS`'s fixed
+    order) with not-flagged loci drawn first, in light grey and mostly
+    transparent, so the flagged curves -- the actual point of the plot --
+    stand out on top rather than getting lost in the full locus set.
+
+    `curves`: `{locus_name: (x_smooth, y_smooth)}`, already evaluated by
+    the caller (matches `plot_multi_locus_overlay`'s own convention, so
+    this doesn't need to know which cline-type model produced the
+    curve). `category_by_locus`: `{locus_name: category_str_or_None}`,
+    e.g. built from `CandidateFlagResult.flags` as
+    `{f.locus: f.category for f in result.flags}`.
+    """
+    if not curves:
+        raise ValueError("Nothing to plot -- curves is empty.")
+    fig, ax = plt.subplots(figsize=(8, 5.5))
+
+    not_flagged = [name for name in curves if category_by_locus.get(name) is None]
+    flagged = [name for name in curves if category_by_locus.get(name) is not None]
+
+    for name in not_flagged:
+        x, y = curves[name]
+        ax.plot(x, y, color=_CANDIDATE_NOT_FLAGGED_COLOR, linewidth=1.0,
+                 alpha=0.5, zorder=1)
+
+    seen_categories = set()
+    for name in flagged:
+        category = category_by_locus[name]
+        color = _CANDIDATE_CATEGORY_COLORS.get(category, _CANDIDATE_NOT_FLAGGED_COLOR)
+        x, y = curves[name]
+        ax.plot(x, y, color=color, linewidth=1.8, alpha=0.9, zorder=2)
+        seen_categories.add(category)
+
+    from matplotlib.lines import Line2D
+    legend_handles = []
+    if not_flagged:
+        legend_handles.append(Line2D([0], [0], color=_CANDIDATE_NOT_FLAGGED_COLOR,
+                                      lw=1.5, alpha=0.6, label="Not flagged"))
+    # fixed category order, not order-of-appearance -- "assign categorical
+    # hues in fixed order" applies to the legend too, not just the marks.
+    for category in ("restricted_gene_flow", "elevated_gene_flow",
+                      "asymmetric_gene_flow", "ambiguous"):
+        if category in seen_categories:
+            legend_handles.append(Line2D(
+                [0], [0], color=_CANDIDATE_CATEGORY_COLORS[category], lw=1.8,
+                label=_CANDIDATE_CATEGORY_LABELS[category]))
+    ax.legend(handles=legend_handles, loc="best", frameon=False, fontsize=8)
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(-0.05, 1.05)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.set_title(f"{len(curves)} loci ({len(flagged)} flagged as candidates)")
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_geographic_candidates_overlay(locus_params: dict, category_by_locus: dict,
+                                        distance_range: tuple | None = None):
+    """One fitted geographic-cline curve per locus, colored by
+    `flag_geographic_candidates`'s Fitzpatrick-style candidate category,
+    with non-candidate loci drawn in light grey underneath -- shows
+    directly how a flagged locus's actual cline shape differs from the
+    rest of the locus set, not just its z-scores in a table.
+
+    `locus_params`: `{locus_name: ClineParams}` -- the per-locus fitted
+    center/width/pmin/pmax (e.g. from a hierarchical fit's
+    `locus_summary()`, with `pmin`/`pmax` from that same fit's fixed
+    extremes -- see `hycline.inference.mcmc_hierarchical.
+    _derive_pmin_pmax`). Always plotted with `TailType.NONE`: Components
+    A/D (Phase 4's hierarchical geographic models, the only fits
+    `flag_geographic_candidates` supports) don't support any tail model
+    yet -- see README.md's Tier 1 backlog -- so there is currently no
+    tail-fitted hierarchical result this could plot even if it accepted
+    one.
+
+    `category_by_locus`: `{locus_name: category_str_or_None}`.
+
+    `distance_range`: `(min, max)` to evaluate curves over. Default:
+    derived from the loci's own `center +/- 3*width` range, since
+    `flag-candidates-geographic` reads only the population/locus summary
+    CSVs, not the original per-site distance data, so there's no
+    observed range to default to the way `plot_multi_locus_overlay`'s
+    callers use their own transect's `distance.min()/.max()`.
+    """
+    if not locus_params:
+        raise ValueError("Nothing to plot -- locus_params is empty.")
+    if distance_range is None:
+        centers = np.array([p.center for p in locus_params.values()])
+        widths = np.array([p.width for p in locus_params.values()])
+        lo = float(np.min(centers - 3 * widths))
+        hi = float(np.max(centers + 3 * widths))
+    else:
+        lo, hi = distance_range
+    x_smooth = np.linspace(lo, hi, 200)
+    curves = {name: (x_smooth, cline_function(x_smooth, params, TailType.NONE))
+              for name, params in locus_params.items()}
+    return _plot_candidates_overlay(curves, category_by_locus,
+                                     xlabel="Geographic distance", ylabel="Allele frequency")
+
+
+def plot_genomic_candidates_overlay(locus_params: dict, category_by_locus: dict):
+    """Genomic-cline analog of `plot_geographic_candidates_overlay`: one
+    phi(h) curve per locus over hybrid index h in [0, 1] (always
+    bounded, unlike geographic distance, so there's no `distance_range`
+    equivalent to derive), colored by `flag_genomic_candidates`'s
+    candidate category, non-candidates in light grey underneath. The
+    dashed diagonal is the neutral-null expectation (phi(h) = h, u=0,
+    v=1) -- the same reference line `plot_hierarchical_genomic_grid`
+    already draws per-panel -- so a flagged locus's actual deviation
+    from neutral is visible directly, not just its category label.
+
+    `locus_params`: `{locus_name: GenomicClineParams}`.
+    `category_by_locus`: `{locus_name: category_str_or_None}`.
+    """
+    if not locus_params:
+        raise ValueError("Nothing to plot -- locus_params is empty.")
+    from hycline.models.genomic_cline import genomic_cline_function
+
+    h_smooth = np.linspace(0.001, 0.999, 200)
+    curves = {name: (h_smooth, genomic_cline_function(h_smooth, params))
+              for name, params in locus_params.items()}
+    fig = _plot_candidates_overlay(curves, category_by_locus,
+                                    xlabel="Hybrid index", ylabel="Genomic cline (phi)")
+    ax = fig.axes[0]
+    ax.plot([0, 1], [0, 1], color="#a0aec0", linewidth=1, linestyle="--", zorder=0)
+    ax.set_xlim(-0.02, 1.02)
+    return fig
