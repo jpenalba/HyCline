@@ -39,7 +39,8 @@ type.** `fit-genomic` and `fit-hierarchical-genomic` auto-detect
 everything about the input -- hard counts vs. genotype likelihoods, one
 locus vs. thousands -- from the file itself, with no flags needed to tell
 them what they're looking at. `filter-aims` is shared with the
-geographic-cline pipeline; see that guide for its own full flag reference.
+geographic-cline pipeline; see that guide for its own full flag reference
+and the summary file (AIM count, missing data, warnings) it writes.
 
 Once you have per-locus cline fits, a separate guide covers across-locus
 coupling / concordance analysis (`coupling-genomic`), which measures how
@@ -68,6 +69,7 @@ Reading vcf data from 'genomewide.vcf' ...
   7 loci checked, 3 retained (>= 0.9 in one population and <= 0.1 in the other, either direction)
 
 Wrote filtered.vcf
+Wrote filtered_summary.txt
 Ready for: hycline generate-geographic-input / generate-genomic-input, using this file as --input.
 ```
 

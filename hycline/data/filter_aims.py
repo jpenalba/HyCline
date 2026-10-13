@@ -134,11 +134,40 @@ def filter_aims_beagle(input_path: str, metadata_path: str, output_path: str,
     mask = compute_aim_mask(freq_pop1, freq_pop2, low_threshold, high_threshold)
     write_beagle(beagle_data, output_path, mask)
 
+    missing = beagle_missing_mask(beagle_data.gl0, beagle_data.gl1, beagle_data.gl2)
     return {
         "n_total": len(beagle_data), "n_retained": int(mask.sum()),
         "n_pop1_samples": int(pop1_mask.sum()), "n_pop2_samples": int(pop2_mask.sum()),
         "freq_pop1": freq_pop1, "freq_pop2": freq_pop2,
         "marker_names": beagle_data.marker_names, "mask": mask,
+        **_missingness_fields(missing, mask, beagle_data.sample_names,
+                              pop1_mask, pop2_mask),
+    }
+
+
+def beagle_missing_mask(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray) -> np.ndarray:
+    """(n_loci, n_samples) boolean mask of missing beagle genotypes: NaN or
+    all-zero likelihoods, or three equal likelihoods -- ANGSD writes
+    0.333333/0.333333/0.333333 for an individual with no reads at a site,
+    so equal likelihoods are its encoding of "no data"."""
+    total = gl0 + gl1 + gl2
+    return (np.isnan(total) | (total <= 0)
+            | (np.isclose(gl0, gl1) & np.isclose(gl1, gl2)))
+
+
+def _missingness_fields(missing: np.ndarray, aim_mask: np.ndarray, sample_names: list,
+                         pop1_mask: np.ndarray, pop2_mask: np.ndarray) -> dict:
+    """Missing-data bookkeeping shared by the VCF and beagle filters, from an
+    (n_loci, n_samples) boolean missing mask."""
+    missing = np.asarray(missing, dtype=bool)
+    called = ~missing
+    return {
+        "sample_names": list(sample_names),
+        "pop1_mask": pop1_mask, "pop2_mask": pop2_mask,
+        "missing_per_sample": missing.sum(axis=0).astype(np.int64),
+        "missing_per_sample_aims": missing[aim_mask].sum(axis=0).astype(np.int64),
+        "n_called_pop1": called[:, pop1_mask].sum(axis=1).astype(np.int64),
+        "n_called_pop2": called[:, pop2_mask].sum(axis=1).astype(np.int64),
     }
 
 
@@ -248,6 +277,7 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
     freq_pop1_list = []
     freq_pop2_list = []
     keep_flags = []
+    missing_rows = []
     n_skipped_multiallelic = 0
     n_skipped_indel = 0
     n_skipped_no_gt = 0
@@ -314,6 +344,7 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
             freq_pop1_list.append(freq_pop1)
             freq_pop2_list.append(freq_pop2)
             keep_flags.append(keep)
+            missing_rows.append(np.isnan(dosage_row))
 
             if keep:
                 fout.write(raw_line)
@@ -334,4 +365,110 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
         "n_skipped_multiallelic": n_skipped_multiallelic,
         "n_skipped_indel": n_skipped_indel,
         "n_skipped_no_gt": n_skipped_no_gt,
+        **_missingness_fields(np.vstack(missing_rows), mask, header_samples,
+                              pop1_mask, pop2_mask),
     }
+
+
+def _pct(num: float, den: float) -> str:
+    return f"{100.0 * num / den:.2f}%" if den else "n/a"
+
+
+def build_filter_summary(result: dict, *, input_path: str, output_path: str, fmt: str,
+                          pop1_label: str, pop2_label: str,
+                          low_threshold: float, high_threshold: float,
+                          min_parental_n: int = 6,
+                          max_sample_missing: float = 0.5) -> tuple:
+    """Plain-text summary of a `filter_aims_vcf`/`filter_aims_beagle` run.
+
+    Returns `(text, warnings)`. Warnings are raised for:
+      - a parental population with fewer than `min_parental_n` individuals;
+      - a parental individual missing at more than `max_sample_missing` of
+        the loci checked;
+      - retained AIMs where fewer than `min_parental_n` individuals of a
+        parental population had a genotype call -- missing data shrinks the
+        per-locus sample the frequency was actually computed from, so these
+        AIMs rest on fewer individuals than the panel size suggests. Only
+        populations whose panel meets `min_parental_n` are checked here (a
+        smaller panel already gets the population-size warning).
+    Missing data is counted over the biallelic SNPs checked (VCF: `./.`;
+    beagle: equal or absent genotype likelihoods).
+    """
+    names = result["sample_names"]
+    pop1_mask, pop2_mask = result["pop1_mask"], result["pop2_mask"]
+    n_loci, n_aims = result["n_total"], result["n_retained"]
+    miss_all, miss_aims = result["missing_per_sample"], result["missing_per_sample_aims"]
+    parental = pop1_mask | pop2_mask
+    n_samples, n_par = len(names), int(parental.sum())
+
+    warnings = []
+    for label, n in ((pop1_label, result["n_pop1_samples"]),
+                     (pop2_label, result["n_pop2_samples"])):
+        if n < min_parental_n:
+            warnings.append(
+                f"Parental population '{label}' has only {n} individual(s) (fewer than "
+                f"{min_parental_n}); allele-frequency estimates and AIM calls from so "
+                f"few individuals are unreliable.")
+    flagged = []
+    for i in np.flatnonzero(parental):
+        frac = miss_all[i] / n_loci if n_loci else 0.0
+        if frac > max_sample_missing:
+            flagged.append(names[i])
+            warnings.append(
+                f"Parental individual '{names[i]}' is missing data at {_pct(miss_all[i], n_loci)} "
+                f"of loci checked (more than {100 * max_sample_missing:g}%).")
+    aim_mask = result["mask"]
+    thin = np.zeros_like(aim_mask)
+    for key, n in (("n_called_pop1", result["n_pop1_samples"]),
+                   ("n_called_pop2", result["n_pop2_samples"])):
+        if n >= min_parental_n:
+            thin |= aim_mask & (result[key] < min_parental_n)
+    n_thin = int(thin.sum())
+    if n_thin:
+        warnings.append(
+            f"{n_thin} of {n_aims} retained AIMs had fewer than {min_parental_n} called "
+            f"individuals in at least one parental population at that locus, because of "
+            f"missing data.")
+
+    lines = [
+        "HyCline filter-aims summary",
+        "===========================",
+        f"Input:      {input_path} ({fmt})",
+        f"Output:     {output_path}",
+        f"Parentals:  {pop1_label} = {result['n_pop1_samples']} individuals, "
+        f"{pop2_label} = {result['n_pop2_samples']} individuals",
+        f"Thresholds: <= {low_threshold} in one parental population and "
+        f">= {high_threshold} in the other",
+        "",
+        "AIMs",
+        "----",
+        f"Loci checked:   {n_loci}",
+        f"AIMs retained:  {n_aims} ({_pct(n_aims, n_loci)} of loci checked)",
+    ]
+    if fmt == "vcf":
+        lines.append(f"Sites skipped:  {result['n_skipped_multiallelic']} multiallelic, "
+                     f"{result['n_skipped_indel']} indel, "
+                     f"{result['n_skipped_no_gt']} with no GT field")
+    lines += [
+        "",
+        "Missing data (over loci checked)",
+        "--------------------------------",
+        f"{'Global, all samples (' + str(n_samples) + '):':<38}"
+        f"{_pct(miss_all.sum(), n_loci * n_samples)}",
+        f"{'Global, parental samples (' + str(n_par) + '):':<38}"
+        f"{_pct(miss_all[parental].sum(), n_loci * n_par)}",
+        f"{'Parental samples, retained AIMs only:':<38}"
+        f"{_pct(miss_aims[parental].sum(), n_aims * n_par)}",
+        "",
+        "Per-sample missing data (parental samples)",
+        "------------------------------------------",
+        "sample\tpopulation\tmissing_all_loci\tmissing_aims\tflag",
+    ]
+    for i in np.flatnonzero(parental):
+        label = pop1_label if pop1_mask[i] else pop2_label
+        flag = "HIGH_MISSING" if names[i] in flagged else ""
+        lines.append(f"{names[i]}\t{label}\t{_pct(miss_all[i], n_loci)}\t"
+                     f"{_pct(miss_aims[i], n_aims)}\t{flag}")
+    lines += ["", "Warnings", "--------"]
+    lines += [f"WARNING: {w}" for w in warnings] or ["None."]
+    return "\n".join(lines) + "\n", warnings

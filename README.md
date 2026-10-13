@@ -783,7 +783,11 @@ in without explanation.
   step in isolation; also surfaced a real, honest finite-sample finding
   along the way (a genuinely informative locus can narrowly miss the
   default threshold with a small reference panel, by chance, not because
-  the filter is wrong). See BACKEND_PHASE1.md section 9.6.
+  the filter is wrong). See BACKEND_PHASE1.md section 9.6. Each run also
+  writes a plain-text summary (AIMs retained, global and per-parental-
+  sample missing data) with warnings for small parental panels, parental
+  individuals with heavy missing data, and AIMs whose per-locus called
+  sample falls below the panel-size threshold because of missing data.
 - `hycline.data.beagle`'s four writer functions, underlying
   `generate-geographic-input` (beagle input) / `generate-genomic-input` --
   the beagle-format analog of the VCF converter, mirroring its structure

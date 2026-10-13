@@ -1149,8 +1149,32 @@ def _build_parser() -> argparse.ArgumentParser:
     faims_p.add_argument("--output", required=True, metavar="FILE",
                           help="Path to write the filtered file to, in the same format "
                                "as --input.")
+    faims_p.add_argument("--summary", default=None, metavar="FILE.txt",
+                          help="Path to write a plain-text summary to: AIMs retained, "
+                               "global missing data, per-sample missing data for the "
+                               "parental individuals, and any warnings (default: "
+                               "--output with its .vcf/.vcf.gz/.beagle/.beagle.gz "
+                               "extension replaced by _summary.txt).")
+    faims_p.add_argument("--min-parental-n", type=int, default=6,
+                          help="Warn if either parental population has fewer than this "
+                               "many individuals, or if a retained AIM had fewer than "
+                               "this many called individuals in either parental "
+                               "population because of missing data (default: 6).")
+    faims_p.add_argument("--max-sample-missing", type=float, default=0.5,
+                          help="Warn about any parental individual missing data at more "
+                               "than this fraction of loci checked (default: 0.5).")
 
     return parser
+
+
+def _default_summary_path(output: str) -> Path:
+    out = Path(output)
+    name = out.name
+    for suffix in (".vcf.gz", ".beagle.gz", ".vcf", ".beagle"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    return out.with_name(f"{name}_summary.txt")
 
 
 def _load_transect(args):
@@ -3349,8 +3373,21 @@ def cmd_filter_aims(args) -> int:
         print(f"\nERROR: metadata file not found: '{args.metadata}'\n", file=sys.stderr)
         return 2
 
+    if args.min_parental_n < 1:
+        print("\nERROR: --min-parental-n must be at least 1.\n", file=sys.stderr)
+        return 2
+    if not 0.0 <= args.max_sample_missing <= 1.0:
+        print("\nERROR: --max-sample-missing must be between 0 and 1.\n", file=sys.stderr)
+        return 2
+
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path = (Path(args.summary) if args.summary
+                    else _default_summary_path(args.output))
+    if summary_path.resolve() == out_path.resolve():
+        print("\nERROR: --summary must be a different path from --output.\n",
+              file=sys.stderr)
+        return 2
 
     print(f"Reading {fmt} data from '{args.input}' ...")
     try:
@@ -3394,7 +3431,20 @@ def cmd_filter_aims(args) -> int:
               f"file's actual values, or consider loosening --low-threshold/"
               f"--high-threshold.\n", file=sys.stderr)
 
+    from hycline.data.filter_aims import build_filter_summary
+    summary_text, summary_warnings = build_filter_summary(
+        result, input_path=args.input, output_path=str(out_path), fmt=fmt,
+        pop1_label=args.pop1_label, pop2_label=args.pop2_label,
+        low_threshold=args.low_threshold, high_threshold=args.high_threshold,
+        min_parental_n=args.min_parental_n, max_sample_missing=args.max_sample_missing,
+    )
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(summary_text)
+    for w in summary_warnings:
+        print(f"WARNING: {w}", file=sys.stderr)
+
     print(f"\nWrote {out_path.resolve()}")
+    print(f"Wrote {summary_path.resolve()}")
     if fmt == "vcf":
         print("Ready for: hycline generate-geographic-input / generate-genomic-input, "
               "using this file as --input -- or use it with any other tool that reads "

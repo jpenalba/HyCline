@@ -1999,6 +1999,50 @@ def test_cli_filter_aims_next_step_guidance_references_live_commands(tmp_path):
     assert "convert-beagle-geographic" not in beagle_result.stdout
 
 
+def test_cli_filter_aims_writes_summary_and_warnings(tmp_path):
+    header = ("##fileformat=VCFv4.2\n"
+              "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tind0\tind1\n")
+    lines = ("chr1\t100\tlocusA\tA\tT\t99\tPASS\t.\tGT\t0/0\t1/1\n"
+             "chr1\t200\tlocusB\tA\tT\t99\tPASS\t.\tGT\t./.\t1/1\n")
+    vcf_path = tmp_path / "genotypes.vcf.gz"
+    import gzip
+    with gzip.open(vcf_path, "wt") as fh:
+        fh.write(header + lines)
+    metadata_path = tmp_path / "metadata.csv"
+    pd.DataFrame({"individual": ["ind0", "ind1"],
+                  "population": ["parent1", "parent2"]}).to_csv(metadata_path, index=False)
+
+    result = _run_cli([
+        "filter-aims", "--input", str(vcf_path), "--metadata", str(metadata_path),
+        "--output", str(tmp_path / "filtered.vcf.gz"),
+    ])
+    assert result.returncode == 0
+    summary = (tmp_path / "filtered_summary.txt").read_text()
+    assert "AIMs retained:  1 (50.00% of loci checked)" in summary
+    assert "ind0\tparent1\t50.00%\t0.00%\t" in summary
+    assert "'parent1' has only 1 individual(s)" in result.stderr
+    assert "'parent2' has only 1 individual(s)" in result.stderr
+    assert "'ind0' is missing" not in result.stderr  # 50% is not > 50%
+
+    custom = tmp_path / "sub" / "report.txt"
+    result = _run_cli([
+        "filter-aims", "--input", str(vcf_path), "--metadata", str(metadata_path),
+        "--output", str(tmp_path / "filtered.vcf.gz"), "--summary", str(custom),
+        "--min-parental-n", "1", "--max-sample-missing", "0.4",
+    ])
+    assert result.returncode == 0
+    text = custom.read_text()
+    assert "'ind0' is missing data at 50.00%" in text
+    assert "has only" not in text
+
+    result = _run_cli([
+        "filter-aims", "--input", str(vcf_path), "--metadata", str(metadata_path),
+        "--output", str(tmp_path / "x.vcf"), "--summary", str(tmp_path / "x.vcf"),
+    ])
+    assert result.returncode == 2
+    assert "--summary must be a different path" in result.stderr
+
+
 def test_cli_filter_aims_beagle_auto_detect_and_filter(tmp_path):
     beagle_content = (
         "marker\tallele1\tallele2\tind0\tind0\tind0\tind1\tind1\tind1\tind2\tind2\tind2\n"

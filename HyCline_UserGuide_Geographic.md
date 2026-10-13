@@ -69,17 +69,74 @@ hycline filter-aims \
     --output filtered.vcf
 ```
 
-Real output:
+Real output (here on a simulated 60-sample, 5000-SNP VCF with 10 individuals
+per parental population; absolute paths shortened):
 
 ```
 Detected input format: vcf (from file extension; use --format to override)
 Reading vcf data from 'genomewide.vcf' ...
-  parent1: 5 individuals; parent2: 5 individuals
-  20 loci checked, 3 retained (>= 0.9 in one population and <= 0.1 in the other, either direction)
+  parent1: 10 individuals; parent2: 10 individuals
+  5000 loci checked, 250 retained (>= 0.9 in one population and <= 0.1 in the other, either direction)
+WARNING: Parental individual 'sample4_pop1' is missing data at 60.00% of loci checked (more than 50%).
 
-Wrote filtered.vcf
-Ready for: hycline generate-geographic-input / convert-vcf-genomic, using this file as --input.
+Wrote /path/to/filtered.vcf
+Wrote /path/to/filtered_summary.txt
+Ready for: hycline generate-geographic-input / generate-genomic-input, using this file as --input -- or use it with any other tool that reads VCF directly.
 ```
+
+### The summary file
+
+Every run also writes a plain-text summary next to the output (by default
+`--output` with its `.vcf`/`.vcf.gz`/`.beagle`/`.beagle.gz` extension replaced
+by `_summary.txt`; set the path with `--summary`). It records how many AIMs
+were retained, the global missing-data rate, a per-sample missing-data table
+for the parental individuals (over all loci checked and over the retained
+AIMs alone), and any warnings. From the run above (per-sample table
+truncated):
+
+```
+AIMs
+----
+Loci checked:   5000
+AIMs retained:  250 (5.00% of loci checked)
+Sites skipped:  0 multiallelic, 0 indel, 0 with no GT field
+
+Missing data (over loci checked)
+--------------------------------
+Global, all samples (60):             5.92%
+Global, parental samples (20):        7.74%
+Parental samples, retained AIMs only: 7.46%
+
+Per-sample missing data (parental samples)
+------------------------------------------
+sample	population	missing_all_loci	missing_aims	flag
+sample1_pop1	parent1	4.96%	4.00%	
+sample4_pop1	parent1	60.00%	56.00%	HIGH_MISSING
+...
+
+Warnings
+--------
+WARNING: Parental individual 'sample4_pop1' is missing data at 60.00% of loci checked (more than 50%).
+```
+
+The per-sample table is tab-separated, so it pastes straight into a
+spreadsheet. A genotype counts as missing when it is `./.` in a VCF, or
+when its three genotype likelihoods are equal or absent in a beagle file
+(ANGSD writes `0.333333 0.333333 0.333333` for an individual with no reads
+at a site). Warnings are printed to the terminal as well as written to the
+summary, for three situations:
+
+- a parental population with fewer than `--min-parental-n` individuals
+  (default 6, i.e. 5 or fewer triggers it);
+- a parental individual missing data at more than `--max-sample-missing`
+  of loci checked (default 0.5);
+- retained AIMs where, because of missing data, fewer than
+  `--min-parental-n` individuals of a parental population actually had a
+  genotype call at that locus -- the AIM's frequency rests on fewer
+  individuals than the panel size suggests. (Populations already below
+  `--min-parental-n` overall are covered by the first warning instead.)
+
+Warnings never stop the run or change which loci are retained.
 
 For VCF specifically: **every retained line is copied byte-for-byte from the
 input, not re-derived from parsed fields** -- filtering only removes whole
@@ -101,6 +158,9 @@ them.
 | `--population-col` | Column in `--metadata` holding each individual's population label (default: `population`) |
 | `--pop1-label` / `--pop2-label` | Values identifying the two parental reference groups (default: `parent1`/`parent2`) |
 | `--low-threshold` / `--high-threshold` | A locus is retained if one population's frequency is at or below `--low-threshold` (default 0.1) and the other's is at or above `--high-threshold` (default 0.9), in either direction |
+| `--summary` | Path for the summary file (default: `--output` with its extension replaced by `_summary.txt`) |
+| `--min-parental-n` | Warn when a parental population, or a retained AIM's called individuals in a parental population, number fewer than this (default 6) |
+| `--max-sample-missing` | Warn about parental individuals missing data at more than this fraction of loci checked (default 0.5) |
 
 For VCF input, sites are also silently checked against a biallelic-SNP-with-
 GT scope (multiallelic sites, indels, and sites with no `GT` field are

@@ -5,6 +5,7 @@ import pytest
 from hycline.data.filter_aims import (
     compute_aim_mask, match_samples_to_populations,
     filter_aims_beagle, filter_aims_csv, filter_aims_vcf,
+    beagle_missing_mask, build_filter_summary,
 )
 
 
@@ -350,3 +351,116 @@ def test_filter_aims_vcf_no_chrom_header_raises(tmp_path):
         metadata_path, index=False)
     with pytest.raises(ValueError, match="not a valid VCF"):
         filter_aims_vcf(str(vcf_path), str(metadata_path), str(tmp_path / "out.vcf"))
+
+
+# ---------------------------------------------------------------------------
+# missing-data bookkeeping and build_filter_summary
+# ---------------------------------------------------------------------------
+
+def _summary_vcf(tmp_path, rows, samples, populations):
+    header = ("##fileformat=VCFv4.2\n"
+              "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"
+              + "\t".join(samples) + "\n")
+    lines = [f"chr1\t{100 * (i + 1)}\tsnp{i + 1}\tA\tT\t.\tPASS\t.\tGT\t"
+             + "\t".join(gts) + "\n" for i, gts in enumerate(rows)]
+    vcf_path = tmp_path / "in.vcf"
+    vcf_path.write_text(header + "".join(lines))
+    meta_path = tmp_path / "meta.csv"
+    pd.DataFrame({"individual": samples, "population": populations}).to_csv(
+        meta_path, index=False)
+    return vcf_path, meta_path
+
+
+def test_filter_aims_vcf_missing_data_counts_match_hand_computation(tmp_path):
+    # p1a/p1b = parent1, p2a = parent2, h = hybrid.
+    # snp1: AIM, p1b missing          snp2: not an AIM, p2a and h missing
+    # snp3: AIM, nothing missing
+    rows = [["0/0", "./.", "1/1", "0/1"],
+            ["0/1", "0/1", "./.", "./."],
+            ["1/1", "1/1", "0/0", "0/0"]]
+    vcf_path, meta_path = _summary_vcf(
+        tmp_path, rows, ["p1a", "p1b", "p2a", "h"],
+        ["parent1", "parent1", "parent2", "hybrid"])
+    result = filter_aims_vcf(str(vcf_path), str(meta_path), str(tmp_path / "out.vcf"))
+
+    np.testing.assert_array_equal(result["mask"], [True, False, True])
+    assert result["sample_names"] == ["p1a", "p1b", "p2a", "h"]
+    np.testing.assert_array_equal(result["missing_per_sample"], [0, 1, 1, 1])
+    np.testing.assert_array_equal(result["missing_per_sample_aims"], [0, 1, 0, 0])
+    np.testing.assert_array_equal(result["n_called_pop1"], [1, 2, 2])
+    np.testing.assert_array_equal(result["n_called_pop2"], [1, 0, 1])
+
+
+def test_beagle_missing_mask_treats_equal_and_absent_likelihoods_as_missing():
+    gl0 = np.array([[1/3, 0.98, 0.0, np.nan]])
+    gl1 = np.array([[1/3, 0.02, 0.0, 0.5]])
+    gl2 = np.array([[1/3, 0.00, 0.0, 0.5]])
+    np.testing.assert_array_equal(beagle_missing_mask(gl0, gl1, gl2),
+                                  [[True, False, True, True]])
+
+
+def test_filter_aims_beagle_reports_missing_per_sample(tmp_path):
+    content = (
+        "marker\tallele1\tallele2\tind0\tind0\tind0\tind1\tind1\tind1\n"
+        "m1\t0\t1\t0.98\t0.02\t0.00\t0.333333\t0.333333\t0.333333\n"
+        "m2\t0\t1\t0.98\t0.02\t0.00\t0.00\t0.02\t0.98\n"
+    )
+    beagle_path = tmp_path / "in.beagle"
+    beagle_path.write_text(content)
+    meta_path = tmp_path / "meta.csv"
+    pd.DataFrame({"individual": ["ind0", "ind1"],
+                  "population": ["parent1", "parent2"]}).to_csv(meta_path, index=False)
+    result = filter_aims_beagle(str(beagle_path), str(meta_path),
+                                str(tmp_path / "out.beagle"))
+    np.testing.assert_array_equal(result["missing_per_sample"], [0, 1])
+    np.testing.assert_array_equal(result["n_called_pop2"], [0, 1])
+
+
+def _summary(result, **kw):
+    return build_filter_summary(
+        result, input_path="in.vcf", output_path="out.vcf", fmt="vcf",
+        pop1_label="parent1", pop2_label="parent2",
+        low_threshold=0.1, high_threshold=0.9, **kw)
+
+
+def test_build_filter_summary_reports_counts_and_no_warnings(tmp_path):
+    # 6 + 6 parentals, one hybrid; 4 loci, 2 AIMs; 2 missing calls total
+    samples = [f"a{i}" for i in range(6)] + [f"b{i}" for i in range(6)] + ["h"]
+    pops = ["parent1"] * 6 + ["parent2"] * 6 + ["hybrid"]
+    aim = ["0/0"] * 6 + ["1/1"] * 6 + ["0/1"]
+    non = ["0/1"] * 13
+    non_missing = ["./."] + ["0/1"] * 11 + ["./."]
+    vcf_path, meta_path = _summary_vcf(tmp_path, [aim, non, aim, non_missing],
+                                       samples, pops)
+    result = filter_aims_vcf(str(vcf_path), str(meta_path), str(tmp_path / "out.vcf"))
+    text, warnings = _summary(result)
+
+    assert warnings == []
+    assert "AIMs retained:  2 (50.00% of loci checked)" in text
+    # 2 of 13*4 = 52 genotypes missing overall; 1 of 12*4 = 48 parental
+    assert "3.85%" in text and "2.08%" in text
+    assert "a0\tparent1\t25.00%\t0.00%\t" in text
+    assert "\nh\t" not in text  # hybrids are not listed per-sample
+    assert text.rstrip().endswith("None.")
+
+
+def test_build_filter_summary_warns_small_panel_and_high_missing(tmp_path):
+    samples = ["a0", "a1", "b0", "b1", "b2", "b3", "b4", "b5"]
+    pops = ["parent1"] * 2 + ["parent2"] * 6
+    rows = [["0/0", "./."] + ["1/1"] * 6,
+            ["0/0", "./."] + ["1/1"] * 6,
+            ["0/0", "0/0"] + ["1/1"] * 6]
+    vcf_path, meta_path = _summary_vcf(tmp_path, rows, samples, pops)
+    result = filter_aims_vcf(str(vcf_path), str(meta_path), str(tmp_path / "out.vcf"))
+    text, warnings = _summary(result)
+
+    assert len(warnings) == 2
+    assert "'parent1' has only 2 individual(s)" in warnings[0]
+    assert "'a1' is missing data at 66.67%" in warnings[1]
+    assert "a1\tparent1\t66.67%\t66.67%\tHIGH_MISSING" in text
+    # parent1's per-locus shortfall is already covered by the panel-size warning
+    assert not any("called individuals" in w for w in warnings)
+
+    _, warnings = _summary(result, min_parental_n=2, max_sample_missing=0.7)
+    assert len(warnings) == 1
+    assert "2 of 3 retained AIMs had fewer than 2 called individuals" in warnings[0]
