@@ -14,7 +14,15 @@ the actual backlog, not background reading.
 
 ## Current priorities (Tier 1, top of the list)
 
-Two items were added most recently, both from a direct reading of Baird &
+**Next up: a genotype-likelihood (maximum-likelihood) hybrid-index
+estimator for `estimate-hybrid-index`** -- the current mean-dosage
+estimator is pulled toward 0.5 at low depth and by partially
+differentiated loci. Measured numbers and the proposed model are in
+README.md's Tier 1 "Next up" entry; `benchmarking/simulate_vcf.py`
+(`--format-beagle`, `--mean-depth`, true hybrid indices in its metadata
+CSV) is the test bed.
+
+After that, two items from a direct reading of Baird &
 Daley (2025), *The Shapes of Clines and Wavefronts* (Mol Ecol,
 doi:10.1111/mec.70109) -- see `references/` for the PDF, and README.md's
 Tier 1 section for full detail:

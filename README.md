@@ -908,6 +908,35 @@ left for the reader to infer from tier placement alone.
 
 ### Tier 1 -- small, contained, ready to pick up
 
+**Next up:**
+
+- **A genotype-likelihood hybrid-index estimator for
+  `estimate-hybrid-index`.** The current estimator is the (oriented,
+  optionally differentiation-weighted) mean of each individual's
+  per-locus dosage -- for beagle input, the flat-prior expected dosage.
+  Two measured shortcomings, both from `benchmarking/simulate_vcf.py`
+  data (15 + 15 parental references, 40 hybrids, 2000 SNPs, 30% AIMs):
+  (1) *low depth*: the per-individual expected dosage pulls every
+  estimate toward 0.5 -- parental references average 0.19/0.81 at depth
+  2 and 0.13/0.86 at depth 5, against 0.09/0.91 from the true genotypes;
+  (2) *partially differentiated loci*: even correctly oriented, a locus
+  with parental frequencies 0.3/0.6 can't move anyone below 0.3 or above
+  0.6, so unweighted all-locus estimates put parentals at 0.33/0.68
+  (0.09/0.91 with `--weight-by-differentiation`, 0.02/0.98 on AIMs only).
+  Fix for both: estimate each individual's h by maximum likelihood,
+  L(h) = prod over loci of sum_g GL_g * P(g | p(h)), with
+  p(h) = (1 - h) p0 + h p1 from the parental frequencies (genotype
+  probabilities under Hardy-Weinberg). For VCF input the GLs are 0/1
+  indicators of the called genotype. This uses the full likelihoods at
+  low depth, and models partial differentiation directly instead of
+  assuming every locus is diagnostic -- a quick check of the simpler
+  per-locus rescaling (x - p0)/(p1 - p0) on the same data already gave
+  parental means 0.00/1.00 and mean hybrid error 0.008 (vs 0.042),
+  suggesting the gain is real. Validate against the simulator's true
+  hybrid indices across depths, AIM fractions, and missing data, and
+  report uncertainty (e.g. a likelihood-profile interval) per individual
+  if cheap, since HyCline's genomic-cline fits treat h as known.
+
 **Two items added from Baird & Daley (2025), *The Shapes of Clines and
 Wavefronts* (Mol Ecol, doi:10.1111/mec.70109) -- read in full, not just
 abstracted, and placed here at high priority since the first item
