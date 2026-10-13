@@ -76,7 +76,7 @@ per parental population; absolute paths shortened):
 Detected input format: vcf (from file extension; use --format to override)
 Reading vcf data from 'genomewide.vcf' ...
   parent1: 10 individuals; parent2: 10 individuals
-  5000 loci checked, 250 retained (>= 0.9 in one population and <= 0.1 in the other, either direction)
+  5000 loci checked, 250 retained (<= 0.1 in one parental population and >= 0.9 in the other)
 WARNING: Parental individual 'sample4_pop1' is missing data at 60.00% of loci checked (more than 50%).
 WARNING: 211 of 250 retained AIMs had fewer than 10 called individuals in at least one parental population at that locus, because of missing data.
 
@@ -173,7 +173,8 @@ them.
 | `--sample-col` | Column in `--metadata` holding individual names (default: `individual`). Must match the VCF's own `#CHROM` header row, or ANGSD's own beagle header row |
 | `--population-col` | Column in `--metadata` holding each individual's population label (default: `population`) |
 | `--pop1-label` / `--pop2-label` | Values identifying the two parental reference groups (default: `parent1`/`parent2`) |
-| `--low-threshold` / `--high-threshold` | A locus is retained if one population's frequency is at or below `--low-threshold` (default 0.1) and the other's is at or above `--high-threshold` (default 0.9), in either direction |
+| `--minor-allele-freq M` | Retain a locus if one parental population's frequency is at or below M and the other's is at or above 1 - M, in either direction (default 0.1, i.e. <= 0.1 and >= 0.9) |
+| `--allele-freq-diff D` | Instead of `--minor-allele-freq`: retain a locus if the two parental frequencies differ by at least D, wherever they sit -- D = 0.7 keeps 0.1 vs 0.8, 0.12 vs 0.82, 0 vs 0.75 and so on. The two flags are mutually exclusive |
 | `--summary` | Path for the summary file (default: `--output` with its extension replaced by `_summary.txt`) |
 | `--min-parental-n` | Warn when a parental population, or a retained AIM's called individuals in a parental population, number fewer than this (default 10) |
 | `--max-sample-missing` | Warn about parental individuals missing data at more than this fraction of loci checked (default 0.5) |

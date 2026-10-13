@@ -188,6 +188,14 @@ def _beagle_log_gl(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray) -> tuple:
     return log_gl0, log_gl1, log_gl2
 
 
+def _beagle_missing(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray) -> np.ndarray:
+    """Missing genotypes: NaN, all-zero, or equal likelihoods (ANGSD writes
+    0.333333 x3 for an individual with no reads). Same rule as
+    `hycline.data.filter_aims.beagle_missing_mask`."""
+    from hycline.data.filter_aims import beagle_missing_mask
+    return beagle_missing_mask(gl0, gl1, gl2)
+
+
 def _beagle_most_likely_dosage(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray) -> np.ndarray:
     """Argmax-based point-estimate dosage (0/1/2) per individual, for
     beagle-to-hard-count conversion. A real simplification, stated
@@ -317,8 +325,10 @@ def write_beagle_geographic_hard_count_csv(beagle_data: BeagleData, metadata_df,
     idx_arr = np.asarray(idx)
 
     for j, marker in enumerate(beagle_data.marker_names):
-        dosage = _beagle_expected_dosage(
-            beagle_data.gl0[j, idx_arr], beagle_data.gl1[j, idx_arr], beagle_data.gl2[j, idx_arr])
+        gl = (beagle_data.gl0[j, idx_arr], beagle_data.gl1[j, idx_arr],
+              beagle_data.gl2[j, idx_arr])
+        dosage = _beagle_expected_dosage(*gl)
+        dosage[_beagle_missing(*gl)] = np.nan  # no-data rows, not heterozygotes
         n_alleles_col, freq_col = [], []
         for site in site_order:
             positions = site_positions[site]
@@ -356,10 +366,12 @@ def write_beagle_genomic_hard_count_csv(beagle_data: BeagleData, metadata_df, sa
     new_columns = {}
     idx_arr = np.asarray(idx)
     for j, marker in enumerate(beagle_data.marker_names):
-        dosage = _beagle_most_likely_dosage(
-            beagle_data.gl0[j, idx_arr], beagle_data.gl1[j, idx_arr], beagle_data.gl2[j, idx_arr])
-        new_columns[f"{marker}.n"] = np.full(len(common_samples), ploidy)
-        new_columns[f"{marker}.freq"] = dosage / ploidy
+        gl = (beagle_data.gl0[j, idx_arr], beagle_data.gl1[j, idx_arr],
+              beagle_data.gl2[j, idx_arr])
+        dosage = _beagle_most_likely_dosage(*gl)
+        missing = _beagle_missing(*gl)  # argmax of equal likelihoods would be 0
+        new_columns[f"{marker}.n"] = np.where(missing, 0, ploidy)
+        new_columns[f"{marker}.freq"] = np.where(missing, np.nan, dosage / ploidy)
 
     out = pd.concat([pd.DataFrame(base), pd.DataFrame(new_columns)], axis=1)
 

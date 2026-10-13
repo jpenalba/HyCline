@@ -184,6 +184,25 @@ legitimate scope decision for a first cut, not an oversight, but anyone
 using this on a marker-sparse dataset should know the uncertainty in `h`
 itself isn't being carried through to the genomic cline's reported CIs.
 
+**Revisited: allele orientation.** The estimator assumed `genotypes`
+already counted population 1's allele at every locus, and the CLI passed
+raw VCF ALT dosage, which counts population 0's allele at roughly half of
+real AIMs. Found while benchmarking with `benchmarking/simulate_vcf.py`
+(ALT population randomized per AIM): every individual, parental
+references included, came out at 0.487-0.518, with correlation -0.14 to
+the true hybrid index. The existing CLI test always put population 1's
+allele in ALT, which is why it passed. `estimate_hybrid_index` now
+orients each locus from the parental frequencies whenever both are given
+(flipping loci where population 1's frequency is lower), which leaves
+already-oriented input unchanged; on the same simulated data the
+correlation is 1.000 with mean absolute error 0.009. For beagle input the
+CLI now also drops ANGSD's equal-likelihood no-data rows (previously
+counted as heterozygotes) and, in Mode 1, uses `filter_aims.em_allele_freq`
+for the parental frequencies. Regression tests:
+`test_cli_estimate_hybrid_index_orients_alleles_by_parental_frequency`,
+`test_cli_estimate_hybrid_index_beagle_missing_genotypes_not_counted`,
+`test_loci_are_oriented_by_parental_frequencies`.
+
 ---
 
 ## 6. CLI: `fit-genomic` and `fit-genomic-multi`

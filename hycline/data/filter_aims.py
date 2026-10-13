@@ -33,24 +33,53 @@ import pandas as pd
 from hycline.data.converter import DEFAULT_RESERVED_COLUMNS, detect_genotype_loci
 
 
+# Frequencies are ratios of allele counts, so a difference that is exactly
+# the requested value on paper (0.82 - 0.12) can come out a hair below it
+# in floating point; comparisons allow this much slack.
+_FREQ_TOL = 1e-9
+
+
 def compute_aim_mask(freq_pop1: np.ndarray, freq_pop2: np.ndarray,
-                      low_threshold: float = 0.1, high_threshold: float = 0.9) -> np.ndarray:
+                      low_threshold: float = 0.1, high_threshold: float = 0.9,
+                      min_freq_diff: float | None = None) -> np.ndarray:
     """Boolean mask, one entry per locus: True where the locus is a
-    strong ancestry-informative marker -- one population's frequency at
-    or above `high_threshold` and the other's at or below
-    `low_threshold`, in *either* direction (it doesn't matter which
-    parental population happens to carry the higher-frequency allele,
-    only that the two populations are strongly differentiated)."""
+    strong ancestry-informative marker, in *either* direction (it doesn't
+    matter which parental population carries the higher-frequency
+    allele, only that the two populations are strongly differentiated).
+
+    By default a locus qualifies when one population's frequency is at or
+    above `high_threshold` and the other's at or below `low_threshold`
+    (the CLI's --minor-allele-freq m sets these to m and 1 - m). If
+    `min_freq_diff` is given, the thresholds are ignored and a locus
+    qualifies when |freq_pop1 - freq_pop2| >= min_freq_diff (the CLI's
+    --allele-freq-diff). NaN frequencies never qualify."""
     freq_pop1 = np.asarray(freq_pop1, dtype=float)
     freq_pop2 = np.asarray(freq_pop2, dtype=float)
+    if min_freq_diff is not None:
+        if not 0.0 < min_freq_diff <= 1.0:
+            raise ValueError(f"min_freq_diff ({min_freq_diff}) must be in (0, 1].")
+        with np.errstate(invalid="ignore"):
+            return np.abs(freq_pop1 - freq_pop2) >= min_freq_diff - _FREQ_TOL
     if low_threshold >= high_threshold:
         raise ValueError(
-            f"--low-threshold ({low_threshold}) must be less than --high-threshold "
+            f"low_threshold ({low_threshold}) must be less than high_threshold "
             f"({high_threshold})."
         )
+    low_threshold += _FREQ_TOL
+    high_threshold -= _FREQ_TOL
     direction_a = (freq_pop1 >= high_threshold) & (freq_pop2 <= low_threshold)
     direction_b = (freq_pop1 <= low_threshold) & (freq_pop2 >= high_threshold)
     return direction_a | direction_b
+
+
+def describe_aim_criterion(low_threshold: float = 0.1, high_threshold: float = 0.9,
+                           min_freq_diff: float | None = None) -> str:
+    """One-line description of the AIM criterion, for CLI output and summaries."""
+    if min_freq_diff is not None:
+        return (f"allele-frequency difference >= {min_freq_diff:g} between the "
+                f"parental populations")
+    return (f"<= {low_threshold:g} in one parental population and >= "
+            f"{high_threshold:g} in the other")
 
 
 def match_samples_to_populations(sample_names: list, metadata_df: pd.DataFrame,
@@ -160,7 +189,8 @@ def em_allele_freq(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray,
 def filter_aims_beagle(input_path: str, metadata_path: str, output_path: str,
                         sample_col: str = "individual", population_col: str = "population",
                         pop1_label: str = "parent1", pop2_label: str = "parent2",
-                        low_threshold: float = 0.1, high_threshold: float = 0.9) -> dict:
+                        low_threshold: float = 0.1, high_threshold: float = 0.9,
+                        min_freq_diff: float | None = None) -> dict:
     """Filter an ANGSD beagle-format file down to ancestry-informative
     markers, writing a beagle file with the same column structure and
     unmodified per-individual genotype-likelihood values -- only rows
@@ -187,7 +217,8 @@ def filter_aims_beagle(input_path: str, metadata_path: str, output_path: str,
     freq_pop1 = em_allele_freq(gl0, gl1, gl2, ~missing & pop1_mask[None, :])
     freq_pop2 = em_allele_freq(gl0, gl1, gl2, ~missing & pop2_mask[None, :])
 
-    mask = compute_aim_mask(freq_pop1, freq_pop2, low_threshold, high_threshold)
+    mask = compute_aim_mask(freq_pop1, freq_pop2, low_threshold, high_threshold,
+                            min_freq_diff)
     write_beagle(beagle_data, output_path, mask)
 
     return {
@@ -230,7 +261,7 @@ def filter_aims_csv(input_path: str, metadata_path: str, output_path: str,
                      sample_col: str = "individual", population_col: str = "population",
                      pop1_label: str = "parent1", pop2_label: str = "parent2",
                      low_threshold: float = 0.1, high_threshold: float = 0.9,
-                     ploidy: int = 2, loci: list | None = None,
+                     min_freq_diff: float | None = None, ploidy: int = 2, loci: list | None = None,
                      reserved_columns=DEFAULT_RESERVED_COLUMNS) -> dict:
     """Filter a wide genotype-dosage CSV (the same shape
     `estimate-hybrid-index` uses -- one row per individual, one column
@@ -273,7 +304,8 @@ def filter_aims_csv(input_path: str, metadata_path: str, output_path: str,
     freq_pop1 = np.nanmean(dosage[pop1_mask], axis=0) / ploidy
     freq_pop2 = np.nanmean(dosage[pop2_mask], axis=0) / ploidy
 
-    mask = compute_aim_mask(freq_pop1, freq_pop2, low_threshold, high_threshold)
+    mask = compute_aim_mask(freq_pop1, freq_pop2, low_threshold, high_threshold,
+                            min_freq_diff)
     retained_loci = [l for l, keep in zip(loci, mask) if keep]
 
     reserved_present = [c for c in geno_df.columns if c not in loci]
@@ -298,7 +330,8 @@ def _open_write_maybe_gzip(path: str):
 def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
                      sample_col: str = "individual", population_col: str = "population",
                      pop1_label: str = "parent1", pop2_label: str = "parent2",
-                     low_threshold: float = 0.1, high_threshold: float = 0.9) -> dict:
+                     low_threshold: float = 0.1, high_threshold: float = 0.9,
+                     min_freq_diff: float | None = None) -> dict:
     """Filter a VCF file down to ancestry-informative markers, writing a
     VCF file with the same header and unmodified data lines -- only
     lines (variants) are removed; every retained line is copied
@@ -392,7 +425,7 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
             freq_pop2 = np.nanmean(dosage_row[pop2_mask]) / 2.0
             keep = bool(compute_aim_mask(
                 np.array([freq_pop1]), np.array([freq_pop2]),
-                low_threshold, high_threshold)[0])
+                low_threshold, high_threshold, min_freq_diff)[0])
 
             locus_name = variant_id if variant_id != "." else f"{chrom}:{pos}"
             locus_names.append(locus_name)
@@ -431,7 +464,8 @@ def _pct(num: float, den: float) -> str:
 
 def build_filter_summary(result: dict, *, input_path: str, output_path: str, fmt: str,
                           pop1_label: str, pop2_label: str,
-                          low_threshold: float, high_threshold: float,
+                          low_threshold: float = 0.1, high_threshold: float = 0.9,
+                          min_freq_diff: float | None = None,
                           min_parental_n: int = 10,
                           max_sample_missing: float = 0.5) -> tuple:
     """Plain-text summary of a `filter_aims_vcf`/`filter_aims_beagle` run.
@@ -492,8 +526,8 @@ def build_filter_summary(result: dict, *, input_path: str, output_path: str, fmt
         f"Output:     {output_path}",
         f"Parentals:  {pop1_label} = {result['n_pop1_samples']} individuals, "
         f"{pop2_label} = {result['n_pop2_samples']} individuals",
-        f"Thresholds: <= {low_threshold} in one parental population and "
-        f">= {high_threshold} in the other",
+        f"AIM rule:   "
+        f"{describe_aim_criterion(low_threshold, high_threshold, min_freq_diff)}",
         "",
         "AIMs",
         "----",

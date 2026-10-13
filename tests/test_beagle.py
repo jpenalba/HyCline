@@ -287,3 +287,32 @@ def test_write_beagle_geographic_gl_csv_recovers_known_cline(tmp_path):
     transects = read_gl_multi_locus_wide_csv(str(gl_path), individual_col="individual")
     fit = fit_mle_geographic_gl(transects["locusA"], tail_type=TailType.NONE)
     assert fit.params.center == pytest.approx(70, abs=15)
+
+
+def test_beagle_hard_count_writers_treat_equal_likelihoods_as_missing(beagle_metadata_df, tmp_path):
+    """ANGSD writes 0.333333 x3 for an individual with no reads. The
+    geographic writer counted it as expected dosage 1 (a heterozygote) and
+    the genomic writer as argmax dosage 0; both must treat it as missing,
+    the same way the VCF writers treat ./."""
+    content = (
+        "marker\tallele1\tallele2\tind0\tind0\tind0\tind1\tind1\tind1\tind2\tind2\tind2\n"
+        "chr1_100\t0\t1\t0.98\t0.02\t0.00\t0.333333\t0.333333\t0.333333\t0.00\t0.02\t0.98\n"
+    )
+    path = tmp_path / "missing.beagle"
+    path.write_text(content)
+    data = read_beagle(str(path))
+
+    geo = tmp_path / "geo.csv"
+    write_beagle_geographic_hard_count_csv(data, beagle_metadata_df, "individual", "site",
+                                            "distance", str(geo))
+    row_x = pd.read_csv(geo).set_index("site").loc["X"]
+    assert row_x["chr1_100.nSamples"] == 2  # ind0 only
+    assert row_x["chr1_100.A"] == pytest.approx(0.01)
+
+    gen = tmp_path / "gen.csv"
+    write_beagle_genomic_hard_count_csv(data, beagle_metadata_df, "individual",
+                                         "hybrid_index", str(gen))
+    out = pd.read_csv(gen).set_index("individual")
+    assert out.loc["ind1", "chr1_100.n"] == 0
+    assert np.isnan(out.loc["ind1", "chr1_100.freq"])
+    assert out.loc["ind2", "chr1_100.freq"] == 1.0

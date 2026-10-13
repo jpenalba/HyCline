@@ -1097,9 +1097,10 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Filter a VCF or ANGSD beagle-format file (genome-wide SNP data, "
                      "before any HyCline-specific conversion) down to ancestry-"
                      "informative markers: loci where one parental population's allele "
-                     "frequency is at or above --high-threshold (default 0.9) and the "
-                     "other's is at or below --low-threshold (default 0.1), in either "
-                     "direction. Most genome-wide SNPs aren't informative for cline "
+                     "frequency is at or below --minor-allele-freq (default 0.1) and the "
+                     "other's is at or above 1 minus that, in either direction -- or, "
+                     "with --allele-freq-diff, loci whose parental frequencies differ by "
+                     "at least that much. Most genome-wide SNPs aren't informative for cline "
                      "analysis -- this is a standard pre-filtering step before "
                      "'generate-geographic-input'/'generate-genomic-input'. Output is "
                      "the same format "
@@ -1140,12 +1141,17 @@ def _build_parser() -> argparse.ArgumentParser:
     faims_p.add_argument("--pop2-label", default="parent2",
                           help="Value in --population-col identifying parental "
                                "population 2's reference individuals (default: parent2).")
-    faims_p.add_argument("--low-threshold", type=float, default=0.1,
-                          help="A locus is retained if one population's frequency is "
-                               "at or below this value and the other's is at or above "
-                               "--high-threshold (default: 0.1).")
-    faims_p.add_argument("--high-threshold", type=float, default=0.9,
-                          help="See --low-threshold (default: 0.9).")
+    aim_rule = faims_p.add_mutually_exclusive_group()
+    aim_rule.add_argument("--minor-allele-freq", type=float, default=None, metavar="M",
+                          help="Retain a locus if one parental population's allele "
+                               "frequency is at or below M and the other's is at or "
+                               "above 1 - M, in either direction (default: 0.1, i.e. "
+                               "<= 0.1 and >= 0.9). Must be in [0, 0.5).")
+    aim_rule.add_argument("--allele-freq-diff", type=float, default=None, metavar="D",
+                          help="Instead of --minor-allele-freq: retain a locus if the "
+                               "two parental populations' allele frequencies differ by "
+                               "at least D, wherever they sit (D = 0.7 keeps 0.1 vs "
+                               "0.8, 0.12 vs 0.82, 0 vs 0.75, ...). Must be in (0, 1].")
     faims_p.add_argument("--output", required=True, metavar="FILE",
                           help="Path to write the filtered file to, in the same format "
                                "as --input.")
@@ -3039,6 +3045,7 @@ def cmd_estimate_hybrid_index(args) -> int:
         dosage_by_locus = data.dosage  # (n_loci, n_samples)
     else:
         from hycline.data.beagle import read_beagle, _beagle_expected_dosage
+        from hycline.data.filter_aims import beagle_missing_mask
         try:
             data = read_beagle(args.input)
         except ValueError as e:
@@ -3048,6 +3055,9 @@ def cmd_estimate_hybrid_index(args) -> int:
         all_locus_names = list(data.marker_names)
         sample_names = list(data.sample_names)
         dosage_by_locus = _beagle_expected_dosage(data.gl0, data.gl1, data.gl2)
+        # ANGSD's equal-likelihood "no data" rows would otherwise count as a
+        # heterozygote (expected dosage 1) and pull hybrid indices toward 0.5.
+        dosage_by_locus[beagle_missing_mask(data.gl0, data.gl1, data.gl2)] = np.nan
 
     if args.loci:
         loci = [l.strip() for l in args.loci.split(",")]
@@ -3076,8 +3086,17 @@ def cmd_estimate_hybrid_index(args) -> int:
         print(f"  Parental population 0 ('{args.pop0_label}'): {pop0_mask.sum()} reference individuals")
         print(f"  Parental population 1 ('{args.pop1_label}'): {pop1_mask.sum()} reference individuals")
 
-        parental_freq_pop0 = np.nanmean(genotypes[pop0_mask], axis=0) / args.ploidy
-        parental_freq_pop1 = np.nanmean(genotypes[pop1_mask], axis=0) / args.ploidy
+        if fmt == "vcf":
+            parental_freq_pop0 = np.nanmean(genotypes[pop0_mask], axis=0) / args.ploidy
+            parental_freq_pop1 = np.nanmean(genotypes[pop1_mask], axis=0) / args.ploidy
+        else:
+            # Pooled maximum-likelihood frequencies from the reference
+            # individuals' genotype likelihoods, as filter-aims uses.
+            from hycline.data.filter_aims import em_allele_freq
+            gl = [g[locus_idx] for g in (data.gl0, data.gl1, data.gl2)]
+            called = ~beagle_missing_mask(*gl)
+            parental_freq_pop0 = em_allele_freq(*gl, called & pop0_mask[None, :])
+            parental_freq_pop1 = em_allele_freq(*gl, called & pop1_mask[None, :])
     else:
         print(f"Reading precomputed parental frequencies from '{args.parental_freq_csv}' ...")
         if not Path(args.parental_freq_csv).exists():
@@ -3376,6 +3395,19 @@ def cmd_filter_aims(args) -> int:
     if args.min_parental_n < 1:
         print("\nERROR: --min-parental-n must be at least 1.\n", file=sys.stderr)
         return 2
+    if args.allele_freq_diff is not None:
+        if not 0.0 < args.allele_freq_diff <= 1.0:
+            print("\nERROR: --allele-freq-diff must be greater than 0 and at most 1.\n",
+                  file=sys.stderr)
+            return 2
+        aim_rule = dict(min_freq_diff=args.allele_freq_diff)
+    else:
+        maf = 0.1 if args.minor_allele_freq is None else args.minor_allele_freq
+        if not 0.0 <= maf < 0.5:
+            print("\nERROR: --minor-allele-freq must be at least 0 and below 0.5.\n",
+                  file=sys.stderr)
+            return 2
+        aim_rule = dict(low_threshold=maf, high_threshold=1.0 - maf)
     if not 0.0 <= args.max_sample_missing <= 1.0:
         print("\nERROR: --max-sample-missing must be between 0 and 1.\n", file=sys.stderr)
         return 2
@@ -3397,7 +3429,7 @@ def cmd_filter_aims(args) -> int:
                 args.input, args.metadata, str(out_path),
                 sample_col=args.sample_col, population_col=args.population_col,
                 pop1_label=args.pop1_label, pop2_label=args.pop2_label,
-                low_threshold=args.low_threshold, high_threshold=args.high_threshold,
+                **aim_rule,
             )
         else:
             from hycline.data.filter_aims import filter_aims_vcf
@@ -3405,7 +3437,7 @@ def cmd_filter_aims(args) -> int:
                 args.input, args.metadata, str(out_path),
                 sample_col=args.sample_col, population_col=args.population_col,
                 pop1_label=args.pop1_label, pop2_label=args.pop2_label,
-                low_threshold=args.low_threshold, high_threshold=args.high_threshold,
+                **aim_rule,
             )
     except ValueError as e:
         print(f"\nERROR: {e}\n", file=sys.stderr)
@@ -3413,9 +3445,9 @@ def cmd_filter_aims(args) -> int:
 
     print(f"  {args.pop1_label}: {result['n_pop1_samples']} individuals; "
           f"{args.pop2_label}: {result['n_pop2_samples']} individuals")
+    from hycline.data.filter_aims import build_filter_summary, describe_aim_criterion
     print(f"  {result['n_total']} loci checked, {result['n_retained']} retained "
-          f"(>= {args.high_threshold} in one population and <= {args.low_threshold} in "
-          f"the other, either direction)")
+          f"({describe_aim_criterion(**aim_rule)})")
     if fmt == "vcf":
         skipped = (result["n_skipped_multiallelic"] + result["n_skipped_indel"]
                    + result["n_skipped_no_gt"])
@@ -3428,14 +3460,13 @@ def cmd_filter_aims(args) -> int:
     if result['n_retained'] == 0:
         print(f"\nWARNING: no loci passed the filter -- the output file has a header "
               f"but no data. Check --pop1-label/--pop2-label match your metadata "
-              f"file's actual values, or consider loosening --low-threshold/"
-              f"--high-threshold.\n", file=sys.stderr)
+              f"file's actual values, or consider loosening --minor-allele-freq/"
+              f"--allele-freq-diff.\n", file=sys.stderr)
 
-    from hycline.data.filter_aims import build_filter_summary
     summary_text, summary_warnings = build_filter_summary(
         result, input_path=args.input, output_path=str(out_path), fmt=fmt,
         pop1_label=args.pop1_label, pop2_label=args.pop2_label,
-        low_threshold=args.low_threshold, high_threshold=args.high_threshold,
+        **aim_rule,
         min_parental_n=args.min_parental_n, max_sample_missing=args.max_sample_missing,
     )
     summary_path.parent.mkdir(parents=True, exist_ok=True)

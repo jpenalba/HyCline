@@ -5,13 +5,18 @@ Samples belong to three populations -- two parentals (pop1, pop2) and a
 hybrid population (popH) -- and are named "sample<N>_<pop>", numbered
 consecutively across the whole file (sample1_pop1, ..., sample11_pop2, ...).
 
-A chosen fraction of SNPs are ancestry-informative markers (AIMs). For each
-AIM, the realized alternate-allele frequency computed from the pop1 and pop2
-individuals is exactly within [0, cutoff] in one parental population and
-within [1 - cutoff, 1] in the other; which parental population carries the
-low frequency is chosen at random per AIM. Non-AIM SNPs share a common
-frequency across pop1 and pop2 and are re-drawn if their realized
-frequencies happen to meet the AIM criterion, so the AIM count is exact.
+A chosen fraction of SNPs are ancestry-informative markers (AIMs), under one
+of the two rules `hycline filter-aims` offers:
+  --aim-cutoff C     (filter-aims --minor-allele-freq) the realized pop1/pop2
+                     alternate-allele frequencies are exactly within [0, C]
+                     in one parental population and [1 - C, 1] in the other.
+  --aim-freq-diff D  (filter-aims --allele-freq-diff) the realized pop1/pop2
+                     frequencies differ by at least D, with the lower one
+                     drawn anywhere in [0, 1 - D].
+Which parental population carries the low frequency is chosen at random per
+AIM. Non-AIM SNPs share a common frequency across pop1 and pop2 and are
+re-drawn if their realized frequencies happen to meet the AIM rule, so the
+AIM count is exact.
 
 Each popH individual gets a hybrid index h (fraction of pop2 ancestry), and
 its genotypes are drawn from p = (1 - h) * p_pop1 + h * p_pop2 at every SNP.
@@ -91,10 +96,19 @@ def parse_args(argv=None):
     p.add_argument("--aim-percent", type=float, default=10.0,
                    help="Percentage (0-100) of SNPs that are ancestry-informative "
                         "markers. The AIM count is round(n_snps * percent / 100).")
-    p.add_argument("--aim-cutoff", type=float, default=0.05,
-                   help="AIM allele-frequency cutoff: an AIM has frequency in "
-                        "[0, cutoff] in one parental population and in "
-                        "[1 - cutoff, 1] in the other. Must be in [0, 0.5).")
+    rule = p.add_mutually_exclusive_group()
+    rule.add_argument("--aim-cutoff", type=float, default=None,
+                      help="AIM rule matching filter-aims --minor-allele-freq: an "
+                           "AIM has frequency in [0, cutoff] in one parental "
+                           "population and in [1 - cutoff, 1] in the other. Must "
+                           "be in [0, 0.5). Default 0.05 unless --aim-freq-diff "
+                           "is given.")
+    rule.add_argument("--aim-freq-diff", type=float, default=None,
+                      help="AIM rule matching filter-aims --allele-freq-diff: an "
+                           "AIM's pop1 and pop2 frequencies differ by at least "
+                           "this much, with the lower frequency drawn anywhere in "
+                           "[0, 1 - D] (D = 0.7 gives e.g. 0.1/0.8, 0.25/0.95, "
+                           "0/1). Non-AIMs differ by less than D. Must be in (0, 1].")
     p.add_argument("--hybrid-index", choices=["uniform", "beta", "fixed"],
                    default="uniform",
                    help="Distribution of popH hybrid indices (fraction pop2 "
@@ -174,8 +188,14 @@ def parse_args(argv=None):
         p.error("--n-snps must be >= 1")
     if not 0.0 <= args.aim_percent <= 100.0:
         p.error("--aim-percent must be between 0 and 100")
-    if not 0.0 <= args.aim_cutoff < 0.5:
-        p.error("--aim-cutoff must be in [0, 0.5)")
+    if args.aim_freq_diff is not None:
+        if not 0.0 < args.aim_freq_diff <= 1.0:
+            p.error("--aim-freq-diff must be in (0, 1]")
+    else:
+        if args.aim_cutoff is None:
+            args.aim_cutoff = 0.05
+        if not 0.0 <= args.aim_cutoff < 0.5:
+            p.error("--aim-cutoff must be in [0, 0.5)")
     if not 0.0 <= args.missing_global <= 1.0:
         p.error("--missing-global must be in [0, 1]")
     missing_individual = {}
@@ -228,12 +248,21 @@ def genotypes_with_exact_count(rng, n_ind: int, n_alt: int) -> np.ndarray:
     return alleles.reshape(n_ind, 2).sum(axis=1)
 
 
-def is_aim(freq_a: float, freq_b: float, cutoff: float) -> bool:
-    lo, hi = cutoff, 1.0 - cutoff
+TOL = 1e-9  # slack for allele-count ratios compared against decimal cutoffs
+
+
+def is_aim(freq_a: float, freq_b: float, cutoff: float | None,
+           freq_diff: float | None = None) -> bool:
+    """The AIM rule, matching hycline filter-aims: --allele-freq-diff when
+    `freq_diff` is set, otherwise --minor-allele-freq `cutoff`."""
+    if freq_diff is not None:
+        return abs(freq_a - freq_b) >= freq_diff - TOL
+    lo, hi = cutoff + TOL, 1.0 - cutoff - TOL
     return (freq_a <= lo and freq_b >= hi) or (freq_b <= lo and freq_a >= hi)
 
 
-def simulate_parentals(rng, n1: int, n2: int, aim: bool, cutoff: float):
+def simulate_parentals(rng, n1: int, n2: int, aim: bool, cutoff: float | None,
+                       freq_diff: float | None = None):
     """Genotypes for the n1 called pop1 and n2 called pop2 samples at one SNP,
     plus the realized frequencies (NaN for a population with no calls)."""
     a1, a2 = 2 * n1, 2 * n2
@@ -246,6 +275,18 @@ def simulate_parentals(rng, n1: int, n2: int, aim: bool, cutoff: float):
         f1 = g1.sum() / a1 if n1 else np.nan
         f2 = g2.sum() / a2 if n2 else np.nan
         return g1, g2, f1, f2
+    if aim and freq_diff is not None:
+        # Low side uniform over counts with frequency <= 1 - D; high side
+        # uniform over counts at least D above it.
+        low_is_pop1 = rng.random() < 0.5
+        a_low, a_high = (a1, a2) if low_is_pop1 else (a2, a1)
+        k_low = int(rng.integers(0, int(np.floor((1 - freq_diff) * a_low + TOL)) + 1))
+        k_high_min = int(np.ceil((k_low / a_low + freq_diff - TOL) * a_high - TOL))
+        k_high = int(rng.integers(k_high_min, a_high + 1))
+        k1, k2 = (k_low, k_high) if low_is_pop1 else (k_high, k_low)
+        g1 = genotypes_with_exact_count(rng, n1, k1)
+        g2 = genotypes_with_exact_count(rng, n2, k2)
+        return g1, g2, k1 / a1, k2 / a2
     if aim:
         low_is_pop1 = rng.random() < 0.5
         # Allowed alt-allele counts so realized frequency is within range.
@@ -266,7 +307,7 @@ def simulate_parentals(rng, n1: int, n2: int, aim: bool, cutoff: float):
         g1 = rng.binomial(2, q, size=n1).astype(np.int8)
         g2 = rng.binomial(2, q, size=n2).astype(np.int8)
         f1, f2 = g1.sum() / a1, g2.sum() / a2
-        if not is_aim(f1, f2, cutoff):
+        if not is_aim(f1, f2, cutoff, freq_diff):
             return g1, g2, f1, f2
 
 
@@ -447,7 +488,8 @@ def main(argv=None) -> int:
             called1 = ~missing & (pop_arr == "pop1")
             called2 = ~missing & (pop_arr == "pop2")
             g1, g2, f1, f2 = simulate_parentals(
-                rng, int(called1.sum()), int(called2.sum()), aim, args.aim_cutoff)
+                rng, int(called1.sum()), int(called2.sum()), aim, args.aim_cutoff,
+                args.aim_freq_diff)
 
             # Missing samples get a placeholder 0; they are written as ./.
             geno = np.zeros(n_samples, dtype=np.int8)
@@ -518,7 +560,10 @@ def main(argv=None) -> int:
 
     print(f"Wrote {out_vcf}: {n_samples} samples "
           f"({args.n_pop1} pop1, {args.n_pop2} pop2, {args.n_popH} popH), "
-          f"{args.n_snps} SNPs ({n_aims} AIMs at cutoff {args.aim_cutoff}).")
+          f"{args.n_snps} SNPs ({n_aims} AIMs, " + (
+              f"frequency difference >= {args.aim_freq_diff})."
+              if args.aim_freq_diff is not None
+              else f"minor-allele-frequency cutoff {args.aim_cutoff})."))
     total_missing = int(missing_per_sample.sum())
     print(f"Missing genotypes: {total_missing} of {n_samples * args.n_snps} "
           f"({total_missing / (n_samples * args.n_snps):.4%}).")

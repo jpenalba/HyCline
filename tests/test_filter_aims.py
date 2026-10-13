@@ -35,6 +35,26 @@ def test_compute_aim_mask_custom_thresholds():
     assert compute_aim_mask(freq_pop1, freq_pop2, low_threshold=0.2, high_threshold=0.8)[0]
 
 
+def test_compute_aim_mask_min_freq_diff():
+    f1 = np.array([0.1, 0.12, 0.0, 0.1, 0.9, 0.5, np.nan])
+    f2 = np.array([0.8, 0.82, 0.75, 0.7, 0.2, 0.5, 0.9])
+    np.testing.assert_array_equal(
+        compute_aim_mask(f1, f2, min_freq_diff=0.7),
+        [True, True, True, False, True, False, False])
+    # A difference that is exactly D on paper can fall just short of D in
+    # floating point; it must still count.
+    assert 0.57 - 0.07 < 0.5 and 0.94 - 0.34 < 0.6
+    assert compute_aim_mask([0.07], [0.57], min_freq_diff=0.5)[0]
+    assert compute_aim_mask([0.94], [0.34], min_freq_diff=0.6)[0]
+    with pytest.raises(ValueError, match="min_freq_diff"):
+        compute_aim_mask(f1, f2, min_freq_diff=0.0)
+
+
+def test_compute_aim_mask_thresholds_tolerate_floating_point():
+    # 1 - 0.95 = 0.050000000000000044, which must still count as <= 0.05
+    assert compute_aim_mask([1 - 0.95], [0.95], low_threshold=0.05, high_threshold=0.95)[0]
+
+
 def test_compute_aim_mask_invalid_thresholds_raises():
     with pytest.raises(ValueError, match="must be less than"):
         compute_aim_mask([0.1], [0.9], low_threshold=0.9, high_threshold=0.1)

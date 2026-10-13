@@ -64,3 +64,15 @@ def test_hybrid_index_bounded_in_unit_interval():
     genotypes = rng.integers(0, 3, size=(20, 10)).astype(float)
     h = estimate_hybrid_index(genotypes, ploidy=2)
     assert np.all(h >= 0) and np.all(h <= 1)
+
+
+def test_loci_are_oriented_by_parental_frequencies():
+    # Locus 0 counts population 1's allele, locus 1 counts population 0's.
+    genotypes = np.array([[0, 2],    # pure population 0
+                          [2, 0],    # pure population 1
+                          [1, 1]])   # F1-like
+    h = estimate_hybrid_index(genotypes, parental_freq_pop0=np.array([0.0, 1.0]),
+                              parental_freq_pop1=np.array([1.0, 0.0]))
+    np.testing.assert_allclose(h, [0.0, 1.0, 0.5])
+    # Without parental frequencies the counts are taken as given.
+    np.testing.assert_allclose(estimate_hybrid_index(genotypes), [0.5, 0.5, 0.5])

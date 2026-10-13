@@ -45,12 +45,16 @@ def estimate_hybrid_index(genotypes: np.ndarray, ploidy: int = 2,
         mean rather than treated as 0.
     ploidy : ploidy of the genotype calls (default 2, diploid).
     parental_freq_pop0, parental_freq_pop1 : optional (n_loci,) arrays of
-        each locus's allele frequency in parental reference population 0
-        and population 1. If given, only loci with a real frequency
-        difference between the two parental populations carry ancestry
-        information; `weight_by_differentiation` uses this to down-weight
-        loci with little differentiation rather than treating every locus
-        as equally informative.
+        each locus's frequency, in parental reference population 0 and
+        population 1, of the allele `genotypes` counts. When both are
+        given, every locus is first oriented so the counted allele is the
+        one more common in population 1: a locus with
+        parental_freq_pop1 < parental_freq_pop0 has its genotypes flipped
+        (ploidy - count). Without this, a VCF's ALT allele -- which is
+        population 0's allele at roughly half of real AIMs -- cancels
+        out across loci and every individual lands near 0.5. Already-
+        oriented input is unchanged. They also feed
+        `weight_by_differentiation`.
     weight_by_differentiation : if True (requires both parental frequency
         arrays), weight each locus's contribution by
         abs(parental_freq_pop1 - parental_freq_pop0) -- a locus fixed for
@@ -67,6 +71,11 @@ def estimate_hybrid_index(genotypes: np.ndarray, ploidy: int = 2,
     genotypes = np.asarray(genotypes, dtype=float)
     if genotypes.ndim != 2:
         raise ValueError("genotypes must be a 2D array (n_individuals, n_loci)")
+
+    if parental_freq_pop0 is not None and parental_freq_pop1 is not None:
+        flip = (np.asarray(parental_freq_pop1, dtype=float)
+                < np.asarray(parental_freq_pop0, dtype=float))
+        genotypes = np.where(flip[None, :], ploidy - genotypes, genotypes)
 
     freq = genotypes / ploidy  # per-individual, per-locus population-1 allele frequency
 

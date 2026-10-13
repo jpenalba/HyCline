@@ -1219,7 +1219,7 @@ def test_cli_fit_gl_actionable_error_on_missing_column(tmp_path):
 # ---------------------------------------------------------------------------
 
 def _write_hybrid_index_input_vcf(vcf_path, metadata_path, seed=71, n_loci=20,
-                                    n_ref_each=15, n_hybrid=30):
+                                    n_ref_each=15, n_hybrid=30, flip_every_other=False):
     """Writes a VCF (parental reference individuals plus hybrid-zone test
     individuals, all in one file) and a separate metadata CSV giving
     population labels for just the two reference groups -- matching how
@@ -1247,6 +1247,9 @@ def _write_hybrid_index_input_vcf(vcf_path, metadata_path, seed=71, n_loci=20,
                    [f"pop1_ref{i}" for i in range(n_ref_each)] +
                    [f"hybrid{i}" for i in range(n_hybrid)])
     all_geno = np.vstack([pop0_geno, pop1_geno, hybrid_geno])  # (n_ind, n_loci)
+    if flip_every_other:
+        # ALT is population 0's allele at odd loci, as at ~half of real AIMs.
+        all_geno[:, 1::2] = 2 - all_geno[:, 1::2]
 
     header = ("##fileformat=VCFv4.2\n"
               "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"
@@ -1312,6 +1315,64 @@ def test_cli_estimate_hybrid_index_recovers_known_true_hybrid_index(tmp_path):
     correlation = np.corrcoef(hybrid_h, true_h)[0, 1]
     assert correlation > 0.9
     assert np.mean(np.abs(hybrid_h - true_h)) < 0.1
+
+
+def test_cli_estimate_hybrid_index_orients_alleles_by_parental_frequency(tmp_path):
+    """Regression test: loci were averaged as ALT dosage without orienting
+    them, so when ALT is population 0's allele at some loci (as in any real
+    VCF) the loci cancelled out. On benchmarking/simulate_vcf.py output,
+    where the ALT allele's population is random per AIM, every individual
+    -- parentals included -- came out at 0.487-0.518, with correlation
+    -0.14 to the true hybrid index."""
+    import numpy as np
+
+    vcf_path = tmp_path / "genotypes.vcf"
+    metadata_path = tmp_path / "metadata.csv"
+    true_h = _write_hybrid_index_input_vcf(vcf_path, metadata_path,
+                                           flip_every_other=True)
+    output_path = tmp_path / "hybrid_index.csv"
+    for extra in ([], ["--weight-by-differentiation"]):
+        result = _run_cli([
+            "estimate-hybrid-index", "--input", str(vcf_path), "--metadata",
+            str(metadata_path), "--population-col", "population", "--pop0-label", "house",
+            "--pop1-label", "spanish", "--output", str(output_path), *extra,
+        ])
+        assert result.returncode == 0, result.stderr
+        out_df = pd.read_csv(output_path)
+        h = out_df.set_index("individual")["hybrid_index"]
+        assert h[h.index.str.startswith("pop0")].mean() < 0.1
+        assert h[h.index.str.startswith("pop1")].mean() > 0.9
+        hybrid_h = h[h.index.str.startswith("hybrid")].to_numpy()
+        assert np.corrcoef(hybrid_h, true_h)[0, 1] > 0.9
+        assert np.mean(np.abs(hybrid_h - true_h)) < 0.1
+
+
+def test_cli_estimate_hybrid_index_beagle_missing_genotypes_not_counted(tmp_path):
+    """ANGSD's 0.333333 x3 no-data rows used to enter as expected dosage 1
+    (a heterozygote), pulling hybrid indices toward 0.5."""
+    hom_ref, hom_alt, miss = ("1.0\t0.0\t0.0", "0.0\t0.0\t1.0",
+                              "0.333333\t0.333333\t0.333333")
+    names = ["r0", "r1", "s0", "s1", "x"]
+    header = "marker\tallele1\tallele2\t" + "\t".join(f"{n}\t{n}\t{n}" for n in names)
+    rows = [f"m{j}\t0\t1\t" + "\t".join([hom_ref, hom_ref, hom_alt, hom_alt,
+                                            miss if j < 3 else hom_ref])
+            for j in range(4)]
+    beagle_path = tmp_path / "in.beagle"
+    beagle_path.write_text(header + "\n" + "\n".join(rows) + "\n")
+    metadata_path = tmp_path / "metadata.csv"
+    pd.DataFrame({"individual": names,
+                  "population": ["house", "house", "spanish", "spanish", "hybrid"]}).to_csv(
+        metadata_path, index=False)
+    output_path = tmp_path / "hi.csv"
+    result = _run_cli([
+        "estimate-hybrid-index", "--input", str(beagle_path), "--metadata",
+        str(metadata_path), "--population-col", "population", "--pop0-label", "house",
+        "--pop1-label", "spanish", "--output", str(output_path),
+    ])
+    assert result.returncode == 0, result.stderr
+    h = pd.read_csv(output_path).set_index("individual")["hybrid_index"]
+    # x is missing at 3 of 4 loci and pure house at the fourth: 0, not 0.375
+    assert h["x"] == pytest.approx(0.0, abs=1e-9)
 
 
 def test_cli_estimate_hybrid_index_weight_by_differentiation_runs(tmp_path):
@@ -1952,8 +2013,9 @@ def test_cli_generate_geographic_input_vcf_site_aggregation_matches_hand_computa
 def test_cli_filter_aims_help_runs_without_error():
     result = _run_cli(["filter-aims", "--help"])
     assert result.returncode == 0
-    assert "--low-threshold" in result.stdout
-    assert "--high-threshold" in result.stdout
+    assert "--minor-allele-freq" in result.stdout
+    assert "--allele-freq-diff" in result.stdout
+    assert "--low-threshold" not in result.stdout
     assert "--pop1-label" in result.stdout
 
 
@@ -2183,10 +2245,83 @@ def test_cli_filter_aims_custom_thresholds(tmp_path):
     out_path = tmp_path / "filtered.vcf"
     result = _run_cli([
         "filter-aims", "--input", str(input_path), "--metadata", str(metadata_path),
-        "--low-threshold", "0.0", "--high-threshold", "1.0", "--output", str(out_path),
+        "--minor-allele-freq", "0.0", "--output", str(out_path),
     ])
     assert result.returncode == 0, result.stderr
     assert "1 retained" in result.stdout
+    assert "<= 0 in one parental population and >= 1 in the other" in result.stdout
+
+
+def _write_freq_diff_vcf(tmp_path):
+    """Five loci, five individuals per parental population; locus IDs give
+    the parent1/parent2 ALT frequencies (f010_080 = 0.1 vs 0.8)."""
+    rows = {
+        "f010_080": ["0/1"] + ["0/0"] * 4 + ["1/1"] * 3 + ["0/1"] * 2,
+        "f000_075": ["0/0"] * 5 + ["1/1"] * 3 + ["0/1", "0/0"],
+        "f010_070": ["0/1"] + ["0/0"] * 4 + ["1/1"] * 2 + ["0/1"] * 3,
+        "f000_100": ["0/0"] * 5 + ["1/1"] * 5,
+        "f100_020": ["1/1"] * 5 + ["0/1"] * 2 + ["0/0"] * 3,
+    }
+    names = [f"a{i}" for i in range(5)] + [f"b{i}" for i in range(5)]
+    header = ("##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\t"
+              "FORMAT\t" + "\t".join(names) + "\n")
+    lines = [f"chr1\t{i + 1}\t{snp}\tA\tT\t.\tPASS\t.\tGT\t" + "\t".join(gts) + "\n"
+             for i, (snp, gts) in enumerate(rows.items())]
+    vcf_path = tmp_path / "freqs.vcf"
+    vcf_path.write_text(header + "".join(lines))
+    metadata_path = tmp_path / "metadata.csv"
+    pd.DataFrame({"individual": names,
+                  "population": ["parent1"] * 5 + ["parent2"] * 5}).to_csv(
+        metadata_path, index=False)
+    return vcf_path, metadata_path
+
+
+def _kept_ids(vcf_path):
+    return [l.split("\t")[2] for l in vcf_path.read_text().splitlines()
+            if not l.startswith("#")]
+
+
+def test_cli_filter_aims_minor_allele_freq_sets_both_thresholds(tmp_path):
+    vcf_path, metadata_path = _write_freq_diff_vcf(tmp_path)
+    out_path = tmp_path / "out.vcf"
+    result = _run_cli([
+        "filter-aims", "--input", str(vcf_path), "--metadata", str(metadata_path),
+        "--minor-allele-freq", "0.2", "--min-parental-n", "5", "--output", str(out_path),
+    ])
+    assert result.returncode == 0, result.stderr
+    # <= 0.2 and >= 0.8: 0.1/0.8, 0/1 and 1/0.2 pass; 0/0.75 and 0.1/0.7 do not
+    assert _kept_ids(out_path) == ["f010_080", "f000_100", "f100_020"]
+
+
+def test_cli_filter_aims_allele_freq_diff(tmp_path):
+    vcf_path, metadata_path = _write_freq_diff_vcf(tmp_path)
+    out_path = tmp_path / "out.vcf"
+    result = _run_cli([
+        "filter-aims", "--input", str(vcf_path), "--metadata", str(metadata_path),
+        "--allele-freq-diff", "0.7", "--min-parental-n", "5", "--output", str(out_path),
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "allele-frequency difference >= 0.7" in result.stdout
+    # 0.8 - 0.1 is 0.7000000000000001 in floating point and must still count
+    assert _kept_ids(out_path) == ["f010_080", "f000_075", "f000_100", "f100_020"]
+    summary = (tmp_path / "out_summary.txt").read_text()
+    assert "AIM rule:   allele-frequency difference >= 0.7" in summary
+
+    result = _run_cli([
+        "filter-aims", "--input", str(vcf_path), "--metadata", str(metadata_path),
+        "--allele-freq-diff", "0.7", "--minor-allele-freq", "0.1",
+        "--output", str(out_path),
+    ])
+    assert result.returncode != 0
+    assert "not allowed with" in result.stderr
+
+    for flag, value in (("--allele-freq-diff", "0"), ("--minor-allele-freq", "0.5")):
+        result = _run_cli([
+            "filter-aims", "--input", str(vcf_path), "--metadata", str(metadata_path),
+            flag, value, "--output", str(out_path),
+        ])
+        assert result.returncode == 2
+        assert flag in result.stderr
 
 
 # ---------------------------------------------------------------------------

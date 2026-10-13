@@ -66,7 +66,7 @@ Real output:
 Detected input format: vcf (from file extension; use --format to override)
 Reading vcf data from 'genomewide.vcf' ...
   parent0: 6 individuals; parent1: 6 individuals
-  7 loci checked, 3 retained (>= 0.9 in one population and <= 0.1 in the other, either direction)
+  7 loci checked, 3 retained (<= 0.1 in one parental population and >= 0.9 in the other)
 
 Wrote filtered.vcf
 Wrote filtered_summary.txt
@@ -120,13 +120,25 @@ Parental reference individuals are included in the output alongside your
 test individuals, specifically so you can sanity-check them landing near
 0 or 1.
 
+Each locus is first oriented using the two parental populations'
+frequencies, so the allele counted is the one more common in parental
+population 1 -- a VCF's ALT allele is just the non-reference base, and
+belongs to parental population 0 at roughly half of real AIMs. You don't
+need to polarize the input yourself.
+
 **VCF input uses each individual's hard GT dosage directly. Beagle input
 uses each individual's expected dosage under their own genotype
-likelihoods** (posterior mean, not an argmax point estimate) -- there's
-no proper marginalized hybrid-index estimator in HyCline yet (unlike
-allele-frequency estimation, hybrid index has no model to marginalize
-against), so this is the best available option for genotype-likelihood
-data, not a claim of full rigor.
+likelihoods** (posterior mean, not an argmax point estimate); missing
+genotypes (`0.333333 0.333333 0.333333`, ANGSD's no-data encoding) are
+left out, and in Mode 1 the parental frequencies are the pooled maximum-
+likelihood estimates `filter-aims` uses. The per-individual expected
+dosage still pulls estimates toward 0.5 at low depth: on simulated data
+with 30% AIMs, parental reference individuals averaged 0.19/0.81 at
+depth 2 and 0.13/0.86 at depth 5, against 0.09/0.91 from the true
+genotypes, with hybrids' estimates still correlated 0.999 with their
+true values. There's no proper marginalized hybrid-index estimator in
+HyCline yet, so this is the best available option for genotype-
+likelihood data, not a claim of full rigor.
 
 ### Two ways to supply parental allele frequencies
 
