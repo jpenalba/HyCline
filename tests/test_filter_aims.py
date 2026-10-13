@@ -433,7 +433,7 @@ def test_build_filter_summary_reports_counts_and_no_warnings(tmp_path):
     vcf_path, meta_path = _summary_vcf(tmp_path, [aim, non, aim, non_missing],
                                        samples, pops)
     result = filter_aims_vcf(str(vcf_path), str(meta_path), str(tmp_path / "out.vcf"))
-    text, warnings = _summary(result)
+    text, warnings = _summary(result, min_parental_n=6)
 
     assert warnings == []
     assert "AIMs retained:  2 (50.00% of loci checked)" in text
@@ -452,7 +452,7 @@ def test_build_filter_summary_warns_small_panel_and_high_missing(tmp_path):
             ["0/0", "0/0"] + ["1/1"] * 6]
     vcf_path, meta_path = _summary_vcf(tmp_path, rows, samples, pops)
     result = filter_aims_vcf(str(vcf_path), str(meta_path), str(tmp_path / "out.vcf"))
-    text, warnings = _summary(result)
+    text, warnings = _summary(result, min_parental_n=6)
 
     assert len(warnings) == 2
     assert "'parent1' has only 2 individual(s)" in warnings[0]
@@ -464,3 +464,33 @@ def test_build_filter_summary_warns_small_panel_and_high_missing(tmp_path):
     _, warnings = _summary(result, min_parental_n=2, max_sample_missing=0.7)
     assert len(warnings) == 1
     assert "2 of 3 retained AIMs had fewer than 2 called individuals" in warnings[0]
+
+
+def test_filter_aims_beagle_excludes_missing_genotypes_from_frequencies(tmp_path):
+    """Regression test: ANGSD writes 0.333333/0.333333/0.333333 for an
+    individual with no reads. Those rows used to enter the population mean
+    as a frequency of 0.5, so one missing parental individual out of three
+    pulled a fixed difference (0 vs 1) to 0.167 vs 1 and the AIM failed the
+    default 0.1 cutoff. Missing rows must be excluded instead."""
+    miss = "0.333333\t0.333333\t0.333333"
+    hom_ref, hom_alt = "1.00\t0.00\t0.00", "0.00\t0.00\t1.00"
+    header = "marker\tallele1\tallele2\t" + "\t".join(
+        f"{s}\t{s}\t{s}" for s in ["a0", "a1", "a2", "b0", "b1", "b2"]) + "\n"
+    content = (header
+               + "\t".join(["m1", "0", "1", hom_ref, hom_ref, miss,
+                            hom_alt, hom_alt, hom_alt]) + "\n"
+               + "\t".join(["m2", "0", "1", miss, miss, miss,
+                            hom_alt, hom_alt, hom_alt]) + "\n")
+    beagle_path = tmp_path / "in.beagle"
+    beagle_path.write_text(content)
+    meta_path = tmp_path / "meta.csv"
+    pd.DataFrame({"individual": ["a0", "a1", "a2", "b0", "b1", "b2"],
+                  "population": ["parent1"] * 3 + ["parent2"] * 3}).to_csv(
+        meta_path, index=False)
+
+    result = filter_aims_beagle(str(beagle_path), str(meta_path),
+                                str(tmp_path / "out.beagle"))
+    np.testing.assert_allclose(result["freq_pop1"][:1], [0.0], atol=1e-9)
+    assert np.isnan(result["freq_pop1"][1])  # no calls at all in parent1
+    np.testing.assert_array_equal(result["mask"], [True, False])
+    np.testing.assert_array_equal(result["n_called_pop1"], [2, 0])

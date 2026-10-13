@@ -27,6 +27,8 @@ directly-supported genome-wide input formats going forward.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -127,14 +129,21 @@ def filter_aims_beagle(input_path: str, metadata_path: str, output_path: str,
         beagle_data.sample_names, metadata_df, sample_col, population_col,
         pop1_label, pop2_label)
 
+    # Missing genotypes (ANGSD's equal-likelihood "no data" rows) carry no
+    # information about the individual's alleles; left in, each would count
+    # as a frequency of 0.5 and pull the population mean toward 0.5.
+    missing = beagle_missing_mask(beagle_data.gl0, beagle_data.gl1, beagle_data.gl2)
     ind_freq = _expected_freq_from_gl(beagle_data.gl0, beagle_data.gl1, beagle_data.gl2)
-    freq_pop1 = np.nanmean(ind_freq[:, pop1_mask], axis=1)
-    freq_pop2 = np.nanmean(ind_freq[:, pop2_mask], axis=1)
+    ind_freq[missing] = np.nan
+    with warnings.catch_warnings():
+        # A locus with no calls in a population gets NaN, which never passes.
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        freq_pop1 = np.nanmean(ind_freq[:, pop1_mask], axis=1)
+        freq_pop2 = np.nanmean(ind_freq[:, pop2_mask], axis=1)
 
     mask = compute_aim_mask(freq_pop1, freq_pop2, low_threshold, high_threshold)
     write_beagle(beagle_data, output_path, mask)
 
-    missing = beagle_missing_mask(beagle_data.gl0, beagle_data.gl1, beagle_data.gl2)
     return {
         "n_total": len(beagle_data), "n_retained": int(mask.sum()),
         "n_pop1_samples": int(pop1_mask.sum()), "n_pop2_samples": int(pop2_mask.sum()),
@@ -377,7 +386,7 @@ def _pct(num: float, den: float) -> str:
 def build_filter_summary(result: dict, *, input_path: str, output_path: str, fmt: str,
                           pop1_label: str, pop2_label: str,
                           low_threshold: float, high_threshold: float,
-                          min_parental_n: int = 6,
+                          min_parental_n: int = 10,
                           max_sample_missing: float = 0.5) -> tuple:
     """Plain-text summary of a `filter_aims_vcf`/`filter_aims_beagle` run.
 
@@ -401,11 +410,11 @@ def build_filter_summary(result: dict, *, input_path: str, output_path: str, fmt
     parental = pop1_mask | pop2_mask
     n_samples, n_par = len(names), int(parental.sum())
 
-    warnings = []
+    issues = []
     for label, n in ((pop1_label, result["n_pop1_samples"]),
                      (pop2_label, result["n_pop2_samples"])):
         if n < min_parental_n:
-            warnings.append(
+            issues.append(
                 f"Parental population '{label}' has only {n} individual(s) (fewer than "
                 f"{min_parental_n}); allele-frequency estimates and AIM calls from so "
                 f"few individuals are unreliable.")
@@ -414,7 +423,7 @@ def build_filter_summary(result: dict, *, input_path: str, output_path: str, fmt
         frac = miss_all[i] / n_loci if n_loci else 0.0
         if frac > max_sample_missing:
             flagged.append(names[i])
-            warnings.append(
+            issues.append(
                 f"Parental individual '{names[i]}' is missing data at {_pct(miss_all[i], n_loci)} "
                 f"of loci checked (more than {100 * max_sample_missing:g}%).")
     aim_mask = result["mask"]
@@ -425,7 +434,7 @@ def build_filter_summary(result: dict, *, input_path: str, output_path: str, fmt
             thin |= aim_mask & (result[key] < min_parental_n)
     n_thin = int(thin.sum())
     if n_thin:
-        warnings.append(
+        issues.append(
             f"{n_thin} of {n_aims} retained AIMs had fewer than {min_parental_n} called "
             f"individuals in at least one parental population at that locus, because of "
             f"missing data.")
@@ -470,5 +479,5 @@ def build_filter_summary(result: dict, *, input_path: str, output_path: str, fmt
         lines.append(f"{names[i]}\t{label}\t{_pct(miss_all[i], n_loci)}\t"
                      f"{_pct(miss_aims[i], n_aims)}\t{flag}")
     lines += ["", "Warnings", "--------"]
-    lines += [f"WARNING: {w}" for w in warnings] or ["None."]
-    return "\n".join(lines) + "\n", warnings
+    lines += [f"WARNING: {w}" for w in issues] or ["None."]
+    return "\n".join(lines) + "\n", issues

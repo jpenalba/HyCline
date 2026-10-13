@@ -1155,11 +1155,11 @@ def _build_parser() -> argparse.ArgumentParser:
                                "parental individuals, and any warnings (default: "
                                "--output with its .vcf/.vcf.gz/.beagle/.beagle.gz "
                                "extension replaced by _summary.txt).")
-    faims_p.add_argument("--min-parental-n", type=int, default=6,
+    faims_p.add_argument("--min-parental-n", type=int, default=10,
                           help="Warn if either parental population has fewer than this "
                                "many individuals, or if a retained AIM had fewer than "
                                "this many called individuals in either parental "
-                               "population because of missing data (default: 6).")
+                               "population because of missing data (default: 10).")
     faims_p.add_argument("--max-sample-missing", type=float, default=0.5,
                           help="Warn about any parental individual missing data at more "
                                "than this fraction of loci checked (default: 0.5).")

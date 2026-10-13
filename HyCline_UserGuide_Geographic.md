@@ -78,6 +78,7 @@ Reading vcf data from 'genomewide.vcf' ...
   parent1: 10 individuals; parent2: 10 individuals
   5000 loci checked, 250 retained (>= 0.9 in one population and <= 0.1 in the other, either direction)
 WARNING: Parental individual 'sample4_pop1' is missing data at 60.00% of loci checked (more than 50%).
+WARNING: 211 of 250 retained AIMs had fewer than 10 called individuals in at least one parental population at that locus, because of missing data.
 
 Wrote /path/to/filtered.vcf
 Wrote /path/to/filtered_summary.txt
@@ -117,17 +118,24 @@ sample4_pop1	parent1	60.00%	56.00%	HIGH_MISSING
 Warnings
 --------
 WARNING: Parental individual 'sample4_pop1' is missing data at 60.00% of loci checked (more than 50%).
+WARNING: 211 of 250 retained AIMs had fewer than 10 called individuals in at least one parental population at that locus, because of missing data.
 ```
 
 The per-sample table is tab-separated, so it pastes straight into a
 spreadsheet. A genotype counts as missing when it is `./.` in a VCF, or
 when its three genotype likelihoods are equal or absent in a beagle file
 (ANGSD writes `0.333333 0.333333 0.333333` for an individual with no reads
-at a site). Warnings are printed to the terminal as well as written to the
+at a site). Missing beagle genotypes are also left out of the parental
+allele-frequency calculation itself, the same way `./.` calls are for VCF
+input -- an equal-likelihood row says nothing about the individual's
+alleles. Warnings are printed to the terminal as well as written to the
 summary, for three situations:
 
 - a parental population with fewer than `--min-parental-n` individuals
-  (default 6, i.e. 5 or fewer triggers it);
+  (default 10). The cost of a small panel is false AIMs: a locus with true
+  frequencies 0.2/0.8 passes the default 0.1/0.9 filter by sampling chance
+  about 14% of the time with 5 individuals per population, 4% with 10, and
+  0.6% with 20;
 - a parental individual missing data at more than `--max-sample-missing`
   of loci checked (default 0.5);
 - retained AIMs where, because of missing data, fewer than
@@ -135,6 +143,9 @@ summary, for three situations:
   genotype call at that locus -- the AIM's frequency rests on fewer
   individuals than the panel size suggests. (Populations already below
   `--min-parental-n` overall are covered by the first warning instead.)
+  With a panel of exactly `--min-parental-n` individuals, a single missing
+  call at an AIM counts, as in the example above; lower `--min-parental-n`
+  if that is more sensitive than you need.
 
 Warnings never stop the run or change which loci are retained.
 
@@ -159,7 +170,7 @@ them.
 | `--pop1-label` / `--pop2-label` | Values identifying the two parental reference groups (default: `parent1`/`parent2`) |
 | `--low-threshold` / `--high-threshold` | A locus is retained if one population's frequency is at or below `--low-threshold` (default 0.1) and the other's is at or above `--high-threshold` (default 0.9), in either direction |
 | `--summary` | Path for the summary file (default: `--output` with its extension replaced by `_summary.txt`) |
-| `--min-parental-n` | Warn when a parental population, or a retained AIM's called individuals in a parental population, number fewer than this (default 6) |
+| `--min-parental-n` | Warn when a parental population, or a retained AIM's called individuals in a parental population, number fewer than this (default 10) |
 | `--max-sample-missing` | Warn about parental individuals missing data at more than this fraction of loci checked (default 0.5) |
 
 For VCF input, sites are also silently checked against a biallelic-SNP-with-
