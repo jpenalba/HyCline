@@ -203,6 +203,40 @@ for the parental frequencies. Regression tests:
 `test_cli_estimate_hybrid_index_beagle_missing_genotypes_not_counted`,
 `test_loci_are_oriented_by_parental_frequencies`.
 
+**Revisited: a maximum-likelihood estimator, now the default.** Even
+oriented, the mean-dosage estimator is pulled toward 0.5 by partially
+differentiated loci (it treats every locus as diagnostic) and, for
+beagle input, by low depth (per-individual flat-prior expected dosage).
+`estimate_hybrid_index_ml` maximizes, per individual,
+sum_l log(GL0 (1-p)^2 + GL1 2p(1-p) + GL2 p^2) with p = (1-h) p0 + h p1,
+parental frequencies clipped to [0.001, 0.999] so an allele unseen in a
+finite panel can't make a locus impossible. Each locus's term is a
+quadratic in h, so its coefficients are precomputed; the maximum is
+found from a 21-point grid then bisection on the derivative's sign, and
+the 95% interval (log-likelihood drop 1.92) by bisection bracketed from
+the grid. Checks: matches a 20,001-point brute-force search to within
+1e-4 for the estimate and both interval ends, including individuals at
+h = 0 and 1; invariant to allele polarity; missing genotypes equivalent
+to dropping them. On simulator data (15 + 15 references, 40 hybrids,
+2000 SNPs, 10% missing) mean hybrid error was 0.005-0.016 (ml) vs
+0.010-0.106 (mean, weighted) from depth-1 beagle to true genotypes, with
+95% interval coverage 0.90-0.97.
+
+Two things found while validating it. (1) On a 100,000-SNP, depth-4
+beagle file with 5% AIMs and 30 + 30 references, using every locus gave
+interval coverage 0.57 and estimates compressed toward 0.5 (correlation
+-0.79 between error and h - 0.5). With the simulator's true panel
+frequencies coverage was 0.93; with estimated frequencies on the AIMs
+alone it was 0.94 (mean error 0.0039 vs 0.0074, 0.4 s vs 18 s): small
+errors in the estimated frequencies of thousands of barely differentiated
+loci accumulate, because the model treats p0/p1 as exact. The Genomic
+guide therefore recommends running it on AIMs. (2) The CLI took 104 s on
+that file, half of it an O(n^2) `list.index` lookup of each locus's row
+in `cmd_estimate_hybrid_index`, replaced with a dict (49 s, identical
+output). Regression tests: `test_cli_estimate_hybrid_index_ml_recovers_hybrid_index_at_low_depth`
+(simulator-generated depth-2 beagle) and the `test_ml_*` tests in
+`tests/test_hybrid_index.py`.
+
 ---
 
 ## 6. CLI: `fit-genomic` and `fit-genomic-multi`

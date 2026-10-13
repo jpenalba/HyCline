@@ -575,22 +575,33 @@ catching a real problem on real data.
   BACKEND_PHASE3.md section 2.
 - `hycline.data.schema.HybridIndexLocusData` -- per-individual data
   container (the genomic-cline analog of `AlleleFreqTransect`).
-- `hycline.data.hybrid_index.estimate_hybrid_index` -- a simple
-  mean-proportion hybrid-index estimator from multi-locus genotype data.
-  Not the full uncertainty-propagating Bayesian estimator `gghybrid`/
-  `bgchm` use -- see BACKEND_PHASE3.md section 5 for the honest scope note.
-- `hycline estimate-hybrid-index` -- the CLI command, in two mutually
-  exclusive modes: compute parental allele frequencies directly from
-  labeled reference individuals in your own genotype file (no separate
-  frequency file needed), or supply them precomputed via
-  `--parental-freq-csv` for when you already have a reference panel's
-  frequencies summarized. Writes an `(individual, hybrid_index)` CSV
-  either way. Validated against known ground truth, not just confirmed
-  to run: correlation 0.977 with true hybrid index on synthetic data,
-  confirmed to chain correctly into a real genomic-cline fit end to end,
-  and the two modes verified to produce numerically identical results
-  when given the same underlying frequencies -- see BACKEND_PHASE3.md
-  section 9.
+- `hycline.data.hybrid_index.estimate_hybrid_index_ml` -- maximum-
+  likelihood hybrid index from per-genotype likelihoods (hard calls as
+  one-hot likelihoods): each locus's frequency in an individual with
+  hybrid index h is (1 - h) p0 + h p1, genotypes are Hardy-Weinberg given
+  that frequency, and h maximizes the likelihood, with a 95% likelihood-
+  profile interval. No allele polarization needed; partially
+  differentiated loci are modelled rather than treated as diagnostic.
+  Matches a 20,001-point brute-force likelihood search to within 1e-4
+  (estimate and interval ends). On `benchmarking/simulate_vcf.py` data,
+  mean hybrid error 0.005-0.016 from depth 1 beagle to true genotypes,
+  versus 0.010-0.106 for the mean-dosage estimator, with interval
+  coverage 0.90-0.97. Still treats h as known downstream -- no
+  propagation into cline fits as in `gghybrid`/`bgchm` (BACKEND_PHASE3.md
+  section 5).
+- `hycline.data.hybrid_index.estimate_hybrid_index` -- the simpler
+  mean-dosage estimator (loci oriented by the parental frequencies,
+  optionally weighted by differentiation), kept as `--method mean`.
+- `hycline estimate-hybrid-index` -- the CLI command (`--method ml`
+  default, or `mean`), in two mutually exclusive modes: compute parental
+  allele frequencies directly from labeled reference individuals in your
+  own genotype file (pooled maximum-likelihood frequencies for beagle
+  input), or supply them precomputed via `--parental-freq-csv`. Writes
+  individual, hybrid_index, and for `ml` the interval and number of loci
+  used. Validated against the simulator's true hybrid indices across
+  depths, AIM fractions and missing data -- see BACKEND_PHASE3.md
+  section 5 and the Genomic guide's Step 2, which also documents why it
+  should be run on AIMs rather than every SNP.
 - `hycline.inference.mle_genomic` -- MLE fitting via `scipy.optimize`,
   same approach as Phase 1's geographic MLE. `GenomicFitResult.summary()`
   includes a plain-language interpretation of the fitted rate parameter
@@ -907,35 +918,6 @@ misrepresent its own reliability without it. Where an item is closer to
 left for the reader to infer from tier placement alone.
 
 ### Tier 1 -- small, contained, ready to pick up
-
-**Next up:**
-
-- **A genotype-likelihood hybrid-index estimator for
-  `estimate-hybrid-index`.** The current estimator is the (oriented,
-  optionally differentiation-weighted) mean of each individual's
-  per-locus dosage -- for beagle input, the flat-prior expected dosage.
-  Two measured shortcomings, both from `benchmarking/simulate_vcf.py`
-  data (15 + 15 parental references, 40 hybrids, 2000 SNPs, 30% AIMs):
-  (1) *low depth*: the per-individual expected dosage pulls every
-  estimate toward 0.5 -- parental references average 0.19/0.81 at depth
-  2 and 0.13/0.86 at depth 5, against 0.09/0.91 from the true genotypes;
-  (2) *partially differentiated loci*: even correctly oriented, a locus
-  with parental frequencies 0.3/0.6 can't move anyone below 0.3 or above
-  0.6, so unweighted all-locus estimates put parentals at 0.33/0.68
-  (0.09/0.91 with `--weight-by-differentiation`, 0.02/0.98 on AIMs only).
-  Fix for both: estimate each individual's h by maximum likelihood,
-  L(h) = prod over loci of sum_g GL_g * P(g | p(h)), with
-  p(h) = (1 - h) p0 + h p1 from the parental frequencies (genotype
-  probabilities under Hardy-Weinberg). For VCF input the GLs are 0/1
-  indicators of the called genotype. This uses the full likelihoods at
-  low depth, and models partial differentiation directly instead of
-  assuming every locus is diagnostic -- a quick check of the simpler
-  per-locus rescaling (x - p0)/(p1 - p0) on the same data already gave
-  parental means 0.00/1.00 and mean hybrid error 0.008 (vs 0.042),
-  suggesting the gain is real. Validate against the simulator's true
-  hybrid indices across depths, AIM fractions, and missing data, and
-  report uncertainty (e.g. a likelihood-profile interval) per individual
-  if cheap, since HyCline's genomic-cline fits treat h as known.
 
 **Two items added from Baird & Daley (2025), *The Shapes of Clines and
 Wavefronts* (Mol Ecol, doi:10.1111/mec.70109) -- read in full, not just

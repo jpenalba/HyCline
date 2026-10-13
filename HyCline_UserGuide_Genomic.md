@@ -87,58 +87,113 @@ variable. `estimate-hybrid-index` computes it directly from a VCF or ANGSD
 beagle file -- format auto-detected from the `--input` file extension, the
 same pattern every other conversion command in HyCline uses.
 
+Run it on ancestry-informative markers from Step 1 (see "Which loci to
+use" below):
+
 ```bash
 hycline estimate-hybrid-index \
-    --input genomewide.vcf \
+    --input hi_aims.vcf \
     --metadata parental_labels.csv \
     --population-col population --pop0-label parent0 --pop1-label parent1 \
-    --weight-by-differentiation \
     --output hybrid_index.csv
 ```
 
-Real output:
+Real output (on a simulated 90-sample VCF, 15 reference individuals per
+parental population; absolute paths shortened):
 
 ```
 Detected input format: vcf (from file extension; use --format to override)
-Parsing 'genomewide.vcf' ...
-  7 biallelic SNPs parsed, 72 samples.
-  7 loci detected: ['aim_neutral', 'aim_barrier', 'aim_permeable', 'background0', 'background1', 'background2', 'background3']
-  Parental population 0 ('parent0'): 6 reference individuals
-  Parental population 1 ('parent1'): 6 reference individuals
+Parsing 'hi_aims.vcf' ...
+  395 biallelic SNPs parsed, 90 samples.
+  395 loci detected: ['snp21', 'snp22', 'snp55', 'snp63', 'snp75', 'snp91', 'snp119', 'snp122', 'snp125', 'snp150'] ... and 385 more
+  Parental population 0 ('parent0'): 15 reference individuals
+  Parental population 1 ('parent1'): 15 reference individuals
 
-Hybrid index estimated for 72 individuals.
-  Range: [0.062, 1.000]  (parental reference individuals should land near 0 or 1 -- a useful sanity check on the result)
+Hybrid index estimated for 90 individuals (--method ml).
+  Range: [0.000, 1.000]  (parental reference individuals should land near 0 or 1 -- a useful sanity check on the result)
 
-Wrote hybrid_index.csv
+Wrote /path/to/hybrid_index.csv
 Merge this into your metadata (e.g. via the sample-name column) to get a hybrid_index column any genomic-cline fitting command can use.
 ```
 
-Hybrid index is computed from *every* locus in the file, not just AIMs --
-run this on your unfiltered genome-wide data, before Step 1's filtering,
-so the estimate draws on as much ancestry information as possible.
-Parental reference individuals are included in the output alongside your
-test individuals, specifically so you can sanity-check them landing near
-0 or 1.
+The output has one row per individual, parental references included so
+you can check they land near 0 or 1:
 
-Each locus is first oriented using the two parental populations'
-frequencies, so the allele counted is the one more common in parental
-population 1 -- a VCF's ALT allele is just the non-reference base, and
-belongs to parental population 0 at roughly half of real AIMs. You don't
-need to polarize the input yourself.
+```
+individual,hybrid_index,hybrid_index_lower,hybrid_index_upper,n_loci
+sample1_pop1,0.0,0.0,0.00912283000070602,371
+sample33_popH,0.18347595310769976,0.13992310611065473,0.23034432947169986,374
+```
 
-**VCF input uses each individual's hard GT dosage directly. Beagle input
-uses each individual's expected dosage under their own genotype
-likelihoods** (posterior mean, not an argmax point estimate); missing
-genotypes (`0.333333 0.333333 0.333333`, ANGSD's no-data encoding) are
-left out, and in Mode 1 the parental frequencies are the pooled maximum-
-likelihood estimates `filter-aims` uses. The per-individual expected
-dosage still pulls estimates toward 0.5 at low depth: on simulated data
-with 30% AIMs, parental reference individuals averaged 0.19/0.81 at
-depth 2 and 0.13/0.86 at depth 5, against 0.09/0.91 from the true
-genotypes, with hybrids' estimates still correlated 0.999 with their
-true values. There's no proper marginalized hybrid-index estimator in
-HyCline yet, so this is the best available option for genotype-
-likelihood data, not a claim of full rigor.
+`hybrid_index_lower`/`hybrid_index_upper` are a 95% likelihood-profile
+interval and `n_loci` is the number of loci with a genotype for that
+individual. The file works directly as Step 3's `--metadata`.
+
+### How the estimate is made
+
+The default, `--method ml`, is a maximum-likelihood hybrid index. In an
+individual with hybrid index h, each locus's allele frequency is
+`(1 - h) * p0 + h * p1`, where p0 and p1 are the two parental
+populations' frequencies; genotypes follow Hardy-Weinberg proportions
+given that frequency; and h is the value that makes the individual's
+genotypes most likely. For VCF input the genotypes are the `GT` calls;
+for beagle input the full genotype likelihoods are used, so low-depth
+data isn't pulled toward 0.5. Missing genotypes (`./.`, or beagle's
+`0.333333 0.333333 0.333333`) are left out. This needs no allele
+polarization -- a VCF's ALT allele is just the non-reference base -- and
+it models partially differentiated loci rather than treating every
+locus as diagnostic, so a locus with frequencies 0.3 and 0.6 counts for
+what it is and nearly undifferentiated loci carry almost no weight.
+
+Measured against the simulator's true hybrid indices (15 + 15 reference
+individuals, 40 hybrids, 2000 SNPs, 10% missing data), mean absolute
+error of the hybrids' estimates:
+
+| Input | `--method ml` | `--method mean` (weighted) |
+|---|---|---|
+| beagle, depth 1, 100% AIMs | 0.007 | 0.075 |
+| beagle, depth 2, 30% AIMs | 0.016 | 0.093 |
+| beagle, depth 5, 30% AIMs | 0.011 | 0.064 |
+| true genotypes, 30% AIMs | 0.012 | 0.044 |
+
+and the 95% intervals contained the true value for 90-97% of hybrids.
+
+`--method mean` is the simpler estimator: the mean, across loci, of each
+individual's parental-population-1 allele dosage (each locus oriented by
+the parental frequencies first), optionally weighted by
+`--weight-by-differentiation`. It treats every locus as diagnostic, so
+partially differentiated loci and, for beagle input, low depth pull its
+estimates toward 0.5. `--weight-by-differentiation` applies to
+`--method mean` only, and `--method ml` requires diploid data
+(`--ploidy 2`).
+
+Neither method carries the uncertainty in h into the genomic-cline fit
+(Step 4 treats h as known, unlike the Bayesian hybrid-index models in
+gghybrid and bgchm); the interval columns are there so you can see how
+precise each individual's estimate is.
+
+### Which loci to use
+
+**Use ancestry-informative markers, not every SNP.** The parental
+frequencies come from a finite reference panel, and the model treats
+them as exact. Across thousands of barely differentiated loci those
+small estimation errors add up: on a simulated 100,000-SNP beagle file
+(30 + 30 reference individuals, depth 4, 5% AIMs) using every locus gave
+a mean hybrid error of 0.0074 with 95% intervals containing the truth for
+only 57% of hybrids, while the 5,000 AIMs alone gave 0.0039 with 94%
+coverage -- and ran in under a second instead of about 20.
+
+Within that, more loci beat stricter loci. On the 90-sample example
+above:
+
+| Hybrid-index loci (`filter-aims`) | Loci | Mean hybrid error | Mean interval width |
+|---|---|---|---|
+| `--minor-allele-freq 0.05` | 8 | 0.078 | 0.341 |
+| `--allele-freq-diff 0.5` | 395 | 0.019 | 0.090 |
+| `--allele-freq-diff 0.3` | 1000 | 0.014 | 0.071 |
+
+The interval width is the practical guide: if it's wide for most
+individuals, loosen the filter to bring in more loci.
 
 ### Two ways to supply parental allele frequencies
 
@@ -147,9 +202,10 @@ likelihood data, not a claim of full rigor.
 parental population each is a reference for.
 
 **Mode 2** -- `--parental-freq-csv`: a separate CSV of precomputed
-per-locus parental frequencies, for when you already have a reference
-panel's frequencies summarized rather than raw reference genotypes. No
-`--metadata` needed for this mode.
+per-locus parental frequencies (of the VCF ALT / beagle allele2 allele),
+for when you already have a reference panel's frequencies summarized
+rather than raw reference genotypes. No `--metadata` needed for this
+mode.
 
 ```bash
 hycline estimate-hybrid-index \
@@ -161,12 +217,64 @@ hycline estimate-hybrid-index \
 
 Exactly one of the two modes must be given.
 
-This is a standard, defensible baseline estimator -- the mean parental-
-population-1 frequency across loci -- not the more sophisticated Bayesian
-estimators some other tools (gghybrid, bgchm) use, which also propagate
-uncertainty in the hybrid index estimate itself into downstream cline
-fitting. HyCline's genomic-cline fitting treats hybrid index values as
-directly observed, not as estimates carrying their own uncertainty.
+### Using one AIM set for hybrid index and another for cline fitting
+
+Hybrid index and the clines themselves don't have to use the same loci.
+A common choice is a stricter set for hybrid index and a looser one for
+cline fitting, so the hybrid index rests on well-differentiated markers
+while more loci get their own cline. Run `filter-aims` twice on the same
+input and reference panel, and feed each output to a different step:
+
+```bash
+# Two AIM sets from the same genome-wide file
+hycline filter-aims --input genomewide.vcf --metadata parental_labels.csv \
+    --pop1-label parent0 --pop2-label parent1 \
+    --allele-freq-diff 0.5 --output hi_aims.vcf
+hycline filter-aims --input genomewide.vcf --metadata parental_labels.csv \
+    --pop1-label parent0 --pop2-label parent1 \
+    --allele-freq-diff 0.3 --output cline_aims.vcf
+
+# Hybrid index from the stricter set
+hycline estimate-hybrid-index --input hi_aims.vcf \
+    --metadata parental_labels.csv \
+    --population-col population --pop0-label parent0 --pop1-label parent1 \
+    --output hybrid_index.csv
+
+# Cline input from the looser set, using that hybrid index
+hycline generate-genomic-input --input cline_aims.vcf \
+    --metadata hybrid_index.csv --output genomic_input.csv
+```
+
+Real output of the two filters and the conversion (the hybrid-index step
+is shown above):
+
+```
+  4000 loci checked, 395 retained (allele-frequency difference >= 0.5 between the parental populations)
+  4000 loci checked, 1000 retained (allele-frequency difference >= 0.3 between the parental populations)
+
+Wrote /path/to/genomic_input.csv
+  90 individuals, 1000 loci
+Ready for: hycline fit-genomic --input genomic_input.csv --individual-col individual
+       or: hycline fit-hierarchical-genomic --input genomic_input.csv --individual-col individual
+```
+
+`estimate-hybrid-index`'s output has the `individual` and `hybrid_index`
+columns `generate-genomic-input` looks for by default, so it can be
+passed as `--metadata` directly; to combine it with other metadata,
+merge on the individual column.
+
+Two things to keep in mind:
+
+- **Don't make the hybrid-index set so strict that it has few loci.** As
+  the table under "Which loci to use" shows, 8 near-fixed loci gave a far
+  noisier hybrid index (mean error 0.078) than 395 or 1000 moderately
+  differentiated ones (0.019, 0.014). Check `filter-aims`'s retained
+  count and the interval widths.
+- **The stricter set is contained in the looser one,** so those loci are
+  used both to estimate hybrid index and as loci with their own clines.
+  Each makes up roughly 1/N of every individual's hybrid index, which
+  pulls its own cline slightly toward the genome-wide average. With
+  hundreds of hybrid-index loci this is negligible; with tens it is not.
 
 ---
 

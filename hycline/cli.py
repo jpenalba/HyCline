@@ -860,29 +860,31 @@ def _build_parser() -> argparse.ArgumentParser:
         "estimate-hybrid-index",
         help="Estimate genome-wide hybrid index from a VCF or ANGSD beagle file.",
         description="Estimate each individual's genome-wide hybrid index (the x-axis "
-                     "variable genomic cline fitting needs) as the mean, across loci, of "
-                     "that individual's parental-population-1 allele frequency -- a "
-                     "standard, defensible baseline estimator (not the more sophisticated "
-                     "Bayesian estimators in gghybrid/bgchm, which also propagate "
-                     "uncertainty in h itself -- see BACKEND_PHASE3.md section 3 for the "
-                     "honest scope note). VCF input uses each individual's hard GT dosage "
-                     "directly; beagle input uses each individual's expected dosage under "
-                     "their own genotype likelihoods (posterior mean, not an argmax point "
-                     "estimate) -- no proper marginalized hybrid-index estimator exists "
-                     "yet (that would need its own model, unlike allele-frequency "
-                     "estimation, which cline fitting itself marginalizes over), so this "
-                     "is the best available option for genotype-likelihood data, not a "
-                     "claim of full rigor. Format is auto-detected from the --input file "
-                     "extension unless --format is given. Two ways to supply parental "
-                     "allele frequencies: (1) --metadata/--population-col/--pop0-label/"
-                     "--pop1-label, computing them from reference individuals labeled in "
-                     "a metadata file (the default, and the more common case), or (2) "
-                     "--parental-freq-csv, a separate CSV of precomputed per-locus "
-                     "frequencies, for when you already have a reference panel's "
-                     "frequencies summarized rather than raw reference genotypes. Exactly "
-                     "one of the two must be given. Output is a simple (individual, "
-                     "hybrid_index) CSV that merges directly into the metadata any "
-                     "genomic-cline command needs.",
+                     "variable genomic cline fitting needs). The default --method ml is "
+                     "the maximum-likelihood hybrid index: each locus's allele frequency "
+                     "in an individual with hybrid index h is (1 - h) * p0 + h * p1 from "
+                     "the two parental frequencies, genotypes follow Hardy-Weinberg "
+                     "proportions given that frequency, and h maximizes the likelihood "
+                     "of the individual's genotypes -- hard calls for VCF input, full "
+                     "genotype likelihoods for beagle input (missing genotypes left "
+                     "out). It needs no allele polarization, models partially "
+                     "differentiated loci instead of treating every locus as "
+                     "diagnostic, and reports a 95% likelihood-profile interval per "
+                     "individual. --method mean is the simpler mean-dosage estimator "
+                     "(loci oriented by the parental frequencies), which is pulled "
+                     "toward 0.5 by partially differentiated loci and, for beagle input, "
+                     "by low depth. Neither propagates uncertainty in h into later "
+                     "cline fits (see BACKEND_PHASE3.md section 5). Format is "
+                     "auto-detected from the --input file extension unless --format is "
+                     "given. Two ways to supply parental allele frequencies: (1) "
+                     "--metadata/--population-col/--pop0-label/--pop1-label, computing "
+                     "them from reference individuals labeled in a metadata file (the "
+                     "default, and the more common case), or (2) --parental-freq-csv, a "
+                     "separate CSV of precomputed per-locus frequencies of the VCF ALT / "
+                     "beagle allele2 allele. Exactly one of the two must be given. "
+                     "Output is a CSV with individual and hybrid_index columns (plus "
+                     "the interval and number of loci used, for --method ml) that "
+                     "merges directly into the metadata any genomic-cline command needs.",
     )
     ehi_g = ehi_p.add_argument_group("input data")
     ehi_p.add_argument("--input", required=True, metavar="FILE",
@@ -947,8 +949,12 @@ def _build_parser() -> argparse.ArgumentParser:
     ehi_g.add_argument("--max-variants", type=int, default=None,
                         help="[VCF input only] Optional cap on the number of biallelic "
                              "SNPs to parse. Ignored for beagle input.")
+    ehi_p.add_argument("--method", choices=["ml", "mean"], default="ml",
+                        help="ml (default): maximum-likelihood hybrid index with a 95%% "
+                             "likelihood-profile interval. mean: mean oriented dosage "
+                             "across loci.")
     ehi_g.add_argument("--weight-by-differentiation", action="store_true",
-                        help="Weight each locus's contribution by how differentiated "
+                        help="[--method mean only] Weight each locus's contribution by how differentiated "
                              "it is between the two parental populations (a locus with "
                              "similar frequencies in both parental populations carries "
                              "little ancestry information and is down-weighted, rather "
@@ -957,7 +963,7 @@ def _build_parser() -> argparse.ArgumentParser:
                              "appropriate if you've already pre-filtered to strongly "
                              "differentiated (ancestry-informative) markers.")
     ehi_p.add_argument("--output", required=True, metavar="FILE.csv",
-                        help="Path to write the (individual, hybrid_index) CSV to.")
+                        help="Path to write the hybrid-index CSV to.")
 
     # ---- `generate-geographic-input` subcommand ----
     ggi_p = subparsers.add_parser(
@@ -3003,6 +3009,15 @@ def cmd_estimate_hybrid_index(args) -> int:
 
     mode1 = args.population_col is not None
     mode2 = args.parental_freq_csv is not None
+    if args.method == "ml" and args.weight_by_differentiation:
+        print("\nERROR: --weight-by-differentiation applies to --method mean only; "
+              "--method ml already weighs each locus by how informative it is.\n",
+              file=sys.stderr)
+        return 2
+    if args.method == "ml" and args.ploidy != 2:
+        print("\nERROR: --method ml models diploid genotypes; use --method mean for "
+              "--ploidy other than 2.\n", file=sys.stderr)
+        return 2
     if mode1 and mode2:
         print("\nERROR: --population-col and --parental-freq-csv are mutually exclusive "
               "-- give exactly one (see --help for the two modes).\n", file=sys.stderr)
@@ -3070,7 +3085,8 @@ def cmd_estimate_hybrid_index(args) -> int:
         loci = all_locus_names
     print(f"  {len(loci)} loci detected: {_format_loci_list(loci)}")
 
-    locus_idx = [all_locus_names.index(l) for l in loci]
+    position = {name: i for i, name in enumerate(all_locus_names)}
+    locus_idx = [position[l] for l in loci]
     genotypes = dosage_by_locus[locus_idx, :].T  # (n_samples, n_loci)
 
     if mode1:
@@ -3122,22 +3138,43 @@ def cmd_estimate_hybrid_index(args) -> int:
         parental_freq_pop1 = freq_by_locus.loc[loci, args.freq_pop1_col].to_numpy(dtype=float)
         print(f"  Matched precomputed frequencies for all {len(loci)} loci.")
 
-    try:
-        h = estimate_hybrid_index(
-            genotypes, ploidy=args.ploidy,
-            parental_freq_pop0=parental_freq_pop0, parental_freq_pop1=parental_freq_pop1,
-            weight_by_differentiation=args.weight_by_differentiation,
-        )
-    except ValueError as e:
-        print(f"\nERROR: {e}\n", file=sys.stderr)
-        return 2
+    if args.method == "ml":
+        from hycline.data.hybrid_index import estimate_hybrid_index_ml
+        if fmt == "vcf":
+            # Hard calls as one-hot likelihoods; NaN (./.) is left out.
+            gl = [(genotypes == k).astype(float) for k in range(3)]
+            include = ~np.isnan(genotypes)
+        else:
+            gl = [g[locus_idx].T for g in (data.gl0, data.gl1, data.gl2)]
+            include = ~beagle_missing_mask(*gl)
+        try:
+            ml = estimate_hybrid_index_ml(*gl, parental_freq_pop0, parental_freq_pop1,
+                                          include=include)
+        except ValueError as e:
+            print(f"\nERROR: {e}\n", file=sys.stderr)
+            return 2
+        h = ml["hybrid_index"]
+        out_df = pd.DataFrame({"individual": sample_names, "hybrid_index": h,
+                               "hybrid_index_lower": ml["lower"],
+                               "hybrid_index_upper": ml["upper"],
+                               "n_loci": ml["n_loci_used"]})
+    else:
+        try:
+            h = estimate_hybrid_index(
+                genotypes, ploidy=args.ploidy,
+                parental_freq_pop0=parental_freq_pop0, parental_freq_pop1=parental_freq_pop1,
+                weight_by_differentiation=args.weight_by_differentiation,
+            )
+        except ValueError as e:
+            print(f"\nERROR: {e}\n", file=sys.stderr)
+            return 2
+        out_df = pd.DataFrame({"individual": sample_names, "hybrid_index": h})
 
-    out_df = pd.DataFrame({"individual": sample_names, "hybrid_index": h})
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_csv(out_path, index=False)
 
-    print(f"\nHybrid index estimated for {len(out_df)} individuals.")
+    print(f"\nHybrid index estimated for {len(out_df)} individuals (--method {args.method}).")
     print(f"  Range: [{h.min():.3f}, {h.max():.3f}]  (parental reference individuals should "
           f"land near 0 or 1 -- a useful sanity check on the result)")
     print(f"\nWrote {out_path.resolve()}")

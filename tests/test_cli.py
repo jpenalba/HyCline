@@ -1303,7 +1303,10 @@ def test_cli_estimate_hybrid_index_recovers_known_true_hybrid_index(tmp_path):
 
     out_df = pd.read_csv(output_path)
     assert len(out_df) == 15 + 15 + 30
-    assert set(out_df.columns) == {"individual", "hybrid_index"}
+    assert set(out_df.columns) == {"individual", "hybrid_index", "hybrid_index_lower",
+                                   "hybrid_index_upper", "n_loci"}
+    assert (out_df["hybrid_index_lower"] <= out_df["hybrid_index"]).all()
+    assert (out_df["hybrid_index"] <= out_df["hybrid_index_upper"]).all()
 
     pop0_h = out_df[out_df["individual"].str.startswith("pop0")]["hybrid_index"]
     pop1_h = out_df[out_df["individual"].str.startswith("pop1")]["hybrid_index"]
@@ -1331,7 +1334,8 @@ def test_cli_estimate_hybrid_index_orients_alleles_by_parental_frequency(tmp_pat
     true_h = _write_hybrid_index_input_vcf(vcf_path, metadata_path,
                                            flip_every_other=True)
     output_path = tmp_path / "hybrid_index.csv"
-    for extra in ([], ["--weight-by-differentiation"]):
+    for extra in (["--method", "mean"], ["--method", "mean", "--weight-by-differentiation"],
+                  ["--method", "ml"]):
         result = _run_cli([
             "estimate-hybrid-index", "--input", str(vcf_path), "--metadata",
             str(metadata_path), "--population-col", "population", "--pop0-label", "house",
@@ -1367,12 +1371,69 @@ def test_cli_estimate_hybrid_index_beagle_missing_genotypes_not_counted(tmp_path
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(beagle_path), "--metadata",
         str(metadata_path), "--population-col", "population", "--pop0-label", "house",
-        "--pop1-label", "spanish", "--output", str(output_path),
+        "--pop1-label", "spanish", "--method", "mean", "--output", str(output_path),
     ])
     assert result.returncode == 0, result.stderr
     h = pd.read_csv(output_path).set_index("individual")["hybrid_index"]
     # x is missing at 3 of 4 loci and pure house at the fourth: 0, not 0.375
     assert h["x"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_cli_estimate_hybrid_index_ml_recovers_hybrid_index_at_low_depth(tmp_path):
+    """Regression test built with benchmarking/simulate_vcf.py, the data that
+    surfaced the problem: at depth 2 the mean-dosage estimator pulls every
+    hybrid index toward 0.5 (parental references at ~0.19/0.81), while the
+    maximum-likelihood estimator uses the genotype likelihoods directly."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import numpy as np
+
+    repo = Path(__file__).resolve().parents[1]
+    prefix = tmp_path / "zone.vcf"
+    subprocess.run([sys.executable, str(repo / "benchmarking" / "simulate_vcf.py"),
+                    "--n-pop1", "15", "--n-pop2", "15", "--n-popH", "40",
+                    "--n-snps", "1000", "--aim-percent", "30", "--missing-global", "0.1",
+                    "--format-beagle", "--mean-depth", "2", "--seed", "21",
+                    "--output", str(prefix)], check=True, capture_output=True)
+    metadata = tmp_path / "zone_metadata.csv"
+    truth = pd.read_csv(metadata).set_index("individual")
+
+    errors = {}
+    for method, extra in (("ml", []), ("mean", ["--weight-by-differentiation"])):
+        out = tmp_path / f"hi_{method}.csv"
+        result = _run_cli([
+            "estimate-hybrid-index", "--input", str(tmp_path / "zone.beagle"),
+            "--metadata", str(metadata), "--population-col", "population",
+            "--pop0-label", "pop1", "--pop1-label", "pop2", "--method", method,
+            "--output", str(out), *extra,
+        ])
+        assert result.returncode == 0, result.stderr
+        est = pd.read_csv(out).set_index("individual").join(truth, rsuffix="_true")
+        hybrids = est[est["population"] == "popH"]
+        errors[method] = np.mean(np.abs(hybrids["hybrid_index"] - hybrids["hybrid_index_true"]))
+        if method == "ml":
+            covered = ((hybrids["hybrid_index_lower"] <= hybrids["hybrid_index_true"])
+                       & (hybrids["hybrid_index_true"] <= hybrids["hybrid_index_upper"]))
+            assert covered.mean() >= 0.8
+    assert errors["ml"] < 0.03
+    assert errors["mean"] > 2 * errors["ml"]
+
+
+def test_cli_estimate_hybrid_index_ml_rejects_mean_only_options(tmp_path):
+    vcf_path = tmp_path / "genotypes.vcf"
+    metadata_path = tmp_path / "metadata.csv"
+    _write_hybrid_index_input_vcf(vcf_path, metadata_path)
+    base = ["estimate-hybrid-index", "--input", str(vcf_path), "--metadata",
+            str(metadata_path), "--population-col", "population", "--pop0-label", "house",
+            "--pop1-label", "spanish", "--output", str(tmp_path / "hi.csv")]
+    result = _run_cli(base + ["--weight-by-differentiation"])
+    assert result.returncode == 2
+    assert "--method mean only" in result.stderr
+    result = _run_cli(base + ["--ploidy", "4"])
+    assert result.returncode == 2
+    assert "diploid" in result.stderr
 
 
 def test_cli_estimate_hybrid_index_weight_by_differentiation_runs(tmp_path):
@@ -1383,7 +1444,7 @@ def test_cli_estimate_hybrid_index_weight_by_differentiation_runs(tmp_path):
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
         "--population-col", "population", "--pop0-label", "house",
-        "--pop1-label", "spanish", "--weight-by-differentiation",
+        "--pop1-label", "spanish", "--method", "mean", "--weight-by-differentiation",
         "--output", str(output_path),
     ])
     assert result.returncode == 0, result.stderr
