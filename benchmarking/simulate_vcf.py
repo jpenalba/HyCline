@@ -31,10 +31,25 @@ enforced on the called (non-missing) pop1 and pop2 genotypes, so missing
 data never pushes an AIM's realized frequency outside the cutoff.
 
 Alongside the VCF the script writes a metadata CSV (columns: individual,
-population, hybrid_index, missing_fraction) usable directly with HyCline's
---metadata/--sample-col/--population-col options, and a truth CSV recording
-each SNP's AIM status and realized parental frequencies (from called
-genotypes).
+population, hybrid_index, missing_fraction, plus mean_depth when reads are
+simulated) usable directly with HyCline's --metadata/--sample-col/
+--population-col options, and a truth CSV recording each SNP's AIM status
+and realized parental frequencies (from the true, non-missing genotypes).
+
+Genotype likelihoods: --format-beagle also writes an ANGSD-style beagle file
+(`angsd -doGlf 2` layout) for the same samples and SNPs. Reads are simulated
+for every non-missing genotype: a depth d (Poisson, or negative binomial with
+--depth-dispersion, scaled per individual by --individual-depth-sd, and
+redrawn if 0 so the missing-data settings stay exact), then d reads each
+showing the ALT allele with probability (g/2)(1-e) + (1-g/2)e for true
+dosage g and per-read error e (--seq-error). The three genotype likelihoods
+are computed from the read counts and normalized to sum to 1; missing
+genotypes are written as 0.333333/0.333333/0.333333, ANGSD's no-data
+encoding. Beagle markers are named <chrom>_<pos>; allele1/allele2 are the
+VCF's REF/ALT as ANGSD base codes (0=A, 1=C, 2=G, 3=T), so allele2 is the
+focal allele in both files. --vcf-genotypes called writes the VCF GT as the
+most likely genotype from those same reads instead of the true genotype,
+giving matched hard-call and genotype-likelihood versions of one dataset.
 
 Example:
     python benchmarking/simulate_vcf.py --n-pop1 20 --n-pop2 20 --n-popH 100 \\
@@ -42,6 +57,11 @@ Example:
         --missing-global 0.05 \\
         --missing-individual sample3_pop1=0.5 sample45_popH=0.9 \\
         --output bench.vcf --seed 1
+
+    # Low-coverage version with matched beagle output and called VCF genotypes
+    python benchmarking/simulate_vcf.py --n-snps 10000 --aim-percent 10 \\
+        --format-beagle --mean-depth 2 --seq-error 0.01 \\
+        --vcf-genotypes called --output lowcov.vcf.gz --seed 1
 """
 
 from __future__ import annotations
@@ -101,12 +121,38 @@ def parse_args(argv=None):
                         "sample3_pop1=0.5 sample45_popH=0.9. The sample is "
                         "missing at exactly round(FRAC * n_snps) random SNPs. "
                         "Can be given several values and/or repeated.")
-    p.add_argument("--include-pl", action="store_true",
-                   help="Also write a PL (Phred-scaled genotype likelihood) "
-                        "FORMAT field, derived from the true genotype with "
-                        "--pl-error per-genotype error.")
-    p.add_argument("--pl-error", type=float, default=0.01,
-                   help="Error probability used to build PL values.")
+    gl = p.add_argument_group(
+        "genotype likelihoods / simulated reads",
+        "Reads are simulated only when --format-beagle or --vcf-genotypes "
+        "called is given; the depth and error flags have no effect otherwise.")
+    gl.add_argument("--format-beagle", "--format_beagle", dest="format_beagle",
+                    action="store_true",
+                    help="Also write an ANGSD-style beagle genotype-likelihood "
+                         "file for the same samples and SNPs.")
+    gl.add_argument("--beagle-output", default=None,
+                    help="Beagle output path. Default: <output stem>.beagle "
+                         "(.beagle.gz when --output ends in .gz).")
+    gl.add_argument("--mean-depth", type=float, default=10.0,
+                    help="Mean read depth per non-missing genotype. Zero depths "
+                         "are redrawn (missing data is set only by the missing-"
+                         "data flags), so the realized mean is slightly higher "
+                         "at very low depth, e.g. ~2.3 for 2 with Poisson depth.")
+    gl.add_argument("--depth-dispersion", type=float, default=0.0,
+                    help="Negative-binomial size parameter for read depth "
+                         "(variance = mean + mean^2 / size; smaller = more "
+                         "uneven depth across sites). 0 = Poisson depth.")
+    gl.add_argument("--individual-depth-sd", type=float, default=0.0,
+                    help="Log-scale SD of a per-individual depth multiplier "
+                         "(mean 1), mimicking uneven sequencing effort across "
+                         "samples. 0 = every individual has --mean-depth.")
+    gl.add_argument("--seq-error", type=float, default=0.01,
+                    help="Per-read probability of reading the wrong allele.")
+    gl.add_argument("--vcf-genotypes", choices=["true", "called"], default="true",
+                    help="VCF GT values: the true simulated genotypes, or the "
+                         "most likely genotype given the simulated reads (hard "
+                         "calls with realistic low-depth errors). With "
+                         "'called', the VCF also gets a DP field. AIM "
+                         "frequency guarantees apply to the true genotypes.")
     p.add_argument("--output", "-o", required=True,
                    help="Output VCF path (.vcf or .vcf.gz).")
     p.add_argument("--metadata", default=None,
@@ -151,8 +197,16 @@ def parse_args(argv=None):
         p.error("--hi-value must be in [0, 1]")
     if args.n_chrom < 1 or args.snp_spacing < 1:
         p.error("--n-chrom and --snp-spacing must be >= 1")
-    if not 0.0 < args.pl_error < 1.0:
-        p.error("--pl-error must be in (0, 1)")
+    if args.mean_depth <= 0:
+        p.error("--mean-depth must be > 0")
+    if args.depth_dispersion < 0:
+        p.error("--depth-dispersion must be >= 0")
+    if args.individual_depth_sd < 0:
+        p.error("--individual-depth-sd must be >= 0")
+    if not 0.0 <= args.seq_error < 0.5:
+        p.error("--seq-error must be in [0, 0.5)")
+    if args.beagle_output and not args.format_beagle:
+        p.error("--beagle-output requires --format-beagle")
     return args
 
 
@@ -261,21 +315,48 @@ class MissingMasks:
         return mask
 
 
-def pl_string(gt: int, err: float) -> str:
-    # Probability (1 - err) on the true genotype, err/2 on each other.
-    probs = np.full(3, err / 2.0)
-    probs[gt] = 1.0 - err
-    phred = -10.0 * np.log10(probs)
-    phred = np.rint(phred - phred.min()).astype(int)
-    return ",".join(map(str, phred))
+def draw_depths(rng, lam: np.ndarray, dispersion: float) -> np.ndarray:
+    """Read depths >= 1 with per-sample means `lam` (zero draws are redrawn,
+    so a non-missing genotype always has at least one read)."""
+    def draw(m):
+        if dispersion > 0:
+            return rng.negative_binomial(dispersion, dispersion / (dispersion + m))
+        return rng.poisson(m)
+
+    depth = draw(lam)
+    zero = depth == 0
+    while zero.any():
+        depth[zero] = draw(lam[zero])
+        zero = depth == 0
+    return depth
 
 
+def genotype_likelihoods(rng, geno: np.ndarray, depth: np.ndarray, err: float):
+    """Simulate ALT read counts for true dosages `geno` at depths `depth` and
+    return (n_samples, 3) normalized likelihoods for dosage 0/1/2."""
+    q = np.array([err, 0.5, 1.0 - err])  # P(read shows ALT | dosage 0/1/2)
+    alt_reads = rng.binomial(depth, q[geno])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        log_q, log_1mq = np.log(q), np.log1p(-q)
+        loglik = (alt_reads[:, None] * log_q[None, :]
+                  + (depth - alt_reads)[:, None] * log_1mq[None, :])
+    # err = 0 gives log(0) terms; 0 * -inf must count as 0, not NaN.
+    loglik = np.where(np.isnan(loglik), 0.0, loglik)
+    loglik -= loglik.max(axis=1, keepdims=True)
+    lik = np.exp(loglik)
+    return lik / lik.sum(axis=1, keepdims=True)
+
+
+BASE_CODE = {"A": "0", "C": "1", "G": "2", "T": "3"}
 GT_STR = {0: "0/0", 1: "0/1", 2: "1/1"}
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
     rng = np.random.default_rng(args.seed)
+    # Reads get their own stream, so turning beagle output or called
+    # genotypes on/off never changes the simulated genotypes for a given seed.
+    read_rng = np.random.default_rng(np.random.SeedSequence(args.seed).spawn(1)[0])
 
     pops = (["pop1"] * args.n_pop1 + ["pop2"] * args.n_pop2
             + ["popH"] * args.n_popH)
@@ -311,13 +392,34 @@ def main(argv=None) -> int:
     stem = _stem(out_vcf)
     meta_path = args.metadata or f"{stem}_metadata.csv"
     truth_path = args.truth or f"{stem}_truth.csv"
+    beagle_path = None
+    if args.format_beagle:
+        beagle_path = args.beagle_output or (
+            f"{stem}.beagle.gz" if out_vcf.endswith(".gz") else f"{stem}.beagle")
+
+    simulate_reads = args.format_beagle or args.vcf_genotypes == "called"
+    if simulate_reads:
+        sd = args.individual_depth_sd
+        depth_mult = (read_rng.lognormal(-0.5 * sd * sd, sd, size=n_samples)
+                      if sd > 0 else np.ones(n_samples))
+        sample_lam = args.mean_depth * depth_mult
+        depth_sum = np.zeros(n_samples, dtype=np.int64)
 
     snps_per_chrom = int(np.ceil(args.n_snps / args.n_chrom))
-    fmt = "GT:PL" if args.include_pl else "GT"
+    write_dp = args.vcf_genotypes == "called"
+    fmt = "GT:DP" if write_dp else "GT"
     bases = np.array(list("ACGT"))
 
-    opener = gzip.open if out_vcf.endswith(".gz") else open
-    with opener(out_vcf, "wt") as vcf, open(truth_path, "w") as truth:
+    def _open(path):
+        return gzip.open(path, "wt") if path.endswith(".gz") else open(path, "w")
+
+    beagle = _open(beagle_path) if beagle_path else None
+    if beagle:
+        beagle.write("marker\tallele1\tallele2\t"
+                     + "\t".join(f"{n}\t{n}\t{n}" for n in samples) + "\n")
+    missing_gl = "0.333333\t0.333333\t0.333333"
+
+    with _open(out_vcf) as vcf, open(truth_path, "w") as truth:
         vcf.write("##fileformat=VCFv4.2\n")
         vcf.write("##source=HyCline_benchmarking_simulate_vcf\n")
         for c in range(args.n_chrom):
@@ -326,13 +428,13 @@ def main(argv=None) -> int:
         vcf.write('##INFO=<ID=AIM,Number=0,Type=Flag,'
                   'Description="Simulated ancestry-informative marker">\n')
         vcf.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n')
-        if args.include_pl:
-            vcf.write('##FORMAT=<ID=PL,Number=G,Type=Integer,'
-                      'Description="Phred-scaled genotype likelihoods">\n')
+        if write_dp:
+            vcf.write('##FORMAT=<ID=DP,Number=1,Type=Integer,'
+                      'Description="Simulated read depth">\n')
         vcf.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"
                   + "\t".join(samples) + "\n")
 
-        truth.write("chrom,pos,id,is_aim,freq_pop1,freq_pop2,low_pop\n")
+        truth.write("chrom,pos,id,marker,is_aim,freq_pop1,freq_pop2,low_pop\n")
 
         for s in range(args.n_snps):
             chrom = f"chr{s // snps_per_chrom + 1}"
@@ -360,33 +462,59 @@ def main(argv=None) -> int:
                 geno[pop_arr == "popH"] = rng.binomial(2, p_h).astype(np.int8)
 
             ref, alt = rng.choice(bases, size=2, replace=False)
-            fields = []
-            for g, miss in zip(geno, missing):
-                if miss:
-                    fields.append("./.:." if args.include_pl else "./.")
-                elif args.include_pl:
-                    fields.append(f"{GT_STR[int(g)]}:{pl_string(int(g), args.pl_error)}")
-                else:
-                    fields.append(GT_STR[int(g)])
+            marker = f"{chrom}_{pos}"
+
+            if simulate_reads:
+                called = ~missing
+                depth = np.zeros(n_samples, dtype=np.int64)
+                depth[called] = draw_depths(read_rng, sample_lam[called],
+                                            args.depth_dispersion)
+                depth_sum += depth
+                lik = np.full((n_samples, 3), 1.0 / 3.0)
+                lik[called] = genotype_likelihoods(
+                    read_rng, geno[called], depth[called], args.seq_error)
+                if beagle:
+                    cells = [missing_gl if m else
+                             f"{l0:.6f}\t{l1:.6f}\t{l2:.6f}"
+                             for m, (l0, l1, l2) in zip(missing, lik)]
+                    beagle.write(f"{marker}\t{BASE_CODE[ref]}\t{BASE_CODE[alt]}\t"
+                                 + "\t".join(cells) + "\n")
+
+            if args.vcf_genotypes == "called":
+                vcf_geno = lik.argmax(axis=1)
+                fields = ["./.:0" if m else f"{GT_STR[int(g)]}:{d}"
+                          for g, m, d in zip(vcf_geno, missing, depth)]
+            else:
+                fields = ["./." if m else GT_STR[int(g)]
+                          for g, m in zip(geno, missing)]
 
             info = "AIM" if aim else "."
             vcf.write(f"{chrom}\t{pos}\t{snp_id}\t{ref}\t{alt}\t.\tPASS\t{info}\t"
                       f"{fmt}\t" + "\t".join(fields) + "\n")
 
             low_pop = ("pop1" if f1 < f2 else "pop2") if aim and called1.any() and called2.any() else ""
-            truth.write(f"{chrom},{pos},{snp_id},{int(aim)},{f1:.6f},{f2:.6f},{low_pop}\n")
+            truth.write(f"{chrom},{pos},{snp_id},{marker},{int(aim)},"
+                        f"{f1:.6f},{f2:.6f},{low_pop}\n")
+
+    if beagle:
+        beagle.close()
 
     with open(meta_path, "w") as meta:
-        meta.write("individual,population,hybrid_index,missing_fraction\n")
+        meta.write("individual,population,hybrid_index,missing_fraction"
+                   + (",mean_depth" if simulate_reads else "") + "\n")
         hi_iter = iter(hybrid_index)
-        for name, pop, n_miss in zip(samples, pops, missing_per_sample):
+        for i, (name, pop, n_miss) in enumerate(zip(samples, pops, missing_per_sample)):
             if pop == "pop1":
                 hi = "0"
             elif pop == "pop2":
                 hi = "1"
             else:
                 hi = f"{next(hi_iter):.6f}"
-            meta.write(f"{name},{pop},{hi},{n_miss / args.n_snps:.6f}\n")
+            row = f"{name},{pop},{hi},{n_miss / args.n_snps:.6f}"
+            if simulate_reads:
+                n_called = args.n_snps - n_miss
+                row += f",{depth_sum[i] / n_called:.3f}" if n_called else ",0"
+            meta.write(row + "\n")
 
     print(f"Wrote {out_vcf}: {n_samples} samples "
           f"({args.n_pop1} pop1, {args.n_pop2} pop2, {args.n_popH} popH), "
@@ -394,6 +522,12 @@ def main(argv=None) -> int:
     total_missing = int(missing_per_sample.sum())
     print(f"Missing genotypes: {total_missing} of {n_samples * args.n_snps} "
           f"({total_missing / (n_samples * args.n_snps):.4%}).")
+    if simulate_reads:
+        n_called = n_samples * args.n_snps - total_missing
+        print(f"Mean simulated read depth per called genotype: "
+              f"{depth_sum.sum() / max(n_called, 1):.2f}.")
+    if beagle_path:
+        print(f"Wrote {beagle_path}.")
     print(f"Wrote {meta_path} and {truth_path}.")
     return 0
 
