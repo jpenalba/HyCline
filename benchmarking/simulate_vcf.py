@@ -16,14 +16,31 @@ frequencies happen to meet the AIM criterion, so the AIM count is exact.
 Each popH individual gets a hybrid index h (fraction of pop2 ancestry), and
 its genotypes are drawn from p = (1 - h) * p_pop1 + h * p_pop2 at every SNP.
 
+Missing data (./.) comes in two forms, both exact counts rather than
+per-genotype coin flips:
+  --missing-global F       a fraction F of all genotype calls belonging to
+                           the samples not named in --missing-individual is
+                           set missing, placed uniformly at random across
+                           those samples and SNPs.
+  --missing-individual S=F sample S is missing at exactly round(F * n_snps)
+                           randomly chosen SNPs. Repeatable / multi-valued.
+                           A named sample's rate replaces the global rate
+                           for that sample.
+Missingness is decided before genotypes are drawn, and AIM status is
+enforced on the called (non-missing) pop1 and pop2 genotypes, so missing
+data never pushes an AIM's realized frequency outside the cutoff.
+
 Alongside the VCF the script writes a metadata CSV (columns: individual,
-population) usable directly with HyCline's --metadata/--sample-col/
---population-col options, and a truth CSV recording each SNP's AIM status
-and realized parental frequencies.
+population, hybrid_index, missing_fraction) usable directly with HyCline's
+--metadata/--sample-col/--population-col options, and a truth CSV recording
+each SNP's AIM status and realized parental frequencies (from called
+genotypes).
 
 Example:
     python benchmarking/simulate_vcf.py --n-pop1 20 --n-pop2 20 --n-popH 100 \\
         --n-snps 10000 --aim-percent 10 --aim-cutoff 0.05 \\
+        --missing-global 0.05 \\
+        --missing-individual sample3_pop1=0.5 sample45_popH=0.9 \\
         --output bench.vcf --seed 1
 """
 
@@ -73,11 +90,17 @@ def parse_args(argv=None):
                    help="Number of chromosomes to spread SNPs across.")
     p.add_argument("--snp-spacing", type=int, default=1000,
                    help="Base-pair spacing between consecutive SNPs on a chromosome.")
-    p.add_argument("--missing-rate", type=float, default=0.0,
-                   help="Fraction of genotypes set to missing (./.) at random. "
-                        "Applied after AIM frequencies are fixed, so it does not "
-                        "change which SNPs are AIMs but can shift realized "
-                        "frequencies among non-missing calls slightly.")
+    p.add_argument("--missing-global", type=float, default=0.0,
+                   help="Fraction (0-1) of genotype calls set to missing (./.), "
+                        "spread uniformly at random across all samples and SNPs. "
+                        "Samples named in --missing-individual are excluded from "
+                        "this pool and use their own rate instead.")
+    p.add_argument("--missing-individual", nargs="+", action="extend",
+                   default=[], metavar="SAMPLE=FRAC",
+                   help="Per-sample missing fraction, e.g. "
+                        "sample3_pop1=0.5 sample45_popH=0.9. The sample is "
+                        "missing at exactly round(FRAC * n_snps) random SNPs. "
+                        "Can be given several values and/or repeated.")
     p.add_argument("--include-pl", action="store_true",
                    help="Also write a PL (Phred-scaled genotype likelihood) "
                         "FORMAT field, derived from the true genotype with "
@@ -107,8 +130,23 @@ def parse_args(argv=None):
         p.error("--aim-percent must be between 0 and 100")
     if not 0.0 <= args.aim_cutoff < 0.5:
         p.error("--aim-cutoff must be in [0, 0.5)")
-    if not 0.0 <= args.missing_rate < 1.0:
-        p.error("--missing-rate must be in [0, 1)")
+    if not 0.0 <= args.missing_global <= 1.0:
+        p.error("--missing-global must be in [0, 1]")
+    missing_individual = {}
+    for item in args.missing_individual:
+        name, sep, frac = item.rpartition("=")
+        if not sep or not name:
+            p.error(f"--missing-individual expects SAMPLE=FRAC, got {item!r}")
+        try:
+            frac = float(frac)
+        except ValueError:
+            p.error(f"--missing-individual: {frac!r} is not a number ({item!r})")
+        if not 0.0 <= frac <= 1.0:
+            p.error(f"--missing-individual: fraction must be in [0, 1] ({item!r})")
+        if name in missing_individual:
+            p.error(f"--missing-individual: {name} given more than once")
+        missing_individual[name] = frac
+    args.missing_individual = missing_individual
     if not 0.0 <= args.hi_value <= 1.0:
         p.error("--hi-value must be in [0, 1]")
     if args.n_chrom < 1 or args.snp_spacing < 1:
@@ -142,8 +180,18 @@ def is_aim(freq_a: float, freq_b: float, cutoff: float) -> bool:
 
 
 def simulate_parentals(rng, n1: int, n2: int, aim: bool, cutoff: float):
-    """Genotypes for pop1 and pop2 at one SNP, plus the realized frequencies."""
+    """Genotypes for the n1 called pop1 and n2 called pop2 samples at one SNP,
+    plus the realized frequencies (NaN for a population with no calls)."""
     a1, a2 = 2 * n1, 2 * n2
+    if n1 == 0 or n2 == 0:
+        # AIM status is undefined without calls in both parentals; draw
+        # genotypes for whichever side has calls and report NaN frequencies.
+        q = rng.uniform(0.0, 1.0)
+        g1 = rng.binomial(2, q, size=n1).astype(np.int8)
+        g2 = rng.binomial(2, q, size=n2).astype(np.int8)
+        f1 = g1.sum() / a1 if n1 else np.nan
+        f2 = g2.sum() / a2 if n2 else np.nan
+        return g1, g2, f1, f2
     if aim:
         low_is_pop1 = rng.random() < 0.5
         # Allowed alt-allele counts so realized frequency is within range.
@@ -168,6 +216,51 @@ def simulate_parentals(rng, n1: int, n2: int, aim: bool, cutoff: float):
             return g1, g2, f1, f2
 
 
+class MissingMasks:
+    """Per-SNP missingness masks with exact global and per-sample counts.
+
+    Targeted samples get a precomputed mask over SNPs. The remaining samples
+    share an exact global count of missing cells, allocated SNP by SNP with
+    sequential hypergeometric draws (an exact uniform allocation). numpy's
+    hypergeometric requires both counts < 1e9, so for very large files the
+    early SNPs use the binomial approximation, clamped so the remaining draws
+    can still hit the total exactly.
+    """
+
+    def __init__(self, rng, n_snps, n_samples, global_frac, individual):
+        self.rng = rng
+        self.n_samples = n_samples
+        self.targeted = {}
+        for idx, frac in individual.items():
+            mask = np.zeros(n_snps, dtype=bool)
+            k = int(round(frac * n_snps))
+            mask[rng.choice(n_snps, size=k, replace=False)] = True
+            self.targeted[idx] = mask
+        self.pool = np.array([i for i in range(n_samples)
+                              if i not in self.targeted], dtype=np.int64)
+        self.cells_left = n_snps * len(self.pool)
+        self.k_left = int(round(global_frac * self.cells_left))
+
+    def next(self, snp: int) -> np.ndarray:
+        mask = np.zeros(self.n_samples, dtype=bool)
+        for idx, tmask in self.targeted.items():
+            mask[idx] = tmask[snp]
+        n_pool = len(self.pool)
+        if n_pool and self.k_left:
+            good, bad = self.k_left, self.cells_left - self.k_left
+            if good < 10**9 and bad < 10**9:
+                m = int(self.rng.hypergeometric(good, bad, n_pool))
+            else:
+                m = int(self.rng.binomial(n_pool, good / self.cells_left))
+                m = min(m, good, n_pool)
+                m = max(m, good - (self.cells_left - n_pool))
+            if m:
+                mask[self.rng.choice(self.pool, size=m, replace=False)] = True
+            self.k_left -= m
+        self.cells_left -= n_pool
+        return mask
+
+
 def pl_string(gt: int, err: float) -> str:
     # Probability (1 - err) on the true genotype, err/2 on each other.
     probs = np.full(3, err / 2.0)
@@ -188,6 +281,15 @@ def main(argv=None) -> int:
             + ["popH"] * args.n_popH)
     samples = [f"sample{i + 1}_{pop}" for i, pop in enumerate(pops)]
     n_samples = len(samples)
+    pop_arr = np.array(pops)
+
+    name_to_idx = {name: i for i, name in enumerate(samples)}
+    unknown = [n for n in args.missing_individual if n not in name_to_idx]
+    if unknown:
+        print(f"ERROR: --missing-individual names not among the simulated "
+              f"samples: {', '.join(unknown)}. Sample names look like "
+              f"{samples[0]}.", file=sys.stderr)
+        return 2
 
     if args.hybrid_index == "uniform":
         hybrid_index = rng.uniform(0.0, 1.0, size=args.n_popH)
@@ -199,6 +301,11 @@ def main(argv=None) -> int:
     n_aims = int(round(args.n_snps * args.aim_percent / 100.0))
     aim_flags = np.zeros(args.n_snps, dtype=bool)
     aim_flags[rng.choice(args.n_snps, size=n_aims, replace=False)] = True
+
+    masks = MissingMasks(
+        rng, args.n_snps, n_samples, args.missing_global,
+        {name_to_idx[n]: f for n, f in args.missing_individual.items()})
+    missing_per_sample = np.zeros(n_samples, dtype=np.int64)
 
     out_vcf = args.output
     stem = _stem(out_vcf)
@@ -233,17 +340,24 @@ def main(argv=None) -> int:
             snp_id = f"snp{s + 1}"
             aim = bool(aim_flags[s])
 
+            missing = masks.next(s)
+            missing_per_sample += missing
+            called1 = ~missing & (pop_arr == "pop1")
+            called2 = ~missing & (pop_arr == "pop2")
             g1, g2, f1, f2 = simulate_parentals(
-                rng, args.n_pop1, args.n_pop2, aim, args.aim_cutoff)
-            if args.n_popH:
-                p_h = (1.0 - hybrid_index) * f1 + hybrid_index * f2
-                gh = rng.binomial(2, p_h).astype(np.int8)
-                geno = np.concatenate([g1, g2, gh])
-            else:
-                geno = np.concatenate([g1, g2])
+                rng, int(called1.sum()), int(called2.sum()), aim, args.aim_cutoff)
 
-            missing = (rng.random(n_samples) < args.missing_rate
-                       if args.missing_rate > 0 else np.zeros(n_samples, bool))
+            # Missing samples get a placeholder 0; they are written as ./.
+            geno = np.zeros(n_samples, dtype=np.int8)
+            geno[called1] = g1
+            geno[called2] = g2
+            if args.n_popH:
+                # Hybrids draw from the parental frequencies; fall back to the
+                # other parental (or 0.5) if one side has no calls at this SNP.
+                p1 = f1 if not np.isnan(f1) else (f2 if not np.isnan(f2) else 0.5)
+                p2 = f2 if not np.isnan(f2) else p1
+                p_h = (1.0 - hybrid_index) * p1 + hybrid_index * p2
+                geno[pop_arr == "popH"] = rng.binomial(2, p_h).astype(np.int8)
 
             ref, alt = rng.choice(bases, size=2, replace=False)
             fields = []
@@ -259,24 +373,27 @@ def main(argv=None) -> int:
             vcf.write(f"{chrom}\t{pos}\t{snp_id}\t{ref}\t{alt}\t.\tPASS\t{info}\t"
                       f"{fmt}\t" + "\t".join(fields) + "\n")
 
-            low_pop = ("pop1" if f1 < f2 else "pop2") if aim else ""
+            low_pop = ("pop1" if f1 < f2 else "pop2") if aim and called1.any() and called2.any() else ""
             truth.write(f"{chrom},{pos},{snp_id},{int(aim)},{f1:.6f},{f2:.6f},{low_pop}\n")
 
     with open(meta_path, "w") as meta:
-        meta.write("individual,population,hybrid_index\n")
+        meta.write("individual,population,hybrid_index,missing_fraction\n")
         hi_iter = iter(hybrid_index)
-        for name, pop in zip(samples, pops):
+        for name, pop, n_miss in zip(samples, pops, missing_per_sample):
             if pop == "pop1":
                 hi = "0"
             elif pop == "pop2":
                 hi = "1"
             else:
                 hi = f"{next(hi_iter):.6f}"
-            meta.write(f"{name},{pop},{hi}\n")
+            meta.write(f"{name},{pop},{hi},{n_miss / args.n_snps:.6f}\n")
 
     print(f"Wrote {out_vcf}: {n_samples} samples "
           f"({args.n_pop1} pop1, {args.n_pop2} pop2, {args.n_popH} popH), "
           f"{args.n_snps} SNPs ({n_aims} AIMs at cutoff {args.aim_cutoff}).")
+    total_missing = int(missing_per_sample.sum())
+    print(f"Missing genotypes: {total_missing} of {n_samples * args.n_snps} "
+          f"({total_missing / (n_samples * args.n_snps):.4%}).")
     print(f"Wrote {meta_path} and {truth_path}.")
     return 0
 
