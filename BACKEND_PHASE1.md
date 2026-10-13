@@ -533,6 +533,26 @@ threshold, not producing a publication-grade frequency estimate), the
 simplified estimator is adequate; a user wanting ANGSD's own frequency
 estimates for other purposes should still use `-doMaf` directly.
 
+**Revisited: the simplified estimator was not adequate at low depth, and
+was replaced.** Benchmarking with `benchmarking/simulate_vcf.py
+--format-beagle` showed the flat-prior average turns a true homozygote
+read at depth 2 into a per-individual frequency of ~0.11, so at a
+0.05/0.95 cutoff `filter-aims` retained 0 of 300 simulated AIMs at depth
+2 and 38 of 300 at depth 5 (15 individuals per parental population, 10%
+missing data). `filter_aims_beagle` now uses `em_allele_freq`: the
+per-population maximum-likelihood frequency under Hardy-Weinberg
+proportions, pooled across individuals and fitted by EM (missing
+genotypes excluded). On the same data it retains 180/207/251/284/298 of
+300 AIMs at depths 1/2/5/10/30, with no false AIMs at any depth; the
+remaining misses are AIMs whose true sample frequency already sits near
+the cutoff. A brute-force check against a 20,001-point likelihood grid
+found the likelihood can be bimodal (individuals favouring both
+homozygotes, few heterozygotes), where single-start EM converged to the
+lower peak; EM now starts from the best point of a 51-point grid, and
+matches the brute-force maximum to within 2e-5 log-likelihood on 6,000
+random loci. Regression tests: `test_filter_aims_beagle_recovers_aims_at_low_depth`,
+`test_em_allele_freq_matches_brute_force_likelihood_maximum`.
+
 **A separate metadata file, not embedded population labels.** Unlike
 `estimate-hybrid-index`'s default mode (which reads population labels
 from a column within the same genotype file), this always takes a

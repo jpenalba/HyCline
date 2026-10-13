@@ -207,10 +207,10 @@ def _beagle_expected_dosage(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray) -
     """Expected dosage E[dosage] = 0*p0 + 1*p1 + 2*p2 per individual,
     treating the three genotype likelihoods as a flat-prior posterior
     (normalized per individual to guard against beagle values that
-    aren't already normalized to sum to 1) -- the same standard,
-    defensible estimator `hycline.data.filter_aims._expected_freq_from_gl`
-    already uses for AIM filtering, applied here to site-aggregated
-    allele-frequency output instead.
+    aren't already normalized to sum to 1). At low depth this pulls
+    frequencies toward 0.5 (a true homozygote read twice averages ~0.11);
+    `filter-aims` instead uses the pooled maximum-likelihood estimator
+    `hycline.data.filter_aims.em_allele_freq`.
 
     Real, not just theoretical, difference from
     `_beagle_most_likely_dosage`: for an individual with GLs

@@ -27,8 +27,6 @@ directly-supported genome-wide input formats going forward.
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import pandas as pd
 
@@ -91,20 +89,72 @@ def match_samples_to_populations(sample_names: list, metadata_df: pd.DataFrame,
     return pop1_mask, pop2_mask
 
 
-def _expected_freq_from_gl(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray) -> np.ndarray:
-    """Per-individual expected focal-allele frequency from genotype
-    likelihoods, treating them as a flat-prior posterior (normalized per
-    individual to guard against beagle values that aren't already
-    normalized to sum to 1): E[dosage]/2 = (0*p0 + 1*p1 + 2*p2)/2. A
-    simplified but standard and defensible estimator for filtering
-    purposes -- not the full per-site MLE-via-EM allele-frequency
-    estimator ANGSD's own `-doMaf` implements (see this module's
-    docstring / BACKEND_PHASE1.md section 9.6 for the honest scope note).
+def em_allele_freq(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray,
+                    include: np.ndarray, max_iter: int = 1000,
+                    tol: float = 1e-10) -> np.ndarray:
+    """Per-locus maximum-likelihood focal-allele frequency from genotype
+    likelihoods, pooling the individuals flagged in `include` under
+    Hardy-Weinberg proportions, fitted by EM. All arrays are
+    (n_loci, n_samples); returns (n_loci,), NaN where no individual is
+    included.
+
+    The likelihood of frequency f at a locus is
+    prod_i [L0_i (1-f)^2 + L1_i 2f(1-f) + L2_i f^2]. Each EM step computes
+    every individual's genotype posterior given the current f and sets f to
+    the mean posterior dosage / 2. This is the same model as ANGSD's
+    `-doMaf` EM estimator. Unlike averaging each individual's flat-prior
+    expected dosage, it does not pull low-depth frequencies toward 0.5: a
+    population of true homozygotes read at depth 2 estimates ~0, where the
+    flat-prior average gives ~0.11 and fails a 0.05 AIM cutoff.
+
+    The likelihood can have more than one local maximum (e.g. individuals
+    favouring both homozygotes with few heterozygotes), so EM starts from
+    the best point of a coarse grid over f rather than from a single guess.
     """
-    total = gl0 + gl1 + gl2
-    with np.errstate(invalid="ignore", divide="ignore"):
-        dosage = (gl1 + 2 * gl2) / total
-    return dosage / 2.0
+    include = np.asarray(include, dtype=bool)
+    n_inc = include.sum(axis=1)
+    freq = np.full(gl0.shape[0], np.nan)
+    active = np.flatnonzero(n_inc > 0)
+    if active.size == 0:
+        return freq
+
+    # Work only on loci and samples that contribute at least once.
+    cols = np.flatnonzero(include.any(axis=0))
+    rows = active[:, None]
+    L = np.stack([gl0[rows, cols], gl1[rows, cols], gl2[rows, cols]],
+                 axis=-1).astype(float)
+    inc = include[rows, cols]
+    L[~inc] = 1.0 / 3.0
+    L /= L.sum(axis=-1, keepdims=True)
+    w = inc.astype(float)
+    n = n_inc[active].astype(float)
+
+    # Start EM from the best point on a coarse grid, kept off the exact 0/1
+    # boundaries (EM cannot move away from a boundary). Chunked over loci
+    # to bound memory on large files.
+    grid = np.linspace(1e-3, 1 - 1e-3, 51)
+    grid_prior = np.stack([(1 - grid) ** 2, 2 * grid * (1 - grid), grid ** 2])
+    f = np.empty(active.size)
+    chunk = max(1, 2_000_000 // (L.shape[1] * grid.size))
+    for a in range(0, active.size, chunk):
+        b = min(a + chunk, active.size)
+        with np.errstate(divide="ignore"):
+            ll = (np.log(L[a:b] @ grid_prior) * w[a:b, :, None]).sum(axis=1)
+        f[a:b] = grid[np.argmax(ll, axis=1)]
+    todo = np.arange(active.size)
+    for _ in range(max_iter):
+        ft = f[todo][:, None]
+        prior = np.stack([(1 - ft) ** 2, 2 * ft * (1 - ft), ft ** 2], axis=-1)
+        post = L[todo] * prior
+        post /= post.sum(axis=-1, keepdims=True)
+        f_new = ((post[..., 1] + 2 * post[..., 2]) * w[todo]).sum(axis=1) / (2 * n[todo])
+        moved = np.abs(f_new - f[todo]) > tol
+        f[todo] = f_new
+        todo = todo[moved]
+        if todo.size == 0:
+            break
+    freq[active] = f
+    return freq
 
 
 def filter_aims_beagle(input_path: str, metadata_path: str, output_path: str,
@@ -130,16 +180,12 @@ def filter_aims_beagle(input_path: str, metadata_path: str, output_path: str,
         pop1_label, pop2_label)
 
     # Missing genotypes (ANGSD's equal-likelihood "no data" rows) carry no
-    # information about the individual's alleles; left in, each would count
-    # as a frequency of 0.5 and pull the population mean toward 0.5.
-    missing = beagle_missing_mask(beagle_data.gl0, beagle_data.gl1, beagle_data.gl2)
-    ind_freq = _expected_freq_from_gl(beagle_data.gl0, beagle_data.gl1, beagle_data.gl2)
-    ind_freq[missing] = np.nan
-    with warnings.catch_warnings():
-        # A locus with no calls in a population gets NaN, which never passes.
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        freq_pop1 = np.nanmean(ind_freq[:, pop1_mask], axis=1)
-        freq_pop2 = np.nanmean(ind_freq[:, pop2_mask], axis=1)
+    # information about the individual's alleles and are left out. A locus
+    # with no calls in a population gets NaN, which never passes the filter.
+    gl0, gl1, gl2 = beagle_data.gl0, beagle_data.gl1, beagle_data.gl2
+    missing = beagle_missing_mask(gl0, gl1, gl2)
+    freq_pop1 = em_allele_freq(gl0, gl1, gl2, ~missing & pop1_mask[None, :])
+    freq_pop2 = em_allele_freq(gl0, gl1, gl2, ~missing & pop2_mask[None, :])
 
     mask = compute_aim_mask(freq_pop1, freq_pop2, low_threshold, high_threshold)
     write_beagle(beagle_data, output_path, mask)

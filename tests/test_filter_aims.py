@@ -5,7 +5,7 @@ import pytest
 from hycline.data.filter_aims import (
     compute_aim_mask, match_samples_to_populations,
     filter_aims_beagle, filter_aims_csv, filter_aims_vcf,
-    beagle_missing_mask, build_filter_summary,
+    beagle_missing_mask, build_filter_summary, em_allele_freq,
 )
 
 
@@ -87,7 +87,7 @@ def test_match_samples_to_populations_missing_column_raises():
 BEAGLE_CONTENT = (
     "marker\tallele1\tallele2\tind0\tind0\tind0\tind1\tind1\tind1\tind2\tind2\tind2\n"
     "chr1_100\t0\t1\t0.98\t0.02\t0.00\t0.00\t0.02\t0.98\t0.49\t0.02\t0.49\n"
-    "chr1_200\t0\t1\t0.60\t0.30\t0.10\t0.10\t0.30\t0.60\t0.33\t0.34\t0.33\n"
+    "chr1_200\t0\t1\t0.10\t0.80\t0.10\t0.10\t0.80\t0.10\t0.33\t0.34\t0.33\n"
     "chr1_300\t0\t1\t1.00\t0.00\t0.00\t0.00\t0.00\t1.00\t1.00\t0.00\t0.00\n"
 )
 
@@ -105,8 +105,11 @@ def test_filter_aims_beagle_matches_hand_computation(tmp_path):
 
     assert result["n_total"] == 3
     assert result["n_retained"] == 2
-    np.testing.assert_allclose(result["freq_pop1"], [0.01, 0.25, 0.0], atol=1e-6)
-    np.testing.assert_allclose(result["freq_pop2"], [0.99, 0.75, 1.0], atol=1e-6)
+    # One individual per population, so each frequency is that individual's
+    # maximum-likelihood f: a likelihood favouring a homozygote puts f on the
+    # boundary (site1, site3); a symmetric heterozygote gives 0.5 (site2).
+    np.testing.assert_allclose(result["freq_pop1"], [0.0, 0.5, 0.0], atol=1e-6)
+    np.testing.assert_allclose(result["freq_pop2"], [1.0, 0.5, 1.0], atol=1e-6)
     np.testing.assert_array_equal(result["mask"], [True, False, True])
 
     from hycline.data.beagle import read_beagle
@@ -494,3 +497,60 @@ def test_filter_aims_beagle_excludes_missing_genotypes_from_frequencies(tmp_path
     assert np.isnan(result["freq_pop1"][1])  # no calls at all in parent1
     np.testing.assert_array_equal(result["mask"], [True, False])
     np.testing.assert_array_equal(result["n_called_pop1"], [2, 0])
+
+
+def test_em_allele_freq_matches_brute_force_likelihood_maximum():
+    rng = np.random.default_rng(0)
+    n_loci, n_ind = 40, 12
+    gl = rng.dirichlet([0.5, 0.5, 0.5], size=(n_loci, n_ind))
+    include = rng.random((n_loci, n_ind)) < 0.8
+    include[0] = False  # no individuals -> NaN
+    est = em_allele_freq(gl[..., 0], gl[..., 1], gl[..., 2], include)
+
+    assert np.isnan(est[0])
+    grid = np.linspace(0, 1, 20001)
+    prior = np.stack([(1 - grid) ** 2, 2 * grid * (1 - grid), grid ** 2])  # (3, G)
+    for j in range(1, n_loci):
+        ll = np.log(gl[j, include[j]] @ prior).sum(axis=0)
+        assert est[j] == pytest.approx(grid[np.argmax(ll)], abs=2e-4)
+
+
+def test_em_allele_freq_single_ambiguous_individual_goes_to_boundary():
+    # L(f) = 0.6(1-f)^2 + 0.3*2f(1-f) + 0.1f^2 = 0.6 - 0.6f + 0.1f^2, which is
+    # decreasing on [0, 1], so the maximum-likelihood frequency is exactly 0.
+    est = em_allele_freq(np.array([[0.6]]), np.array([[0.3]]), np.array([[0.1]]),
+                         np.array([[True]]))
+    assert est[0] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_filter_aims_beagle_recovers_aims_at_low_depth(tmp_path):
+    """Regression test: the per-individual flat-prior estimator turned a
+    true homozygote read at depth 2 into a frequency of ~0.11, so no fixed
+    difference passed a 0.05/0.95 cutoff at depth 2 (0 of 300 simulated
+    AIMs, benchmarking/simulate_vcf.py --mean-depth 2). Here every parental
+    individual is a true homozygote with two reads, ten per population."""
+    err = 0.01
+    q = np.array([err, 0.5, 1 - err])
+
+    def gl(alt_reads, depth=2):
+        lik = q ** alt_reads * (1 - q) ** (depth - alt_reads)
+        return lik / lik.sum()
+
+    ref_hom = "\t".join(f"{v:.6f}" for v in gl(0))
+    alt_hom = "\t".join(f"{v:.6f}" for v in gl(2))
+    names = [f"a{i}" for i in range(10)] + [f"b{i}" for i in range(10)]
+    header = "marker\tallele1\tallele2\t" + "\t".join(f"{n}\t{n}\t{n}" for n in names)
+    row = "\t".join(["m1", "0", "1"] + [ref_hom] * 10 + [alt_hom] * 10)
+    beagle_path = tmp_path / "in.beagle"
+    beagle_path.write_text(header + "\n" + row + "\n")
+    meta_path = tmp_path / "meta.csv"
+    pd.DataFrame({"individual": names,
+                  "population": ["parent1"] * 10 + ["parent2"] * 10}).to_csv(
+        meta_path, index=False)
+
+    result = filter_aims_beagle(str(beagle_path), str(meta_path),
+                                str(tmp_path / "out.beagle"),
+                                low_threshold=0.05, high_threshold=0.95)
+    assert result["freq_pop1"][0] < 0.01
+    assert result["freq_pop2"][0] > 0.99
+    assert result["mask"].tolist() == [True]

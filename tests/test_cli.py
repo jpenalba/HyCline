@@ -2047,7 +2047,7 @@ def test_cli_filter_aims_beagle_auto_detect_and_filter(tmp_path):
     beagle_content = (
         "marker\tallele1\tallele2\tind0\tind0\tind0\tind1\tind1\tind1\tind2\tind2\tind2\n"
         "chr1_100\t0\t1\t0.98\t0.02\t0.00\t0.00\t0.02\t0.98\t0.49\t0.02\t0.49\n"
-        "chr1_200\t0\t1\t0.60\t0.30\t0.10\t0.10\t0.30\t0.60\t0.33\t0.34\t0.33\n"
+        "chr1_200\t0\t1\t0.10\t0.80\t0.10\t0.10\t0.80\t0.10\t0.33\t0.34\t0.33\n"
     )
     beagle_path = tmp_path / "test.beagle"
     beagle_path.write_text(beagle_content)
