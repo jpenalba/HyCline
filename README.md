@@ -591,9 +591,11 @@ catching a real problem on real data.
   section 5).
 - `hycline.data.hybrid_index.estimate_hybrid_index` -- the simpler
   mean-dosage estimator (loci oriented by the parental frequencies,
-  optionally weighted by differentiation), kept as `--method mean`.
-- `hycline estimate-hybrid-index` -- the CLI command (`--method ml`
-  default, or `mean`), in two mutually exclusive modes: compute parental
+  optionally weighted by differentiation), the default (`--method mean`).
+- `hycline estimate-hybrid-index` -- the CLI command (`--method mean`
+  default, or `ml`; `ml` output isn't usable as genomic-cline input yet,
+  because the cline model can't accommodate parental references at
+  exactly h = 0 or 1), in two mutually exclusive modes: compute parental
   allele frequencies directly from labeled reference individuals in your
   own genotype file (pooled maximum-likelihood frequencies for beagle
   input), or supply them precomputed via `--parental-freq-csv`. Writes

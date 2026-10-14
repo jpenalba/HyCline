@@ -1297,7 +1297,7 @@ def test_cli_estimate_hybrid_index_recovers_known_true_hybrid_index(tmp_path):
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
         "--population-col", "population", "--pop0-label", "house",
-        "--pop1-label", "spanish", "--output", str(output_path),
+        "--pop1-label", "spanish", "--method", "ml", "--output", str(output_path),
     ])
     assert result.returncode == 0, result.stderr
 
@@ -1421,13 +1421,63 @@ def test_cli_estimate_hybrid_index_ml_recovers_hybrid_index_at_low_depth(tmp_pat
     assert errors["mean"] > 2 * errors["ml"]
 
 
+def _simulated_zone(tmp_path, *args):
+    """Run benchmarking/simulate_vcf.py into tmp_path; returns the output prefix."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    subprocess.run([sys.executable, str(repo / "benchmarking" / "simulate_vcf.py"),
+                    *args, "--output", str(tmp_path / "zone.vcf")],
+                   check=True, capture_output=True)
+    return tmp_path / "zone"
+
+
+def test_cli_default_hybrid_index_gives_unflattened_genomic_clines(tmp_path):
+    """Regression test: with --method ml as the default, parental references
+    got hybrid index exactly 0 or 1; a parental carrying the minority allele
+    at h = 0 is impossible under the genomic-cline model (phi(0) = 0), so
+    fit-genomic flattened the cline (v ~ 0.17 instead of ~1 on simulated
+    all-AIM data, where every locus is neutral)."""
+    prefix = _simulated_zone(tmp_path, "--n-pop1", "15", "--n-pop2", "15", "--n-popH", "40",
+                             "--n-snps", "200", "--aim-percent", "100",
+                             "--aim-cutoff", "0.05", "--seed", "4")
+    vcf, meta = f"{prefix}.vcf", f"{prefix}_metadata.csv"
+    hi = tmp_path / "hi.csv"
+    result = _run_cli(["estimate-hybrid-index", "--input", vcf, "--metadata", meta,
+                       "--population-col", "population", "--pop0-label", "pop1",
+                       "--pop1-label", "pop2", "--output", str(hi)])
+    assert result.returncode == 0, result.stderr
+    genomic = tmp_path / "genomic.csv"
+    result = _run_cli(["generate-genomic-input", "--input", vcf, "--metadata", str(hi),
+                       "--output", str(genomic)])
+    assert result.returncode == 0, result.stderr
+
+    truth = pd.read_csv(f"{prefix}_truth.csv").set_index("id")
+    # ALT is parental population 1's allele where pop1 (population 0) is low,
+    # and at least one parental carries the minority allele.
+    forward = [l for l in truth.index
+               if truth.loc[l, "low_pop"] == "pop1" and truth.loc[l, "freq_pop1"] > 0][:4]
+    assert len(forward) == 4
+    data = pd.read_csv(genomic)
+    subset = tmp_path / "subset.csv"
+    data[["individual", "hybrid_index"]
+         + [f"{l}.{c}" for l in forward for c in ("n", "freq")]].to_csv(subset, index=False)
+    result = _run_cli(["fit-genomic", "--input", str(subset), "--individual-col", "individual",
+                       "--output-dir", str(tmp_path / "fit")])
+    assert result.returncode == 0, result.stderr
+    summary = pd.read_csv(tmp_path / "fit" / "hycline_summary.csv")
+    assert (summary["v"] > 0.5).all(), summary[["locus", "u", "v"]]
+
+
 def test_cli_estimate_hybrid_index_ml_rejects_mean_only_options(tmp_path):
     vcf_path = tmp_path / "genotypes.vcf"
     metadata_path = tmp_path / "metadata.csv"
     _write_hybrid_index_input_vcf(vcf_path, metadata_path)
     base = ["estimate-hybrid-index", "--input", str(vcf_path), "--metadata",
             str(metadata_path), "--population-col", "population", "--pop0-label", "house",
-            "--pop1-label", "spanish", "--output", str(tmp_path / "hi.csv")]
+            "--pop1-label", "spanish", "--method", "ml", "--output", str(tmp_path / "hi.csv")]
     result = _run_cli(base + ["--weight-by-differentiation"])
     assert result.returncode == 2
     assert "--method mean only" in result.stderr

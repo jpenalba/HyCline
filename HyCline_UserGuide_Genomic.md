@@ -95,7 +95,7 @@ hycline estimate-hybrid-index \
     --input hi_aims.vcf \
     --metadata parental_labels.csv \
     --population-col population --pop0-label parent0 --pop1-label parent1 \
-    --output hybrid_index.csv
+    --method ml --output hybrid_index.csv
 ```
 
 Real output (on a simulated 90-sample VCF, 15 reference individuals per
@@ -129,9 +129,21 @@ sample33_popH,0.18347595310769976,0.13992310611065473,0.23034432947169986,374
 interval and `n_loci` is the number of loci with a genotype for that
 individual. The file works directly as Step 3's `--metadata`.
 
+**Don't use `--method ml` output as Step 3's hybrid index yet.** It
+places parental reference individuals at exactly 0 or 1. The genomic-
+cline model in Step 4 fixes a locus's allele frequency at 0 when h = 0,
+so a parental reference at h = 0 that carries the other population's
+allele is treated as impossible, and the fit flattens the cline to
+accommodate it: on simulated data where every locus is neutral (true
+v = 1), near-fixed AIMs fitted at v = 0.18-0.28 with an `ml` hybrid
+index and v = 0.71-1.19 with a `mean` one. Use the default,
+`--method mean`, for cline fitting; `ml` is still the more accurate
+estimate of the hybrid index itself. Without `--method`, the output has
+just the `individual` and `hybrid_index` columns.
+
 ### How the estimate is made
 
-The default, `--method ml`, is a maximum-likelihood hybrid index. In an
+`--method ml` is a maximum-likelihood hybrid index. In an
 individual with hybrid index h, each locus's allele frequency is
 `(1 - h) * p0 + h * p1`, where p0 and p1 are the two parental
 populations' frequencies; genotypes follow Hardy-Weinberg proportions
@@ -158,7 +170,7 @@ error of the hybrids' estimates:
 
 and the 95% intervals contained the true value for 90-97% of hybrids.
 
-`--method mean` is the simpler estimator: the mean, across loci, of each
+`--method mean`, the default, is the simpler estimator: the mean, across loci, of each
 individual's parental-population-1 allele dosage (each locus oriented by
 the parental frequencies first), optionally weighted by
 `--weight-by-differentiation`. It treats every locus as diagnostic, so
@@ -263,8 +275,20 @@ columns `generate-genomic-input` looks for by default, so it can be
 passed as `--metadata` directly; to combine it with other metadata,
 merge on the individual column.
 
-Two things to keep in mind:
+Three things to keep in mind:
 
+- **Only near-fixed AIMs give interpretable clines with the current
+  model.** Step 4's genomic cline describes the probability of carrying
+  parental population 1's allele as rising from 0 at h = 0 to 1 at h = 1.
+  A locus whose parental frequencies are, say, 0.57 and 0.87 can't do
+  that, so even a neutral one fits as a strongly shallow, shifted cline:
+  on simulated data where every locus is neutral (true u = 0, v = 1),
+  loci with parental frequencies 0.57/0.87 and 0.63/0.93 fitted at
+  v = 0.38 and 0.56 with u = 1.1 and 1.5, which reads as elevated
+  introgression. Until the cline model includes the parental frequencies,
+  restrict the cline-fitting set to near-fixed AIMs (for example
+  `--minor-allele-freq 0.05`) rather than the looser
+  `--allele-freq-diff 0.3` set shown above.
 - **Don't make the hybrid-index set so strict that it has few loci.** As
   the table under "Which loci to use" shows, 8 near-fixed loci gave a far
   noisier hybrid index (mean error 0.078) than 395 or 1000 moderately
@@ -331,6 +355,15 @@ counts or genotype likelihoods, one locus or thousands -- and figures out
 which it's looking at from the column names alone: `.n`/`.freq` suffix
 pairs mean hard counts; `.gl0`/`.gl1`/`.gl2` triples mean genotype
 likelihoods.
+
+**Check allele polarity before fitting.** The model describes the
+frequency of parental population 1's allele and requires v > 0, but
+`generate-genomic-input` writes the VCF ALT (or beagle allele2)
+frequency as is. At a locus where ALT is parental population 0's
+allele, the true cline decreases with hybrid index, and the fit ends at
+the lower bound v = 0.001 (every such locus did, on simulated data). Fit
+only loci whose ALT allele is more common in parental population 1, or
+recode the others before fitting.
 
 ```bash
 hycline fit-genomic --input converted.csv --output-dir results/

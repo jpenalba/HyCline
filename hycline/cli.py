@@ -860,7 +860,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "estimate-hybrid-index",
         help="Estimate genome-wide hybrid index from a VCF or ANGSD beagle file.",
         description="Estimate each individual's genome-wide hybrid index (the x-axis "
-                     "variable genomic cline fitting needs). The default --method ml is "
+                     "variable genomic cline fitting needs). --method ml is "
                      "the maximum-likelihood hybrid index: each locus's allele frequency "
                      "in an individual with hybrid index h is (1 - h) * p0 + h * p1 from "
                      "the two parental frequencies, genotypes follow Hardy-Weinberg "
@@ -870,7 +870,7 @@ def _build_parser() -> argparse.ArgumentParser:
                      "out). It needs no allele polarization, models partially "
                      "differentiated loci instead of treating every locus as "
                      "diagnostic, and reports a 95% likelihood-profile interval per "
-                     "individual. --method mean is the simpler mean-dosage estimator "
+                     "individual. --method mean (the default) is the simpler mean-dosage estimator "
                      "(loci oriented by the parental frequencies), which is pulled "
                      "toward 0.5 by partially differentiated loci and, for beagle input, "
                      "by low depth. Neither propagates uncertainty in h into later "
@@ -949,10 +949,12 @@ def _build_parser() -> argparse.ArgumentParser:
     ehi_g.add_argument("--max-variants", type=int, default=None,
                         help="[VCF input only] Optional cap on the number of biallelic "
                              "SNPs to parse. Ignored for beagle input.")
-    ehi_p.add_argument("--method", choices=["ml", "mean"], default="ml",
-                        help="ml (default): maximum-likelihood hybrid index with a 95%% "
-                             "likelihood-profile interval. mean: mean oriented dosage "
-                             "across loci.")
+    ehi_p.add_argument("--method", choices=["ml", "mean"], default="mean",
+                        help="mean (default): mean oriented dosage across loci. ml: "
+                             "maximum-likelihood hybrid index with a 95%% likelihood-"
+                             "profile interval; places parental references at exactly "
+                             "0 or 1, which the current genomic-cline model cannot "
+                             "use (see the Genomic guide, Step 2).")
     ehi_g.add_argument("--weight-by-differentiation", action="store_true",
                         help="[--method mean only] Weight each locus's contribution by how differentiated "
                              "it is between the two parental populations (a locus with "

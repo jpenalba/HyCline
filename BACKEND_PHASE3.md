@@ -237,6 +237,24 @@ output). Regression tests: `test_cli_estimate_hybrid_index_ml_recovers_hybrid_in
 (simulator-generated depth-2 beagle) and the `test_ml_*` tests in
 `tests/test_hybrid_index.py`.
 
+**Revisited: `ml` is no longer the default -- it broke genomic-cline
+fits.** Fitting clines against the `ml` hybrid index showed near-fixed,
+neutral AIMs (true v = 1) fitting at v ~ 0.17. Cause: `ml` puts parental
+references at exactly h = 0 or 1, and the logit-logistic cline forces
+phi(0) = 0, so a parental at h = 0 carrying the population-1 allele has
+likelihood ~0 (log ~ -23 after clipping) and the optimizer flattens v to
+escape it. With the `mean` hybrid index (parentals ~0.02) the same loci
+fit at v = 0.71-1.19. `--method mean` is the default again. The same
+investigation showed two problems that predate this work: loci whose ALT
+allele belongs to parental population 0 always fit at the v lower bound
+(0.001), and partially differentiated neutral loci fit as shallow,
+shifted clines (0.57/0.87 parental frequencies: v = 0.38, u = 1.1),
+because the model has no parental frequencies. Bailey (2023, gghybrid,
+`references/`) fits allele frequency = S0 + phi(h) (S1 - S0) with each
+locus oriented to the allele more common in S1, which addresses all
+three. Regression test:
+`test_cli_default_hybrid_index_gives_unflattened_genomic_clines`.
+
 ---
 
 ## 6. CLI: `fit-genomic` and `fit-genomic-multi`
