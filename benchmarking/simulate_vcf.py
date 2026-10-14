@@ -18,8 +18,32 @@ AIM. Non-AIM SNPs share a common frequency across pop1 and pop2 and are
 re-drawn if their realized frequencies happen to meet the AIM rule, so the
 AIM count is exact.
 
-Each popH individual gets a hybrid index h (fraction of pop2 ancestry), and
-its genotypes are drawn from p = (1 - h) * p_pop1 + h * p_pop2 at every SNP.
+Each popH individual gets a hybrid index h (fraction of pop2 ancestry). At
+each SNP its genotype is drawn (Hardy-Weinberg) from
+    p = p_pop1 + (p_pop2 - p_pop1) * phi(h),
+where phi(h) is the locus's genomic cline, logit(phi) = u + v * logit(h)
+(HyCline's convention). Every locus is neutral (u = 0, v = 1, so phi = h)
+unless cline classes are requested:
+  --barrier-percent / --barrier-v      steeper clines (v > 1)
+  --permeable-percent / --permeable-v  shallower clines (v < 1)
+  --biased-percent / --biased-u        shifted clines (u = +/- value, random
+                                       sign), all drawn from the AIMs
+  --cline-u-sd / --cline-log-v-sd      random u ~ N(0, sd), log v ~ N(0, sd)
+                                       for every other locus (for testing
+                                       hierarchical across-locus variation)
+The truth CSV records each SNP's cline_class, u and v.
+
+Where p_pop1/p_pop2 come from (--hybrid-freqs):
+  panel       (default) the reference panels' realized sample frequencies,
+              which is also where the AIM rule is enforced exactly. Simple,
+              but it hands any frequency HyCline estimates from the panels
+              the exact values the hybrids were drawn from.
+  population  each SNP first gets true population frequencies (AIMs meet
+              the AIM rule on these), the reference panels are sampled from
+              them, and hybrids are drawn from them too. The panels then
+              carry real sampling error, so filter-aims and anything using
+              panel frequencies are tested realistically; the realized
+              panel frequencies need not meet the AIM rule.
 
 Missing data (./.) comes in two forms, both exact counts rather than
 per-genotype coin flips:
@@ -39,7 +63,10 @@ Alongside the VCF the script writes a metadata CSV (columns: individual,
 population, hybrid_index, missing_fraction, plus mean_depth when reads are
 simulated) usable directly with HyCline's --metadata/--sample-col/
 --population-col options, and a truth CSV recording each SNP's AIM status
-and realized parental frequencies (from the true, non-missing genotypes).
+and realized parental frequencies (from the true, non-missing genotypes),
+plus source_freq_pop1/source_freq_pop2 (the frequencies the hybrids were
+drawn from: the panel frequencies or the population frequencies) and the
+cline columns.
 
 Genotype likelihoods: --format-beagle also writes an ANGSD-style beagle file
 (`angsd -doGlf 2` layout) for the same samples and SNPs. Reads are simulated
@@ -62,6 +89,11 @@ Example:
         --missing-global 0.05 \\
         --missing-individual sample3_pop1=0.5 sample45_popH=0.9 \\
         --output bench.vcf --seed 1
+
+    # Realistic reference panels and non-neutral loci among the AIMs
+    python benchmarking/simulate_vcf.py --n-snps 5000 --aim-percent 20 \\
+        --hybrid-freqs population --barrier-percent 10 --permeable-percent 10 \\
+        --biased-percent 5 --output selection.vcf --seed 1
 
     # Low-coverage version with matched beagle output and called VCF genotypes
     python benchmarking/simulate_vcf.py --n-snps 10000 --aim-percent 10 \\
@@ -120,6 +152,34 @@ def parse_args(argv=None):
                    help="Beta for --hybrid-index beta.")
     p.add_argument("--hi-value", type=float, default=0.5,
                    help="Hybrid index for --hybrid-index fixed.")
+    p.add_argument("--hybrid-freqs", choices=["panel", "population"], default="panel",
+                   help="Frequencies the parental panels and hybrids come from: "
+                        "'panel' draws hybrids from the panels' realized sample "
+                        "frequencies (AIM rule exact on the panels); 'population' "
+                        "draws true population frequencies, samples the panels "
+                        "and hybrids from them (AIM rule exact on the population "
+                        "frequencies, panels carry sampling error).")
+    cl = p.add_argument_group(
+        "genomic clines",
+        "Per-locus clines for the hybrids: allele frequency p_pop1 + (p_pop2 - "
+        "p_pop1) * phi(h), logit(phi) = u + v logit(h). Class percentages are "
+        "of the AIMs; classes don't overlap.")
+    cl.add_argument("--barrier-percent", type=float, default=0.0,
+                    help="Percent of AIMs given a steep (barrier) cline.")
+    cl.add_argument("--barrier-v", type=float, default=4.0,
+                    help="v for barrier loci (u = 0).")
+    cl.add_argument("--permeable-percent", type=float, default=0.0,
+                    help="Percent of AIMs given a shallow (permeable) cline.")
+    cl.add_argument("--permeable-v", type=float, default=0.25,
+                    help="v for permeable loci (u = 0).")
+    cl.add_argument("--biased-percent", type=float, default=0.0,
+                    help="Percent of AIMs given a shifted cline (v = 1).")
+    cl.add_argument("--biased-u", type=float, default=2.0,
+                    help="|u| for biased loci; the sign is random per locus.")
+    cl.add_argument("--cline-u-sd", type=float, default=0.0,
+                    help="SD of u ~ N(0, sd) for every locus not in a class above.")
+    cl.add_argument("--cline-log-v-sd", type=float, default=0.0,
+                    help="SD of log v ~ N(0, sd) for every locus not in a class above.")
     p.add_argument("--n-chrom", type=int, default=1,
                    help="Number of chromosomes to spread SNPs across.")
     p.add_argument("--snp-spacing", type=int, default=1000,
@@ -227,6 +287,13 @@ def parse_args(argv=None):
         p.error("--seq-error must be in [0, 0.5)")
     if args.beagle_output and not args.format_beagle:
         p.error("--beagle-output requires --format-beagle")
+    pct = (args.barrier_percent, args.permeable_percent, args.biased_percent)
+    if min(pct) < 0 or sum(pct) > 100:
+        p.error("--barrier/--permeable/--biased-percent must be >= 0 and sum to <= 100")
+    if args.barrier_v <= 0 or args.permeable_v <= 0:
+        p.error("--barrier-v and --permeable-v must be > 0")
+    if args.cline_u_sd < 0 or args.cline_log_v_sd < 0:
+        p.error("--cline-u-sd and --cline-log-v-sd must be >= 0")
     return args
 
 
@@ -309,6 +376,63 @@ def simulate_parentals(rng, n1: int, n2: int, aim: bool, cutoff: float | None,
         f1, f2 = g1.sum() / a1, g2.sum() / a2
         if not is_aim(f1, f2, cutoff, freq_diff):
             return g1, g2, f1, f2
+
+
+def draw_population_freqs(rng, aim: bool, cutoff: float | None,
+                          freq_diff: float | None):
+    """True pop1/pop2 frequencies for --hybrid-freqs population: AIMs meet
+    the AIM rule on these (the low side drawn uniformly in its allowed
+    range, the population carrying it chosen at random); non-AIMs share
+    one frequency."""
+    if not aim:
+        q = rng.uniform(0.05, 0.95)
+        return q, q
+    if freq_diff is not None:
+        low = rng.uniform(0.0, 1.0 - freq_diff)
+        high = rng.uniform(low + freq_diff, 1.0)
+    else:
+        low = rng.uniform(0.0, cutoff)
+        high = rng.uniform(1.0 - cutoff, 1.0)
+    return (low, high) if rng.random() < 0.5 else (high, low)
+
+
+def assign_clines(rng, n_snps: int, aim_flags: np.ndarray, args):
+    """Per-SNP cline class, u and v (neutral: u = 0, v = 1)."""
+    u = np.zeros(n_snps)
+    v = np.ones(n_snps)
+    cls = np.array(["neutral"] * n_snps, dtype=object)
+    aims = rng.permutation(np.flatnonzero(aim_flags))
+    start = 0
+    for name, percent in (("barrier", args.barrier_percent),
+                          ("permeable", args.permeable_percent),
+                          ("biased", args.biased_percent)):
+        k = int(round(len(aims) * percent / 100.0))
+        idx = aims[start:start + k]
+        start += k
+        cls[idx] = name
+        if name == "barrier":
+            v[idx] = args.barrier_v
+        elif name == "permeable":
+            v[idx] = args.permeable_v
+        else:
+            u[idx] = args.biased_u * rng.choice([-1.0, 1.0], size=k)
+    rest = cls == "neutral"
+    if args.cline_u_sd > 0:
+        u[rest] = rng.normal(0.0, args.cline_u_sd, size=rest.sum())
+    if args.cline_log_v_sd > 0:
+        v[rest] = np.exp(rng.normal(0.0, args.cline_log_v_sd, size=rest.sum()))
+    if args.cline_u_sd > 0 or args.cline_log_v_sd > 0:
+        cls[rest] = "random"
+    return cls, u, v
+
+
+def cline_phi(h: np.ndarray, u: float, v: float) -> np.ndarray:
+    """phi(h) with logit(phi) = u + v logit(h); exactly h when neutral."""
+    if u == 0.0 and v == 1.0:
+        return h
+    hc = np.clip(h, 1e-12, 1 - 1e-12)
+    z = u + v * np.log(hc / (1 - hc))
+    return 1.0 / (1.0 + np.exp(-z))
 
 
 class MissingMasks:
@@ -423,6 +547,10 @@ def main(argv=None) -> int:
     n_aims = int(round(args.n_snps * args.aim_percent / 100.0))
     aim_flags = np.zeros(args.n_snps, dtype=bool)
     aim_flags[rng.choice(args.n_snps, size=n_aims, replace=False)] = True
+    # Clines get their own stream, so adding them never changes the rest of
+    # the simulation for a given seed.
+    cline_rng = np.random.default_rng(np.random.SeedSequence(args.seed).spawn(2)[1])
+    cline_class, cline_u, cline_v = assign_clines(cline_rng, args.n_snps, aim_flags, args)
 
     masks = MissingMasks(
         rng, args.n_snps, n_samples, args.missing_global,
@@ -475,7 +603,8 @@ def main(argv=None) -> int:
         vcf.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"
                   + "\t".join(samples) + "\n")
 
-        truth.write("chrom,pos,id,marker,is_aim,freq_pop1,freq_pop2,low_pop\n")
+        truth.write("chrom,pos,id,marker,is_aim,freq_pop1,freq_pop2,low_pop,"
+                    "source_freq_pop1,source_freq_pop2,cline_class,u,v\n")
 
         for s in range(args.n_snps):
             chrom = f"chr{s // snps_per_chrom + 1}"
@@ -487,20 +616,30 @@ def main(argv=None) -> int:
             missing_per_sample += missing
             called1 = ~missing & (pop_arr == "pop1")
             called2 = ~missing & (pop_arr == "pop2")
-            g1, g2, f1, f2 = simulate_parentals(
-                rng, int(called1.sum()), int(called2.sum()), aim, args.aim_cutoff,
-                args.aim_freq_diff)
+            if args.hybrid_freqs == "population":
+                src1, src2 = draw_population_freqs(rng, aim, args.aim_cutoff,
+                                                   args.aim_freq_diff)
+                n1, n2 = int(called1.sum()), int(called2.sum())
+                g1 = rng.binomial(2, src1, size=n1).astype(np.int8)
+                g2 = rng.binomial(2, src2, size=n2).astype(np.int8)
+                f1 = g1.sum() / (2 * n1) if n1 else np.nan
+                f2 = g2.sum() / (2 * n2) if n2 else np.nan
+            else:
+                g1, g2, f1, f2 = simulate_parentals(
+                    rng, int(called1.sum()), int(called2.sum()), aim, args.aim_cutoff,
+                    args.aim_freq_diff)
+                # Hybrids draw from the panel frequencies; fall back to the
+                # other parental (or 0.5) if one side has no calls at this SNP.
+                src1 = f1 if not np.isnan(f1) else (f2 if not np.isnan(f2) else 0.5)
+                src2 = f2 if not np.isnan(f2) else src1
 
             # Missing samples get a placeholder 0; they are written as ./.
             geno = np.zeros(n_samples, dtype=np.int8)
             geno[called1] = g1
             geno[called2] = g2
             if args.n_popH:
-                # Hybrids draw from the parental frequencies; fall back to the
-                # other parental (or 0.5) if one side has no calls at this SNP.
-                p1 = f1 if not np.isnan(f1) else (f2 if not np.isnan(f2) else 0.5)
-                p2 = f2 if not np.isnan(f2) else p1
-                p_h = (1.0 - hybrid_index) * p1 + hybrid_index * p2
+                phi = cline_phi(hybrid_index, cline_u[s], cline_v[s])
+                p_h = src1 + (src2 - src1) * phi
                 geno[pop_arr == "popH"] = rng.binomial(2, p_h).astype(np.int8)
 
             ref, alt = rng.choice(bases, size=2, replace=False)
@@ -534,9 +673,14 @@ def main(argv=None) -> int:
             vcf.write(f"{chrom}\t{pos}\t{snp_id}\t{ref}\t{alt}\t.\tPASS\t{info}\t"
                       f"{fmt}\t" + "\t".join(fields) + "\n")
 
-            low_pop = ("pop1" if f1 < f2 else "pop2") if aim and called1.any() and called2.any() else ""
+            if args.hybrid_freqs == "population":
+                low_pop = ("pop1" if src1 < src2 else "pop2") if aim else ""
+            else:
+                low_pop = (("pop1" if f1 < f2 else "pop2")
+                           if aim and called1.any() and called2.any() else "")
             truth.write(f"{chrom},{pos},{snp_id},{marker},{int(aim)},"
-                        f"{f1:.6f},{f2:.6f},{low_pop}\n")
+                        f"{f1:.6f},{f2:.6f},{low_pop},{src1:.6f},{src2:.6f},"
+                        f"{cline_class[s]},{cline_u[s]:.6f},{cline_v[s]:.6f}\n")
 
     if beagle:
         beagle.close()
@@ -564,6 +708,13 @@ def main(argv=None) -> int:
               f"frequency difference >= {args.aim_freq_diff})."
               if args.aim_freq_diff is not None
               else f"minor-allele-frequency cutoff {args.aim_cutoff})."))
+    classes = {c: int((cline_class == c).sum()) for c in ("barrier", "permeable", "biased", "random")}
+    if any(classes.values()):
+        print("Clines: " + ", ".join(f"{n} {c}" for c, n in classes.items() if n)
+              + f", {int((cline_class == 'neutral').sum())} neutral.")
+    if args.hybrid_freqs == "population":
+        print("Hybrids and reference panels drawn from population frequencies "
+              "(AIM rule applies to those, not to the realized panel frequencies).")
     total_missing = int(missing_per_sample.sum())
     print(f"Missing genotypes: {total_missing} of {n_samples * args.n_snps} "
           f"({total_missing / (n_samples * args.n_snps):.4%}).")

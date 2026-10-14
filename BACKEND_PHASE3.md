@@ -303,6 +303,34 @@ Regression tests: `test_cli_genomic_pipeline_with_parental_frequencies_recovers_
 `test_neutral_loci_recovered_for_any_parental_frequencies`,
 `test_cli_generate_genomic_input_parental_options`.
 
+**Revisited: first benchmarks with realistic reference panels and
+non-neutral loci.** `benchmarking/simulate_vcf.py` gained
+`--hybrid-freqs population` (true population frequencies; reference
+panels and hybrids sampled from them, so panel frequencies carry real
+sampling error) and per-locus genomic clines (barrier / permeable /
+biased classes among the AIMs, random u / log v elsewhere). Setup: 15 +
+15 references, 100 hybrids, 3000 SNPs, 30% AIMs (population frequency
+difference >= 0.5), filter-aims at 0.5, `ml` hybrid index on the AIMs,
+generate-genomic-input with parental labels, fit-genomic.
+
+| Panels, outliers | HI error | HI 95% coverage | v: barrier / neutral / permeable (estimated inputs) | same, true h and frequencies |
+|---|---|---|---|---|
+| panel, none | 0.011 | 0.93 | - / 1.03 / - | - / 1.03 / - |
+| panel, 45% of AIMs | 0.026 | 0.58 | 3.89 / 1.16 / 0.33 | 4.20 / 1.04 / 0.25 |
+| population, none | 0.020 | 0.68 | - / 1.04 / - | - / 1.02 / - |
+| population, 45% of AIMs | 0.037 | 0.54 | 3.27 / 1.15 / 0.37 | 4.26 / 1.02 / 0.26 |
+
+(true v: barrier 4, neutral 1, permeable 0.25; biased loci |u| = 2 was
+recovered at a median of 1.97 with every sign correct.) Cline fitting
+is accurate given true inputs; the attenuation toward neutral comes from
+the estimated hybrid index, whose likelihood assumes every locus is
+neutral, and from treating panel frequencies as exact (coverage 0.93 ->
+0.68 with neutral loci alone). In population mode filter-aims missed
+13-20% of true AIMs (near the threshold) and with 5 references per
+population 6% of retained loci were not AIMs. Open: realistic outlier
+fractions, and a second pass that drops flagged outliers from the
+hybrid-index set.
+
 ---
 
 ## 6. CLI: `fit-genomic` and `fit-genomic-multi`

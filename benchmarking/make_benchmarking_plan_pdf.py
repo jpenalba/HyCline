@@ -297,16 +297,21 @@ step("Step 10. Whole pipeline",
 h1("4. Simulators: what exists and what to add")
 p("<font face='Courier'>benchmarking/simulate_vcf.py</font> currently provides: pop1/pop2/popH samples; "
   "AIMs by minor-allele-frequency cutoff or frequency difference; exact global and per-individual missing "
-  "data; hybrid-index distributions; and beagle genotype likelihoods from simulated reads (depth, "
-  "dispersion, per-individual depth, sequencing error, called-genotype VCFs). Its truth files give AIM "
-  "status, panel frequencies and true hybrid indices.")
+  "data; hybrid-index distributions; beagle genotype likelihoods from simulated reads (depth, "
+  "dispersion, per-individual depth, sequencing error, called-genotype VCFs); population-frequency "
+  "hybrids and reference panels (<font face='Courier'>--hybrid-freqs population</font>); and "
+  "non-neutral genomic clines (barrier, permeable and biased classes among the AIMs, plus random "
+  "across-locus variation in u and log v). Its truth files give AIM status, panel and source "
+  "frequencies, cline class, u and v, and true hybrid indices.")
 table([
     ["Extension", "Why it is needed", "Benchmarks it enables"],
-    ["Hybrids drawn from population frequencies, with the reference panel a sample of them",
-     "Today hybrids use the panel's exact sample frequencies, so VCF benchmarks give HyCline error-free "
-     "parental frequencies.", "Realistic accuracy for filter-aims, hybrid index and clines; the cost of "
-     "small panels."],
-    ["Non-neutral genomic clines (per-locus u, v)", "Every simulated locus is currently neutral.",
+    ["<b>Done:</b> hybrids drawn from population frequencies, with the reference panel a sample of them "
+     "(--hybrid-freqs population)", "In the default panel mode hybrids use the panel's exact sample "
+     "frequencies, so VCF benchmarks give HyCline error-free parental frequencies.",
+     "Realistic accuracy for filter-aims, hybrid index and clines; the cost of small panels. First "
+     "results in Section 6."],
+    ["<b>Done:</b> non-neutral genomic clines (--barrier/--permeable/--biased-percent, "
+     "--cline-u-sd, --cline-log-v-sd)", "Every simulated locus used to be neutral.",
      "Power, outlier detection, recovery of u and v (Step 6), hierarchical sigma (Step 7)."],
     ["Geographic transects (sites, distances, clines with tails)", "No geography at present.",
      "Steps 4 and 7 (geographic), compare-tails, coupling-geographic."],
@@ -350,6 +355,18 @@ bullets([
     "loci this makes hybrid-index intervals overconfident (57% coverage on 100k SNPs). Benchmark with the "
     "population-frequency simulator extension.",
     "Hierarchical across-locus SDs were 0.2-0.3 on all-neutral data in short runs; check with longer chains.",
+    "First population-frequency results (15 + 15 references, 100 hybrids, 761 AIMs): with every locus "
+    "neutral, hybrid-index error rose from 0.011 (panel mode) to 0.020 and 95% interval coverage fell from "
+    "0.93 to 0.68 -- the parental frequencies' sampling error, which the estimator treats as exact. "
+    "filter-aims missed 13-20% of true AIMs (those near the threshold) and, with 5 references per "
+    "population, 6% of what it kept were not AIMs.",
+    "With 45% of AIMs non-neutral (15% each barrier v = 4, permeable v = 0.25, biased |u| = 2), the "
+    "hybrid index -- whose model assumes neutral loci -- degraded (error 0.026-0.037, coverage 0.54-0.58), "
+    "and fitted clines were pulled toward neutral (barrier v 3.3-3.9, permeable 0.33-0.37). Given the "
+    "true hybrid index and source frequencies the same fits were accurate (barrier 4.2-4.3, permeable "
+    "0.25-0.26, neutral 1.02-1.04), so the cline fitting itself is sound and the attenuation comes from "
+    "the estimated inputs. Benchmark realistic outlier fractions next, and consider excluding loci "
+    "flagged as outliers from the hybrid-index set in a second pass.",
     "The genomic pipeline without parental frequencies (legacy mode) still pins reversed loci at the v "
     "bound; keep the regression benchmark that documents it.",
     "tests/test_mcmc_numpyro.py::test_diagnostics_check_runs_and_flags_nothing_on_a_clean_fit fails on "
@@ -374,8 +391,9 @@ bullets([
 h1("8. Suggested order")
 table([
     ["Priority", "Work", "Reason"],
-    ["1", "Population-frequency hybrids and non-neutral genomic clines in simulate_vcf.py", "Removes the "
-     "main circularity and enables power/outlier benchmarks for the genomic pipeline."],
+    ["1", "<b>Done:</b> population-frequency hybrids and non-neutral genomic clines in simulate_vcf.py "
+     "(first results in Section 6)", "Removes the main circularity and enables power/outlier benchmarks "
+     "for the genomic pipeline."],
     ["2", "gghybrid comparison (esth + ggcline) on simulated and Italian sparrow data", "Same model, so "
      "differences point straight at bugs."],
     ["3", "bcftools/PLINK and ANGSD -doMaf comparisons for filter-aims and parental frequencies", "Cheap "
