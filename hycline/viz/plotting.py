@@ -299,10 +299,11 @@ def plot_genomic_cline_fit(data, fit, ax=None, title: str | None = None):
     """Plot observed per-individual genotype data against a fitted
     genomic cline curve (hybrid index on the x-axis, rather than
     geographic distance -- see hycline.models.genomic_cline)."""
-    from hycline.models.genomic_cline import genomic_cline_function
+    from hycline.models.genomic_cline import genomic_cline_allele_freq
 
     if ax is None:
         fig, ax = plt.subplots(figsize=(7, 4.5))
+    p0, p1 = data.parental_freq_pop0, data.parental_freq_pop1
 
     sizes = 20 + 60 * (data.n_alleles / data.n_alleles.max())
     ax.scatter(data.hybrid_index, data.observed_freq, s=sizes,
@@ -310,15 +311,15 @@ def plot_genomic_cline_fit(data, fit, ax=None, title: str | None = None):
                label="Observed", zorder=3)
 
     h_smooth = np.linspace(0.001, 0.999, 300)
-    phi_smooth = genomic_cline_function(h_smooth, fit.params)
-    ax.plot(h_smooth, phi_smooth, color="#c53030", linewidth=2,
+    freq_smooth = genomic_cline_allele_freq(h_smooth, fit.params, p0, p1)
+    ax.plot(h_smooth, freq_smooth, color="#c53030", linewidth=2,
              label="Fitted genomic cline", zorder=2)
-    # neutral null expectation phi(h) = h, for visual reference
-    ax.plot([0, 1], [0, 1], color="#a0aec0", linewidth=1, linestyle="--",
+    # neutral null expectation p0 + (p1 - p0) * h, for visual reference
+    ax.plot([0, 1], [p0, p1], color="#a0aec0", linewidth=1, linestyle="--",
              label="Neutral (v=1, u=0)", zorder=1)
 
     ax.set_xlabel("Hybrid index")
-    ax.set_ylabel("Locus ancestry (focal-allele frequency)")
+    ax.set_ylabel("Allele frequency")
     ax.set_xlim(-0.02, 1.02)
     ax.set_ylim(-0.05, 1.05)
     ax.legend(loc="best", frameon=False, fontsize=8)
@@ -404,10 +405,12 @@ def plot_hierarchical_geographic_grid(distance, n_alleles, n_focal, locus_names,
 def plot_hierarchical_genomic_grid(hybrid_index, n_alleles, n_focal, locus_names,
                                     locus_summary_df, ncols: int = 3):
     """Small-multiples plot for a hierarchical genomic batch fit -- the
-    genomic-cline analog of `plot_hierarchical_geographic_grid`. No
-    pmin/pmax needed (genomic clines have no free asymptotes)."""
+    genomic-cline analog of `plot_hierarchical_geographic_grid`. Each
+    locus's parental frequencies are taken from `locus_summary_df`'s
+    `parental_freq_pop0`/`parental_freq_pop1` columns when present (as
+    `fit-hierarchical-genomic` writes them), else 0 and 1."""
     import math
-    from hycline.models.genomic_cline import GenomicClineParams, genomic_cline_function
+    from hycline.models.genomic_cline import GenomicClineParams, genomic_cline_allele_freq
 
     n = len(locus_names)
     ncols = max(1, min(ncols, n))
@@ -425,9 +428,11 @@ def plot_hierarchical_genomic_grid(hybrid_index, n_alleles, n_focal, locus_names
 
         row = locus_summary_df[locus_summary_df["locus"] == name].iloc[0]
         params = GenomicClineParams(u=row["u_mean"], v=row["v_mean"])
-        phi_smooth = genomic_cline_function(h_smooth, params)
-        ax.plot(h_smooth, phi_smooth, color="#c53030", linewidth=2, zorder=1)
-        ax.plot([0, 1], [0, 1], color="#a0aec0", linewidth=1, linestyle="--", zorder=0)
+        p0 = float(row.get("parental_freq_pop0", 0.0))
+        p1 = float(row.get("parental_freq_pop1", 1.0))
+        freq_smooth = genomic_cline_allele_freq(h_smooth, params, p0, p1)
+        ax.plot(h_smooth, freq_smooth, color="#c53030", linewidth=2, zorder=1)
+        ax.plot([0, 1], [p0, p1], color="#a0aec0", linewidth=1, linestyle="--", zorder=0)
 
         ax.set_title(name, fontsize=10)
         ax.set_ylim(-0.05, 1.05)
@@ -492,7 +497,7 @@ def plot_genomic_gl_multi_locus_grid(results: dict, ncols: int = 3):
     `plot_gl_multi_locus_grid`. `results` is a dict of
     {locus_name: (GenotypeLikelihoodLocusData, GenomicFitResult)}."""
     import math
-    from hycline.models.genomic_cline import genomic_cline_function
+    from hycline.models.genomic_cline import genomic_cline_allele_freq
 
     n = len(results)
     ncols = max(1, min(ncols, n))
@@ -508,9 +513,10 @@ def plot_genomic_gl_multi_locus_grid(results: dict, ncols: int = 3):
         ax.scatter(data.hybrid_index, hard_genotype_proxy / 2.0, s=20, alpha=0.5,
                    color="#2b6cb0", edgecolor="white", linewidth=0.3, zorder=2)
 
-        phi_smooth = genomic_cline_function(h_smooth, fit.params)
-        ax.plot(h_smooth, phi_smooth, color="#c53030", linewidth=2, zorder=1)
-        ax.plot([0, 1], [0, 1], color="#a0aec0", linewidth=1, linestyle="--", zorder=0)
+        p0, p1 = data.parental_freq_pop0, data.parental_freq_pop1
+        freq_smooth = genomic_cline_allele_freq(h_smooth, fit.params, p0, p1)
+        ax.plot(h_smooth, freq_smooth, color="#c53030", linewidth=2, zorder=1)
+        ax.plot([0, 1], [p0, p1], color="#a0aec0", linewidth=1, linestyle="--", zorder=0)
 
         ax.set_title(locus_name, fontsize=10)
         ax.set_ylim(-0.05, 1.05)

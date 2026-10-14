@@ -985,3 +985,40 @@ def test_read_raw_trait_csv_output_chains_into_fit_mle_trait_recovers_known_clin
     transect = read_raw_trait_csv(str(csv_path), trait_col="trait_value", site_col="site")
     fit = fit_mle_trait(transect)
     assert fit.mean_params.center == pytest.approx(true_center, abs=10)
+
+
+# ---------------------------------------------------------------------------
+# genomic parental-frequency columns
+# ---------------------------------------------------------------------------
+
+def test_genomic_readers_pick_up_parental_frequency_columns(tmp_path):
+    import pandas as pd
+    from hycline.data.io import (
+        TransectCSVError, read_genomic_cline_multi_locus_wide_csv,
+        read_genomic_gl_multi_locus_wide_csv,
+    )
+    hard = pd.DataFrame({"individual": ["a", "b"], "hybrid_index": [0.2, 0.7],
+                         "L1.n": [2, 2], "L1.freq": [0.5, 1.0], "L1.p0": [0.3, 0.3],
+                         "L1.p1": [0.9, 0.9], "L2.n": [2, 2], "L2.freq": [0.0, 0.5]})
+    path = tmp_path / "hard.csv"
+    hard.to_csv(path, index=False)
+    data = read_genomic_cline_multi_locus_wide_csv(str(path), individual_col="individual")
+    assert set(data) == {"L1", "L2"}
+    assert (data["L1"].parental_freq_pop0, data["L1"].parental_freq_pop1) == (0.3, 0.9)
+    assert (data["L2"].parental_freq_pop0, data["L2"].parental_freq_pop1) == (0.0, 1.0)
+
+    gl = pd.DataFrame({"individual": ["a", "b"], "hybrid_index": [0.2, 0.7],
+                       "L1.gl0": [-0.1, -3.0], "L1.gl1": [-2.0, -0.2], "L1.gl2": [-5.0, -2.0],
+                       "L1.p0": [0.8, 0.8], "L1.p1": [0.1, 0.1]})
+    path = tmp_path / "gl.csv"
+    gl.to_csv(path, index=False)
+    data = read_genomic_gl_multi_locus_wide_csv(str(path), individual_col="individual")
+    assert (data["L1"].parental_freq_pop0, data["L1"].parental_freq_pop1) == (0.8, 0.1)
+
+    hard["L1.p0"] = [0.3, 0.4]
+    hard.to_csv(tmp_path / "bad.csv", index=False)
+    with pytest.raises(TransectCSVError, match="one parental frequency"):
+        read_genomic_cline_multi_locus_wide_csv(str(tmp_path / "bad.csv"))
+    hard.drop(columns=["L1.p0"]).to_csv(tmp_path / "half.csv", index=False)
+    with pytest.raises(TransectCSVError, match="only one of"):
+        read_genomic_cline_multi_locus_wide_csv(str(tmp_path / "half.csv"))

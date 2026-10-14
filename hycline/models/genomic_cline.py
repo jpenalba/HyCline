@@ -82,5 +82,22 @@ def genomic_cline_function(h, params: GenomicClineParams) -> np.ndarray:
     return _inv_logit(params.u + params.v * _logit(h))
 
 
+def genomic_cline_allele_freq(h, params: GenomicClineParams,
+                              parental_freq_pop0: float = 0.0,
+                              parental_freq_pop1: float = 1.0) -> np.ndarray:
+    """Expected frequency of the counted allele at hybrid index `h`:
+    p0 + (p1 - p0) * phi(h), with p0/p1 the allele's frequency in parental
+    populations 0 and 1 (Bailey 2023, gghybrid, section 2.1.1; the
+    allele-frequency form of the logit-logistic cline). phi(h) is the
+    probability that an allele copy derives from parental population 1,
+    so the cline describes ancestry even when the parental populations
+    aren't fixed for different alleles, and either allele can be the one
+    counted (p1 < p0 gives a decreasing frequency for increasing phi).
+    The defaults p0 = 0, p1 = 1 give phi(h) itself: the counted allele is
+    treated as fully diagnostic of parental population 1."""
+    phi = genomic_cline_function(h, params)
+    return parental_freq_pop0 + (parental_freq_pop1 - parental_freq_pop0) * phi
+
+
 def param_names() -> list[str]:
     return ["u", "v"]

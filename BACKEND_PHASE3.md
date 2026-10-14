@@ -255,6 +255,54 @@ locus oriented to the allele more common in S1, which addresses all
 three. Regression test:
 `test_cli_default_hybrid_index_gives_unflattened_genomic_clines`.
 
+**Revisited: parental frequencies in the genomic-cline model; `ml`
+default restored.** Bailey (2023, gghybrid, section 2.1.1, read
+directly from `references/`) models "the allele j1 with higher frequency
+in source S1 than S0" as A = S0 + phi(h)(S1 - S0), with phi the
+logit-logistic term (written there as h^v / (h^v + (1-h)^v e^u), so its
+u has the opposite sign to HyCline's logit(phi) = u + v logit(h)); it
+estimates parental frequencies from the reference samples, does not
+propagate their uncertainty, and by default leaves the reference
+individuals out of cline estimation (`ggcline`, `include.Source =
+FALSE`). HyCline now does the same: `genomic_cline_allele_freq` gives
+p0 + (p1 - p0) phi(h), carried as `parental_freq_pop0/1` on
+`HybridIndexLocusData`/`GenotypeLikelihoodLocusData` (defaults 0/1 =
+the previous model exactly) through the binomial and genotype-likelihood
+MLE likelihoods and both hierarchical NUTS models. Orientation is not
+needed: with p1 < p0 the allele frequency simply decreases as phi
+rises. `generate-genomic-input` computes p0/p1 from labelled references
+(VCF sample frequency, beagle `em_allele_freq`) or reads them from
+`--parental-freq-csv`, clips them to [0.001, 0.999] (an individual at
+h = 0 can't make a locus impossible), drops loci with equal or unknown
+frequencies, writes `<locus>.p0`/`.p1` columns, and leaves the
+references out unless `--include-parentals`.
+
+Validation, simulator data where every locus is neutral (true u = 0,
+v = 1), 15 + 15 references, 60 hybrids, 1000 AIMs with parental
+frequency difference >= 0.3 of both polarities. Old pipeline (no
+parental frequencies, `mean` hybrid index): every reversed locus at
+v = 0.001; 86% of partially differentiated forward loci flagged
+non-neutral. New model with the `ml` hybrid index: median u = 0.02,
+v = 1.07; 95% intervals excluded u = 0 for 1.5% and v = 1 for 6.5% of
+loci; 2 of 1000 at the v bound (inspected one: its sampled genotypes
+really are near-flat -- log-likelihood -52.4 at v ~ 0 vs -58.5 at v = 1).
+New model with the `mean` hybrid index: median v ~ 2 for every locus
+class, because that hybrid index is compressed (0.14-0.82) on partially
+differentiated hybrid-index loci -- so `--method ml` is the default
+again: the problem that made it unusable (references at exactly 0/1
+under phi(0) = 0) is gone once references are excluded and p0 > 0.
+Beagle input at depth 5 (genotype-likelihood MLE): median u ~ 0,
+v = 1.08-1.10, but the v interval excluded 1 for 9.2% of neutral loci;
+with the simulator's true panel frequencies 8.7%, and with true
+frequencies and true hybrid index 7.7% -- so most of the excess is the
+Wald interval for v at n = 60, not the new model, with estimated
+frequencies adding a little. Hierarchical NUTS (hard counts and GLs, 50
+hybrids, ~100 loci, short chains): mu_u ~ 0.00, mu_log_v ~ 0.00-0.02.
+Regression tests: `test_cli_genomic_pipeline_with_parental_frequencies_recovers_neutral_clines`,
+`test_cli_genomic_pipeline_without_parental_frequencies_pins_reversed_loci`,
+`test_neutral_loci_recovered_for_any_parental_frequencies`,
+`test_cli_generate_genomic_input_parental_options`.
+
 ---
 
 ## 6. CLI: `fit-genomic` and `fit-genomic-multi`

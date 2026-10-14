@@ -175,7 +175,8 @@ def fit_mle_geographic_gl(transect: GenotypeLikelihoodTransect,
 def _initial_guess_genomic(data: GenotypeLikelihoodLocusData) -> GenomicClineParams:
     gl_stack = np.stack([data.log_gl0, data.log_gl1, data.log_gl2], axis=0)
     hard_genotype = np.argmax(gl_stack, axis=0)
-    freq_proxy = hard_genotype / 2.0
+    p0, p1 = data.parental_freq_pop0, data.parental_freq_pop1
+    freq_proxy = (hard_genotype / 2.0 - p0) / (p1 - p0)  # onto the phi scale
 
     mid_mask = np.abs(data.hybrid_index - 0.5) < 0.25
     if np.any(mid_mask):

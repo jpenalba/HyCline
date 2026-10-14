@@ -355,12 +355,22 @@ def write_genomic_gl_csv(vcf_data: VCFData, metadata_df, sample_col: str,
 
 def write_genomic_hard_count_csv(vcf_data: VCFData, metadata_df, sample_col: str,
                                   hybrid_index_col: str, output_path: str,
-                                  ploidy: int = 2) -> dict:
+                                  ploidy: int = 2,
+                                  parental_freqs: tuple | None = None,
+                                  exclude_samples=None) -> dict:
     """Write a per-individual hard-count CSV for genomic clines -- the
     format `read_genomic_cline_multi_locus_wide_csv` expects by default
-    (`.n`/`.freq` suffixes)."""
+    (`.n`/`.freq` suffixes).
+
+    `parental_freqs`, if given, is a pair of (n_loci,) arrays: each
+    locus's ALT-allele frequency in parental populations 0 and 1, written
+    as constant '{locus}.p0'/'{locus}.p1' columns; loci where either is NaN
+    are left out. `exclude_samples` names individuals to leave out (e.g.
+    the parental reference individuals)."""
     common_samples, vcf_idx, meta, n_dropped = _join_metadata(
         vcf_data, metadata_df, sample_col, [hybrid_index_col])
+    common_samples, vcf_idx, meta = _drop_samples(common_samples, vcf_idx, meta,
+                                                  exclude_samples)
 
     hybrid_index = meta[hybrid_index_col].to_numpy(dtype=float)
     if np.any((hybrid_index < 0) | (hybrid_index > 1)):
@@ -368,17 +378,41 @@ def write_genomic_hard_count_csv(vcf_data: VCFData, metadata_df, sample_col: str
 
     base = {sample_col: common_samples, "hybrid_index": hybrid_index}
     new_columns = {}
+    n_written = 0
     for j, locus in enumerate(vcf_data.locus_names):
+        if parental_freqs is not None and not (np.isfinite(parental_freqs[0][j])
+                                               and np.isfinite(parental_freqs[1][j])):
+            continue
         dosage = vcf_data.dosage[j, vcf_idx]
         valid = ~np.isnan(dosage)
         new_columns[f"{locus}.n"] = np.where(valid, ploidy, 0)
         new_columns[f"{locus}.freq"] = np.where(valid, dosage / ploidy, np.nan)
+        if parental_freqs is not None:
+            new_columns[f"{locus}.p0"] = np.full(len(common_samples), parental_freqs[0][j])
+            new_columns[f"{locus}.p1"] = np.full(len(common_samples), parental_freqs[1][j])
+        n_written += 1
 
     out = pd.concat([pd.DataFrame(base), pd.DataFrame(new_columns)], axis=1)
 
     out.to_csv(output_path, index=False)
-    return {"n_individuals": len(common_samples), "n_loci": len(vcf_data.locus_names),
+    return {"n_individuals": len(common_samples), "n_loci": n_written,
             "n_samples_dropped": n_dropped}
+
+
+def _drop_samples(common_samples: list, indices, meta, exclude_samples) -> tuple:
+    """Remove `exclude_samples` from a joined (samples, indices, metadata)
+    triple, keeping the three aligned."""
+    if not exclude_samples:
+        return common_samples, indices, meta
+    exclude = set(exclude_samples)
+    keep = [s not in exclude for s in common_samples]
+    common_samples = [s for s, k in zip(common_samples, keep) if k]
+    indices = [i for i, k in zip(indices, keep) if k]
+    meta = meta[np.array(keep)].reset_index(drop=True)
+    if not common_samples:
+        raise ValueError("No individuals left after excluding the parental reference "
+                         "individuals -- the metadata has hybrid index only for them.")
+    return common_samples, indices, meta
 
 
 def write_geographic_hard_count_csv(vcf_data: VCFData, metadata_df, sample_col: str,

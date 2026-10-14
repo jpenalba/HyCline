@@ -114,6 +114,20 @@ class TraitTransect:
         return len(self.distance)
 
 
+def _check_parental_freqs(data) -> None:
+    data.parental_freq_pop0 = float(data.parental_freq_pop0)
+    data.parental_freq_pop1 = float(data.parental_freq_pop1)
+    for name in ("parental_freq_pop0", "parental_freq_pop1"):
+        value = getattr(data, name)
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"{name} must be in [0, 1], got {value}")
+    if data.parental_freq_pop0 == data.parental_freq_pop1:
+        raise ValueError(
+            "parental_freq_pop0 and parental_freq_pop1 are equal "
+            f"({data.parental_freq_pop0}): the locus carries no ancestry information "
+            "and its cline is not identifiable.")
+
+
 @dataclass
 class HybridIndexLocusData:
     """Per-individual genotype data for one locus, against genome-wide
@@ -132,15 +146,23 @@ class HybridIndexLocusData:
     n_alleles : total alleles scored at this locus for that individual
         (ploidy, if genotyped without missing data; may be less if some
         allele copies are missing/uncalled).
-    n_focal : count of the "parental population 1" allele at this locus
-        for that individual (0 <= n_focal <= n_alleles).
+    n_focal : count of the counted allele at this locus for that
+        individual (0 <= n_focal <= n_alleles).
     individual_names : optional sample labels.
+    parental_freq_pop0, parental_freq_pop1 : the counted allele's
+        frequency in parental populations 0 and 1. The model's expected
+        frequency is p0 + (p1 - p0) * phi(h)
+        (`hycline.models.genomic_cline.genomic_cline_allele_freq`). The
+        defaults 0 and 1 treat the counted allele as fully diagnostic of
+        parental population 1.
     """
 
     hybrid_index: np.ndarray
     n_alleles: np.ndarray
     n_focal: np.ndarray
     individual_names: list[str] | None = None
+    parental_freq_pop0: float = 0.0
+    parental_freq_pop1: float = 1.0
 
     def __post_init__(self):
         self.hybrid_index = np.asarray(self.hybrid_index, dtype=float)
@@ -155,6 +177,7 @@ class HybridIndexLocusData:
             raise ValueError("n_alleles must be positive for every individual")
         if np.any((self.hybrid_index < 0) | (self.hybrid_index > 1)):
             raise ValueError("hybrid_index must be in [0, 1] for every individual")
+        _check_parental_freqs(self)
 
     @property
     def observed_freq(self) -> np.ndarray:
@@ -231,9 +254,12 @@ class GenotypeLikelihoodLocusData:
     ----------
     hybrid_index : each individual's genome-wide hybrid index (0-1).
     log_gl0, log_gl1, log_gl2 : natural-log genotype likelihoods
-        P(reads | genotype = 0, 1, 2 copies of the "parental population 1"
-        allele) for a diploid locus, one entry per individual.
+        P(reads | genotype = 0, 1, 2 copies of the counted allele) for a
+        diploid locus, one entry per individual.
     individual_names : optional sample labels.
+    parental_freq_pop0, parental_freq_pop1 : the counted allele's
+        frequency in parental populations 0 and 1 (see
+        `HybridIndexLocusData`).
     """
 
     hybrid_index: np.ndarray
@@ -241,6 +267,8 @@ class GenotypeLikelihoodLocusData:
     log_gl1: np.ndarray
     log_gl2: np.ndarray
     individual_names: list[str] | None = None
+    parental_freq_pop0: float = 0.0
+    parental_freq_pop1: float = 1.0
 
     def __post_init__(self):
         self.hybrid_index = np.asarray(self.hybrid_index, dtype=float)
@@ -256,6 +284,7 @@ class GenotypeLikelihoodLocusData:
             raise ValueError("Need at least one individual")
         if np.any((self.hybrid_index < 0) | (self.hybrid_index > 1)):
             raise ValueError("hybrid_index must be in [0, 1] for every individual")
+        _check_parental_freqs(self)
 
     def __len__(self) -> int:
         return len(self.hybrid_index)

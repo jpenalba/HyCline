@@ -2,8 +2,10 @@
 
 Structurally identical to `hycline.likelihoods.binomial` (same binomial
 form: observed focal-allele count out of total alleles, at a predicted
-probability), just evaluated against `genomic_cline_function(h, params)`
-instead of the geographic `cline_function(x, params, tail_type)`. Kept as
+probability), just evaluated against `genomic_cline_allele_freq(h, params,
+p0, p1)` (p0/p1 being the locus's parental frequencies, carried on the
+data object) instead of the geographic `cline_function(x, params,
+tail_type)`. Kept as
 a separate module rather than a generic shared function because the two
 domains (geographic distance vs. hybrid index) have different validity
 ranges and different downstream reporting needs -- see BACKEND_PHASE3.md
@@ -17,14 +19,15 @@ import numpy as np
 from scipy.stats import binom
 
 from hycline.data.schema import HybridIndexLocusData
-from hycline.models.genomic_cline import GenomicClineParams, genomic_cline_function
+from hycline.models.genomic_cline import GenomicClineParams, genomic_cline_allele_freq
 
 _EPS = 1e-10
 
 
 def predicted_freq(data: HybridIndexLocusData, params: GenomicClineParams) -> np.ndarray:
-    phi = genomic_cline_function(data.hybrid_index, params)
-    return np.clip(phi, _EPS, 1.0 - _EPS)
+    p = genomic_cline_allele_freq(data.hybrid_index, params,
+                                  data.parental_freq_pop0, data.parental_freq_pop1)
+    return np.clip(p, _EPS, 1.0 - _EPS)
 
 
 def log_likelihood(data: HybridIndexLocusData, params: GenomicClineParams) -> float:

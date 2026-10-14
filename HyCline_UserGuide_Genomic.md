@@ -27,6 +27,7 @@ genome-wide genotype data (VCF or ANGSD beagle)
         v
 [3] generate-genomic-input         --> VCF: hard counts, always
         |                              --> beagle: genotype likelihoods, always
+        |                              (+ each locus's parental allele frequencies)
         v
 [4] fit genomic clines
         |
@@ -95,7 +96,7 @@ hycline estimate-hybrid-index \
     --input hi_aims.vcf \
     --metadata parental_labels.csv \
     --population-col population --pop0-label parent0 --pop1-label parent1 \
-    --method ml --output hybrid_index.csv
+    --output hybrid_index.csv
 ```
 
 Real output (on a simulated 90-sample VCF, 15 reference individuals per
@@ -129,21 +130,13 @@ sample33_popH,0.18347595310769976,0.13992310611065473,0.23034432947169986,374
 interval and `n_loci` is the number of loci with a genotype for that
 individual. The file works directly as Step 3's `--metadata`.
 
-**Don't use `--method ml` output as Step 3's hybrid index yet.** It
-places parental reference individuals at exactly 0 or 1. The genomic-
-cline model in Step 4 fixes a locus's allele frequency at 0 when h = 0,
-so a parental reference at h = 0 that carries the other population's
-allele is treated as impossible, and the fit flattens the cline to
-accommodate it: on simulated data where every locus is neutral (true
-v = 1), near-fixed AIMs fitted at v = 0.18-0.28 with an `ml` hybrid
-index and v = 0.71-1.19 with a `mean` one. Use the default,
-`--method mean`, for cline fitting; `ml` is still the more accurate
-estimate of the hybrid index itself. Without `--method`, the output has
-just the `individual` and `hybrid_index` columns.
+Parental reference individuals usually come out at exactly 0 or 1 --
+under this estimator that is their most likely value. Step 3 leaves
+them out of the cline-fitting input by default.
 
 ### How the estimate is made
 
-`--method ml` is a maximum-likelihood hybrid index. In an
+The default, `--method ml`, is a maximum-likelihood hybrid index. In an
 individual with hybrid index h, each locus's allele frequency is
 `(1 - h) * p0 + h * p1`, where p0 and p1 are the two parental
 populations' frequencies; genotypes follow Hardy-Weinberg proportions
@@ -170,12 +163,15 @@ error of the hybrids' estimates:
 
 and the 95% intervals contained the true value for 90-97% of hybrids.
 
-`--method mean`, the default, is the simpler estimator: the mean, across loci, of each
+`--method mean` is the simpler estimator: the mean, across loci, of each
 individual's parental-population-1 allele dosage (each locus oriented by
 the parental frequencies first), optionally weighted by
 `--weight-by-differentiation`. It treats every locus as diagnostic, so
 partially differentiated loci and, for beagle input, low depth pull its
-estimates toward 0.5. `--weight-by-differentiation` applies to
+estimates toward 0.5. That compression carries into Step 4: on the
+simulated example below (where every locus is neutral, true v = 1), a
+`mean` hybrid index made the fitted clines come out at a median v of
+about 2, against about 1.05 with `ml`. Use `ml` for cline fitting. `--weight-by-differentiation` applies to
 `--method mean` only, and `--method ml` requires diploid data
 (`--ploidy 2`).
 
@@ -252,9 +248,12 @@ hycline estimate-hybrid-index --input hi_aims.vcf \
     --population-col population --pop0-label parent0 --pop1-label parent1 \
     --output hybrid_index.csv
 
-# Cline input from the looser set, using that hybrid index
+# Cline input from the looser set, using that hybrid index and the
+# parental reference individuals for each locus's parental frequencies
 hycline generate-genomic-input --input cline_aims.vcf \
-    --metadata hybrid_index.csv --output genomic_input.csv
+    --metadata hybrid_index.csv --parental-metadata parental_labels.csv \
+    --population-col population --pop0-label parent0 --pop1-label parent1 \
+    --output genomic_input.csv
 ```
 
 Real output of the two filters and the conversion (the hybrid-index step
@@ -264,8 +263,11 @@ is shown above):
   4000 loci checked, 395 retained (allele-frequency difference >= 0.5 between the parental populations)
   4000 loci checked, 1000 retained (allele-frequency difference >= 0.3 between the parental populations)
 
+  Parental frequencies from 15 'parent0' and 15 'parent1' reference individuals.
+  30 parental reference individual(s) left out of the output (--include-parentals to keep them).
+
 Wrote /path/to/genomic_input.csv
-  90 individuals, 1000 loci
+  60 individuals, 1000 loci
 Ready for: hycline fit-genomic --input genomic_input.csv --individual-col individual
        or: hycline fit-hierarchical-genomic --input genomic_input.csv --individual-col individual
 ```
@@ -275,20 +277,8 @@ columns `generate-genomic-input` looks for by default, so it can be
 passed as `--metadata` directly; to combine it with other metadata,
 merge on the individual column.
 
-Three things to keep in mind:
+Two things to keep in mind:
 
-- **Only near-fixed AIMs give interpretable clines with the current
-  model.** Step 4's genomic cline describes the probability of carrying
-  parental population 1's allele as rising from 0 at h = 0 to 1 at h = 1.
-  A locus whose parental frequencies are, say, 0.57 and 0.87 can't do
-  that, so even a neutral one fits as a strongly shallow, shifted cline:
-  on simulated data where every locus is neutral (true u = 0, v = 1),
-  loci with parental frequencies 0.57/0.87 and 0.63/0.93 fitted at
-  v = 0.38 and 0.56 with u = 1.1 and 1.5, which reads as elevated
-  introgression. Until the cline model includes the parental frequencies,
-  restrict the cline-fitting set to near-fixed AIMs (for example
-  `--minor-allele-freq 0.05`) rather than the looser
-  `--allele-freq-diff 0.3` set shown above.
 - **Don't make the hybrid-index set so strict that it has few loci.** As
   the table under "Which loci to use" shows, 8 near-fixed loci gave a far
   noisier hybrid index (mean error 0.078) than 395 or 1000 moderately
@@ -304,47 +294,79 @@ Three things to keep in mind:
 
 ## Step 3: Generate genomic-cline input
 
-One command, one flag: `generate-genomic-input --input <file>` takes a
-VCF or ANGSD beagle file directly, plus a metadata CSV giving each
-individual's hybrid index (typically Step 2's own output, merged into
-your broader metadata by individual name).
-
-**The input format determines the output path, with no flag to choose
-otherwise.** VCF input always produces hard-count output from `GT`
-calls. Beagle input always produces per-individual genotype-likelihood
-output.
+`generate-genomic-input --input <file>` takes a VCF or ANGSD beagle file
+directly, plus a metadata CSV giving each individual's hybrid index
+(Step 2's output works as is), and **the parental reference individuals,
+so each locus's parental allele frequencies can be computed**:
 
 ```bash
 hycline generate-genomic-input \
-    --input filtered.vcf \
-    --metadata test_individuals_with_hi.csv \
-    --output converted.csv
+    --input cline_aims.vcf \
+    --metadata hybrid_index.csv \
+    --parental-metadata parental_labels.csv \
+    --population-col population --pop0-label parent0 --pop1-label parent1 \
+    --output genomic_input.csv
 ```
 
-Real output:
+Real output (the simulated example from Step 2; absolute paths
+shortened):
 
 ```
 Detected input format: vcf (from file extension; use --format to override)
-Parsing 'filtered.vcf' ...
-  3 biallelic SNPs parsed, 72 samples.
-  NOTE: 12 VCF sample(s) had no matching row in the metadata and were dropped.
+Parsing 'cline_aims.vcf' ...
+  1000 biallelic SNPs parsed, 90 samples.
+  Parental frequencies from 15 'parent0' and 15 'parent1' reference individuals.
+  30 parental reference individual(s) left out of the output (--include-parentals to keep them).
 
-Wrote converted.csv
-  60 individuals, 3 loci
-Ready for: hycline fit-genomic --input converted.csv --individual-col individual
-       or: hycline fit-hierarchical-genomic --input converted.csv --individual-col individual
+Wrote /path/to/genomic_input.csv
+  60 individuals, 1000 loci
+Ready for: hycline fit-genomic --input genomic_input.csv --individual-col individual
+       or: hycline fit-hierarchical-genomic --input genomic_input.csv --individual-col individual
 ```
 
-Individuals present in the VCF/beagle file but absent from `--metadata`
-are simply dropped, not an error -- the note above shows exactly this
-happening with the 12 parental reference individuals, which have no
-`hybrid_index` entry in this particular metadata file. `--hybrid-index-col`
-(default `hybrid_index`) names the column holding it.
+Each locus gets its counted allele's frequency (VCF ALT, beagle allele2)
+in the two parental populations, written as `<locus>.p0`/`<locus>.p1`
+columns alongside the genotype data:
 
-**Want genotype-likelihood-aware fitting from sequencing data?** Generate
-genotype likelihoods with ANGSD (`angsd -doGlf 2`) and provide that
-beagle file here. There is no VCF route to genotype-likelihood output,
-even via a VCF's own `PL` field.
+```
+   individual  hybrid_index  snp9.n  snp9.freq  snp9.p0  snp9.p1
+sample31_popH      0.219337       2        1.0      0.5 0.857143
+```
+
+Step 4 uses them to model each locus's allele frequency as
+`p0 + (p1 - p0) * phi(h)` -- the form gghybrid uses (Bailey 2023,
+section 2.1.1) -- so loci needn't be fixed between the parental
+populations, and it doesn't matter which population's allele is the
+VCF's ALT.
+
+| Flag | Meaning |
+|---|---|
+| `--population-col`, `--pop0-label`, `--pop1-label` | Labels identifying the parental reference individuals (Mode 1). Frequencies are the references' sample frequencies for VCF input, and pooled maximum-likelihood estimates from their genotype likelihoods for beagle input |
+| `--parental-metadata` | CSV holding `--sample-col` and `--population-col`, if the labels aren't in `--metadata` |
+| `--include-parentals` | Keep the reference individuals in the output. By default they are left out, as gghybrid's `ggcline` does: clines are fitted to the test individuals |
+| `--parental-freq-csv` (+ `--freq-locus-col`, `--freq-pop0-col`, `--freq-pop1-col`) | Precomputed per-locus parental frequencies instead (Mode 2) -- the same file format `estimate-hybrid-index` takes |
+
+Parental frequencies are clipped to [0.001, 0.999], so an individual at
+hybrid index exactly 0 or 1 can't make a locus impossible, and loci
+whose two parental frequencies are equal (or unknown) are left out, with
+a count printed. **Without parental frequencies** every locus is treated
+as fixed for the counted allele in parental population 1, and the
+command prints a note saying so. That is right only for fixed markers
+whose ALT allele is parental population 1's: on the simulated data,
+every locus whose ALT allele belonged to parental population 0 then
+fitted at the lower bound of v.
+
+Individuals present in the VCF/beagle file but absent from `--metadata`
+are dropped, not an error. `--hybrid-index-col` (default
+`hybrid_index`) names the hybrid-index column.
+
+**The input format determines the output, with no flag to choose
+otherwise.** VCF input produces hard counts from `GT` calls; beagle input
+produces per-individual genotype likelihoods. For genotype-likelihood-
+aware fitting from sequencing data, generate genotype likelihoods with
+ANGSD (`angsd -doGlf 2`) and provide that beagle file here. There is no
+VCF route to genotype-likelihood output, even via a VCF's own `PL`
+field.
 
 ---
 
@@ -354,63 +376,76 @@ even via a VCF's own `PL` field.
 counts or genotype likelihoods, one locus or thousands -- and figures out
 which it's looking at from the column names alone: `.n`/`.freq` suffix
 pairs mean hard counts; `.gl0`/`.gl1`/`.gl2` triples mean genotype
-likelihoods.
-
-**Check allele polarity before fitting.** The model describes the
-frequency of parental population 1's allele and requires v > 0, but
-`generate-genomic-input` writes the VCF ALT (or beagle allele2)
-frequency as is. At a locus where ALT is parental population 0's
-allele, the true cline decreases with hybrid index, and the fit ends at
-the lower bound v = 0.001 (every such locus did, on simulated data). Fit
-only loci whose ALT allele is more common in parental population 1, or
-recode the others before fitting.
+likelihoods. `.p0`/`.p1` columns, when present, give each locus's
+parental frequencies.
 
 ```bash
-hycline fit-genomic --input converted.csv --output-dir results/
+hycline fit-genomic --input genomic_input.csv --individual-col individual \
+    --loci snp1602,snp548,snp9 --output-dir results/
 ```
 
-Real output:
+Real output, for three loci from the Step 3 file -- a fixed locus whose
+ALT allele is parental population 1's (`snp1602`, parental frequencies
+0/1), a fixed locus whose ALT allele is parental population 0's
+(`snp548`, 0.96/0), and a partially differentiated one (`snp9`,
+0.5/0.86). Every simulated locus is neutral (true u = 0, v = 1):
 
 ```
-  3 loci detected: ['aim_neutral', 'aim_barrier', 'aim_permeable']
+Reading input data from 'genomic_input.csv' ...
+  3 loci detected: ['snp1602', 'snp548', 'snp9']
 
---- Locus 'aim_neutral' (60 individuals) ---
-  Done in 0.0s. Genomic cline fit: success=True, logL=-34.569, AICc=73.349, n=60, k=2
-           u =     0.4896  (SE 0.2829, 95% CI [-0.0648, 1.0440])
-           v =     2.1895  (SE 0.3857, 95% CI [1.4335, 2.9456])
+--- Locus 'snp1602' (54 individuals) ---
+  Done in 0.0s. Genomic cline fit: success=True, logL=-35.519, AICc=75.273, n=54, k=2
+           u =     0.2667  (SE 0.2708, 95% CI [-0.2641, 0.7976])
+           v =     1.1965  (SE 0.2237, 95% CI [0.7580, 1.6350])
   interpretation: steeper than genome-wide average (elevated barrier to introgression)
 
---- Locus 'aim_barrier' (60 individuals) ---
-  Done in 0.0s. Genomic cline fit: success=True, logL=-31.505, AICc=67.221, n=60, k=2
-           u =     0.0702  (SE 0.3054, 95% CI [-0.5283, 0.6687])
-           v =     3.0283  (SE 0.5347, 95% CI [1.9804, 4.0762])
+--- Locus 'snp548' (55 individuals) ---
+  Done in 0.0s. Genomic cline fit: success=True, logL=-31.909, AICc=68.048, n=55, k=2
+           u =    -0.1402  (SE 0.3164, 95% CI [-0.7603, 0.4798])
+           v =     1.5971  (SE 0.3322, 95% CI [0.9459, 2.2482])
   interpretation: steeper than genome-wide average (elevated barrier to introgression)
 
---- Locus 'aim_permeable' (60 individuals) ---
-  Done in 0.0s. Genomic cline fit: success=True, logL=-52.598, AICc=109.407, n=60, k=2
-           u =    -0.2810  (SE 0.2037, 95% CI [-0.6802, 0.1181])
-           v =     0.6239  (SE 0.2016, 95% CI [0.2288, 1.0191])
+--- Locus 'snp9' (58 individuals) ---
+  Done in 0.0s. Genomic cline fit: success=True, logL=-52.328, AICc=108.875, n=58, k=2
+           u =     0.1801  (SE 0.6187, 95% CI [-1.0325, 1.3927])
+           v =     0.6882  (SE 0.3911, 95% CI [-0.0784, 1.4548])
   interpretation: shallower than genome-wide average (elevated introgression)
 
 3/3 loci fit successfully.
 
-All output written to: results/
+All output written to: /path/to/results
   hycline_summary.csv        -- one row per locus: u, v, statistics
   hycline_fitted_curves.csv  -- fitted curve points, every locus (long format)
   hycline_overlay.png        -- one fitted-curve line per locus, shared axes
   hycline_run_config.json    -- the exact settings used (for reproducibility)
 ```
 
-`u` (bias, shifts the cline's center along the hybrid-index axis) and `v`
-(rate, steepness -- `v=1, u=0` is the neutral expectation) are the two
-fitted parameters. This particular `aim_neutral` result is a useful,
-honest illustration of finite-sample variability worth keeping in mind:
-the true simulated locus was exactly neutral (`u=0, v=1`), and at
-`n`=60 individuals it still came back with a 95% CI that excludes `v=1`
--- genomic cline parameter estimates are noisier than they might look,
-and any single locus's fit should be interpreted with real caution unless
-corroborated by pooling across many loci (see Step 4's hierarchical
-option below) or replication.
+`u` (bias) and `v` (rate, steepness) describe phi(h), the probability
+that an allele copy at the locus derives from parental population 1;
+`v = 1, u = 0` is the neutral expectation phi(h) = h. The locus's allele
+frequency is `p0 + (p1 - p0) * phi(h)`, so u and v mean the same thing
+whichever allele is counted and however differentiated the locus is.
+(HyCline writes the cline as logit(phi) = u + v logit(h); gghybrid's
+u has the opposite sign.) The summary CSV records each locus's
+`parental_freq_pop0`/`parental_freq_pop1`; the fitted-curves CSV has
+both `fitted_freq` (the allele frequency) and `fitted_ancestry` (phi),
+and the overlay plot shows the ancestry curves, which are comparable
+across loci with different parental frequencies.
+
+**Single-locus estimates are noisy.** All three loci above are neutral,
+yet the "interpretation" lines read their point estimates as steeper or
+shallower than average; every 95% CI includes v = 1. Across all 1000
+neutral loci in this example, the median fit was u = 0.02, v = 1.07;
+1.5% had a 95% interval for u excluding 0 and 6.5% one for v excluding 1
+(5% expected for each), and 2 loci fitted at the lower bound of v. From
+beagle input at depth 5 the intervals for v were narrower than they
+should be: 9% of neutral loci had one excluding v = 1.
+Part of that comes from the parental frequencies and hybrid indices
+being estimates treated as exact, the same simplification gghybrid
+makes. Interpret any single locus with caution unless it is
+corroborated by pooling across loci (the hierarchical option below) or
+replication.
 
 The summary is always a per-locus table, even for a single-locus input.
 The plot is always a single set of axes with one fitted-curve line per
@@ -444,7 +479,9 @@ partially pooled across loci via shared population-level priors --
 sparse or noisy loci borrow statistical strength from data-rich ones,
 rather than each locus being fit fully independently the way
 `fit-genomic` does. Same auto-detection between hard counts and
-genotype likelihoods as `fit-genomic`.
+genotype likelihoods as `fit-genomic`, and the same use of each locus's
+`.p0`/`.p1` parental frequencies, which are recorded in the locus
+summary. Every locus must have data for the same individuals.
 
 ```bash
 hycline fit-hierarchical-genomic --input converted.csv --individual-col individual \

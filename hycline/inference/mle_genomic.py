@@ -62,8 +62,10 @@ def _initial_guess(data: HybridIndexLocusData) -> GenomicClineParams:
     """Data-driven starting values, same motivation as
     hycline.inference.mle._initial_guess: land the optimizer in a
     reasonable basin rather than relying on generic defaults."""
-    # crude initial u: logit of the observed frequency at h close to 0.5
-    freq = data.observed_freq
+    # crude initial u: logit of the observed ancestry proportion at h close
+    # to 0.5, i.e. the observed frequency mapped onto the phi scale
+    p0, p1 = data.parental_freq_pop0, data.parental_freq_pop1
+    freq = (data.observed_freq - p0) / (p1 - p0)
     mid_mask = np.abs(data.hybrid_index - 0.5) < 0.25
     if np.any(mid_mask):
         mid_freq = np.clip(np.mean(freq[mid_mask]), 0.02, 0.98)

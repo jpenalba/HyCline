@@ -64,7 +64,30 @@ def _genomic_cline_core_jax(h, u, v):
     return 1.0 / (1.0 + jnp.exp(-z))
 
 
+def _parental_allele_freq_jax(phi, p0, p1):
+    """Allele frequency p0 + (p1 - p0) * phi for (n_loci, n_individuals) phi
+    and per-locus (n_loci,) parental frequencies -- the JAX counterpart of
+    `hycline.models.genomic_cline.genomic_cline_allele_freq`."""
+    return p0[:, None] + (p1 - p0)[:, None] * phi
+
+
+def _parental_freq_arrays(n_loci, parental_freq_pop0, parental_freq_pop1):
+    """Per-locus parental-frequency arrays; None means 0 and 1 for every
+    locus (the counted allele treated as fully diagnostic)."""
+    p0 = np.zeros(n_loci) if parental_freq_pop0 is None else np.asarray(parental_freq_pop0, float)
+    p1 = np.ones(n_loci) if parental_freq_pop1 is None else np.asarray(parental_freq_pop1, float)
+    if p0.shape != (n_loci,) or p1.shape != (n_loci,):
+        raise ValueError("parental frequency arrays must have one entry per locus")
+    if np.any((p0 < 0) | (p0 > 1) | (p1 < 0) | (p1 > 1)):
+        raise ValueError("parental frequencies must be in [0, 1]")
+    if np.any(p0 == p1):
+        raise ValueError("a locus has equal parental frequencies, so its cline is not "
+                         "identifiable -- drop it before fitting")
+    return jnp.asarray(p0), jnp.asarray(p1)
+
+
 def _hierarchical_genomic_batch_model(hybrid_index, n_alleles, n_focal, n_loci,
+                                       p0, p1,
                                        mu_u_scale, sigma_u_scale,
                                        mu_log_v_loc, mu_log_v_scale, sigma_log_v_scale,
                                        pool_center: bool = False,
@@ -102,8 +125,8 @@ def _hierarchical_genomic_batch_model(hybrid_index, n_alleles, n_focal, n_loci,
         v = jnp.exp(log_v)
 
     phi = _genomic_cline_core_jax(hybrid_index[None, :], u[:, None], v[:, None])
-    phi = jnp.clip(phi, _EPS, 1.0 - _EPS)
-    numpyro.sample("obs", dist.Binomial(total_count=n_alleles, probs=phi), obs=n_focal)
+    p = jnp.clip(_parental_allele_freq_jax(phi, p0, p1), _EPS, 1.0 - _EPS)
+    numpyro.sample("obs", dist.Binomial(total_count=n_alleles, probs=p), obs=n_focal)
 
 
 @dataclass
@@ -192,6 +215,8 @@ def fit_hierarchical_genomic_batch(hybrid_index: np.ndarray, n_alleles: np.ndarr
                                     sigma_log_v_scale: float = 1.0,
                                     pool_center: bool = False,
                                     mu_center_scale: float = 2.0, sigma_center_scale: float = 2.0,
+                                    parental_freq_pop0: Optional[np.ndarray] = None,
+                                    parental_freq_pop1: Optional[np.ndarray] = None,
                                     num_warmup: int = 1500, num_samples: int = 1500,
                                     num_chains: int = 4, seed: int = 0
                                     ) -> HierarchicalGenomicFitResult:
@@ -254,6 +279,11 @@ def fit_hierarchical_genomic_batch(hybrid_index: np.ndarray, n_alleles: np.ndarr
         across-locus SD of logit(center) -- this is what directly answers
         the same question Firneno et al.'s own sigma_c does. Only used if
         `pool_center=True`.
+    parental_freq_pop0, parental_freq_pop1 : optional (n_loci,) arrays of
+        the counted allele's frequency in parental populations 0 and 1;
+        the expected frequency is p0 + (p1 - p0) * phi(h) (see
+        `hycline.models.genomic_cline.genomic_cline_allele_freq`). Default
+        0 and 1 for every locus.
     num_warmup, num_samples, num_chains, seed : standard NUTS/MCMC controls
 
     Returns
@@ -261,6 +291,7 @@ def fit_hierarchical_genomic_batch(hybrid_index: np.ndarray, n_alleles: np.ndarr
     HierarchicalGenomicFitResult
     """
     n_loci = n_alleles.shape[0]
+    p0, p1 = _parental_freq_arrays(n_loci, parental_freq_pop0, parental_freq_pop1)
     if locus_names is None:
         locus_names = [f"locus_{i}" for i in range(n_loci)]
 
@@ -270,7 +301,7 @@ def fit_hierarchical_genomic_batch(hybrid_index: np.ndarray, n_alleles: np.ndarr
     rng_key = jax.random.PRNGKey(seed)
     mcmc.run(rng_key,
               hybrid_index=jnp.asarray(hybrid_index), n_alleles=jnp.asarray(n_alleles),
-              n_focal=jnp.asarray(n_focal), n_loci=n_loci,
+              n_focal=jnp.asarray(n_focal), n_loci=n_loci, p0=p0, p1=p1,
               mu_u_scale=mu_u_scale, sigma_u_scale=sigma_u_scale,
               mu_log_v_loc=mu_log_v_loc, mu_log_v_scale=mu_log_v_scale,
               sigma_log_v_scale=sigma_log_v_scale, pool_center=pool_center,

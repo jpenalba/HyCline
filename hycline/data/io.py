@@ -431,6 +431,35 @@ def detect_genomic_loci(df: pd.DataFrame, n_alleles_suffix: str = ".n",
     return loci
 
 
+PARENTAL_FREQ_SUFFIXES = (".p0", ".p1")
+
+
+def _locus_parental_freqs(df: pd.DataFrame, path: str, locus: str) -> tuple[float, float]:
+    """A locus's parental frequencies from its '{locus}.p0'/'{locus}.p1'
+    columns (written by `generate-genomic-input` when parental reference
+    individuals or frequencies are given): the counted allele's frequency
+    in parental populations 0 and 1, constant down the column. Without
+    those columns the locus gets 0 and 1 -- the counted allele treated as
+    fully diagnostic of parental population 1."""
+    cols = [f"{locus}{s}" for s in PARENTAL_FREQ_SUFFIXES]
+    present = [c in df.columns for c in cols]
+    if not any(present):
+        return 0.0, 1.0
+    if not all(present):
+        raise TransectCSVError(
+            f"Locus '{locus}' in '{path}' has only one of '{cols[0]}'/'{cols[1]}'; "
+            f"parental frequencies need both columns.")
+    values = []
+    for c in cols:
+        v = pd.to_numeric(df[c], errors="coerce").dropna().unique()
+        if len(v) != 1:
+            raise TransectCSVError(
+                f"Column '{c}' in '{path}' must hold one parental frequency for the "
+                f"whole locus (found {len(v)} distinct values).")
+        values.append(float(v[0]))
+    return values[0], values[1]
+
+
 def read_genomic_cline_multi_locus_wide_csv(
         path: str,
         hybrid_index_col: str = "hybrid_index",
@@ -443,7 +472,9 @@ def read_genomic_cline_multi_locus_wide_csv(
 ) -> dict[str, HybridIndexLocusData]:
     """Read a wide-format multi-locus genomic cline CSV: one row per
     individual, a hybrid-index column, and for each locus L, columns
-    '{L}{n_alleles_suffix}' and '{L}{freq_suffix}' (or '{L}{n_focal_suffix}').
+    '{L}{n_alleles_suffix}' and '{L}{freq_suffix}' (or '{L}{n_focal_suffix}'),
+    plus optional '{L}.p0'/'{L}.p1' parental frequencies (see
+    `_locus_parental_freqs`).
 
     If a locus has no explicit '{L}{n_alleles_suffix}' column pattern
     matched (i.e. you're relying on `ploidy` instead of per-locus sample
@@ -522,9 +553,11 @@ def read_genomic_cline_multi_locus_wide_csv(
                              if individual_names_full is not None else None)
 
         try:
+            p0, p1 = _locus_parental_freqs(df, path, locus)
             results[locus] = HybridIndexLocusData(
                 hybrid_index=hybrid_index[mask], n_alleles=n_alleles[mask],
                 n_focal=n_focal[mask], individual_names=individual_names,
+                parental_freq_pop0=p0, parental_freq_pop1=p1,
             )
         except ValueError as e:
             raise TransectCSVError(f"Problem with locus '{locus}' data in '{path}': {e}")
@@ -756,7 +789,9 @@ def read_genomic_gl_multi_locus_wide_csv(
     clines: one row per individual, a hybrid-index column, and for each
     locus L, three columns holding natural-log genotype likelihoods
     (or Phred-scaled PL values, with `phred=True`) -- the genomic-cline
-    analog of `read_gl_multi_locus_wide_csv`.
+    analog of `read_gl_multi_locus_wide_csv`. Optional '{L}.p0'/'{L}.p1'
+    columns give each locus's parental frequencies (see
+    `_locus_parental_freqs`).
 
     Feeds `hycline.inference.mcmc_genomic_hierarchical_gl.
     fit_hierarchical_genomic_batch_gl` (Phase 4 Component E).
@@ -810,9 +845,11 @@ def read_genomic_gl_multi_locus_wide_csv(
                              if individual_names_full is not None else None)
 
         try:
+            p0, p1 = _locus_parental_freqs(df, path, locus)
             results[locus] = GenotypeLikelihoodLocusData(
                 hybrid_index=hybrid_index[mask], log_gl0=gl0[mask], log_gl1=gl1[mask],
                 log_gl2=gl2[mask], individual_names=individual_names,
+                parental_freq_pop0=p0, parental_freq_pop1=p1,
             )
         except ValueError as e:
             raise TransectCSVError(f"Problem with locus '{locus}' data in '{path}': {e}")

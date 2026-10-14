@@ -430,7 +430,11 @@ full investigation.
 - `hycline.data.vcf` -- a pure-Python VCF parser (no `pysam`/`cyvcf2`
   dependency) underlying the `generate-geographic-input`/`generate-genomic-input` CLI
   commands, converting a VCF + metadata CSV directly into any of this
-  project's CSV formats. Validated end to end against known ground truth,
+  project's CSV formats. `generate-genomic-input` also writes each locus's
+  parental frequencies (`<locus>.p0`/`.p1`, from labelled reference
+  individuals or `--parental-freq-csv`) and by default leaves the
+  reference individuals out of the cline input, as gghybrid's `ggcline`
+  does. Validated end to end against known ground truth,
   not just unit tests on hand-crafted fixtures: a synthetic geographic
   cline (true center=70, width=25) converted through the full VCF ->
   CSV -> `fit-geographic` pipeline recovered center=75.0; a synthetic genomic
@@ -572,7 +576,16 @@ catching a real problem on real data.
   (Fitzpatrick 2013): locus ancestry as a function of genome-wide hybrid
   index, `logit(phi(h)) = u + v*logit(h)`. A genuinely different model
   from the geographic cline above, not a relabeled version of it -- see
-  BACKEND_PHASE3.md section 2.
+  BACKEND_PHASE3.md section 2. Each locus's allele frequency is
+  `p0 + (p1 - p0) * phi(h)` with p0/p1 its parental frequencies
+  (`genomic_cline_allele_freq`; the form gghybrid uses, Bailey 2023), in
+  every fitting path: independent MLE (hard counts and genotype
+  likelihoods) and hierarchical NUTS. Loci needn't be fixed or polarized;
+  without parental frequencies p0 = 0, p1 = 1. On simulated data where
+  every locus is neutral, 1000 loci of both polarities and any
+  differentiation fitted at median u = 0.02, v = 1.07, where without
+  parental frequencies every reversed locus sat at the v lower bound
+  (BACKEND_PHASE3.md section 5).
 - `hycline.data.schema.HybridIndexLocusData` -- per-individual data
   container (the genomic-cline analog of `AlleleFreqTransect`).
 - `hycline.data.hybrid_index.estimate_hybrid_index_ml` -- maximum-
@@ -591,11 +604,9 @@ catching a real problem on real data.
   section 5).
 - `hycline.data.hybrid_index.estimate_hybrid_index` -- the simpler
   mean-dosage estimator (loci oriented by the parental frequencies,
-  optionally weighted by differentiation), the default (`--method mean`).
-- `hycline estimate-hybrid-index` -- the CLI command (`--method mean`
-  default, or `ml`; `ml` output isn't usable as genomic-cline input yet,
-  because the cline model can't accommodate parental references at
-  exactly h = 0 or 1), in two mutually exclusive modes: compute parental
+  optionally weighted by differentiation), as `--method mean`.
+- `hycline estimate-hybrid-index` -- the CLI command (`--method ml`
+  default, or `mean`), in two mutually exclusive modes: compute parental
   allele frequencies directly from labeled reference individuals in your
   own genotype file (pooled maximum-likelihood frequencies for beagle
   input), or supply them precomputed via `--parental-freq-csv`. Writes

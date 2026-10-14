@@ -860,7 +860,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "estimate-hybrid-index",
         help="Estimate genome-wide hybrid index from a VCF or ANGSD beagle file.",
         description="Estimate each individual's genome-wide hybrid index (the x-axis "
-                     "variable genomic cline fitting needs). --method ml is "
+                     "variable genomic cline fitting needs). The default --method ml is "
                      "the maximum-likelihood hybrid index: each locus's allele frequency "
                      "in an individual with hybrid index h is (1 - h) * p0 + h * p1 from "
                      "the two parental frequencies, genotypes follow Hardy-Weinberg "
@@ -870,7 +870,7 @@ def _build_parser() -> argparse.ArgumentParser:
                      "out). It needs no allele polarization, models partially "
                      "differentiated loci instead of treating every locus as "
                      "diagnostic, and reports a 95% likelihood-profile interval per "
-                     "individual. --method mean (the default) is the simpler mean-dosage estimator "
+                     "individual. --method mean is the simpler mean-dosage estimator "
                      "(loci oriented by the parental frequencies), which is pulled "
                      "toward 0.5 by partially differentiated loci and, for beagle input, "
                      "by low depth. Neither propagates uncertainty in h into later "
@@ -949,12 +949,11 @@ def _build_parser() -> argparse.ArgumentParser:
     ehi_g.add_argument("--max-variants", type=int, default=None,
                         help="[VCF input only] Optional cap on the number of biallelic "
                              "SNPs to parse. Ignored for beagle input.")
-    ehi_p.add_argument("--method", choices=["ml", "mean"], default="mean",
-                        help="mean (default): mean oriented dosage across loci. ml: "
-                             "maximum-likelihood hybrid index with a 95%% likelihood-"
-                             "profile interval; places parental references at exactly "
-                             "0 or 1, which the current genomic-cline model cannot "
-                             "use (see the Genomic guide, Step 2).")
+    ehi_p.add_argument("--method", choices=["ml", "mean"], default="ml",
+                        help="ml (default): maximum-likelihood hybrid index with a 95%% "
+                             "likelihood-profile interval. mean: mean oriented dosage "
+                             "across loci, which is pulled toward 0.5 by partially "
+                             "differentiated loci and low depth.")
     ehi_g.add_argument("--weight-by-differentiation", action="store_true",
                         help="[--method mean only] Weight each locus's contribution by how differentiated "
                              "it is between the two parental populations (a locus with "
@@ -1069,7 +1068,15 @@ def _build_parser() -> argparse.ArgumentParser:
                      "likelihood, regardless of what variant caller produced it. Format "
                      "is auto-detected from the file extension unless --format is given. "
                      "Don't have hybrid index yet? Run 'hycline estimate-hybrid-index' "
-                     "first and merge its output into your metadata by individual name.",
+                     "first and merge its output into your metadata by individual name. "
+                     "Give the parental populations' allele frequencies, either from "
+                     "labelled reference individuals (--population-col/--pop0-label/"
+                     "--pop1-label) or precomputed (--parental-freq-csv): the genomic "
+                     "cline then models each locus's allele frequency as p0 + (p1 - p0) "
+                     "* phi(h) (Bailey 2023, gghybrid), so loci needn't be fixed or "
+                     "polarized. Without them every locus is treated as fixed for the "
+                     "counted allele in parental population 1, which is only right for "
+                     "fixed, polarized markers.",
     )
     ggni_p.add_argument("--input", required=True, metavar="FILE",
                          help="VCF file (.vcf or .vcf.gz) or ANGSD beagle-format file "
@@ -1095,6 +1102,42 @@ def _build_parser() -> argparse.ArgumentParser:
     ggni_p.add_argument("--max-variants", type=int, default=None,
                          help="[VCF input only] Optional cap on the number of biallelic "
                               "SNPs to parse. Ignored for beagle input.")
+    ggni_par = ggni_p.add_argument_group(
+        "parental allele frequencies",
+        "Each locus's ALT (VCF) or allele2 (beagle) frequency in the two parental "
+        "populations, written as '<locus>.p0'/'<locus>.p1' columns and used by "
+        "fit-genomic/fit-hierarchical-genomic. Frequencies are clipped to "
+        "[0.001, 0.999]; loci with equal or unknown parental frequencies are left "
+        "out.")
+    ggni_par.add_argument("--population-col", default=None,
+                          help="[Mode 1] Column holding population labels, in "
+                               "--parental-metadata (default: --metadata).")
+    ggni_par.add_argument("--pop0-label", default=None,
+                          help="[Mode 1] Label of parental population 0's reference "
+                               "individuals.")
+    ggni_par.add_argument("--pop1-label", default=None,
+                          help="[Mode 1] Label of parental population 1's reference "
+                               "individuals.")
+    ggni_par.add_argument("--parental-metadata", default=None, metavar="FILE.csv",
+                          help="[Mode 1] CSV with --sample-col and --population-col, if "
+                               "the population labels aren't in --metadata.")
+    ggni_par.add_argument("--include-parentals", action="store_true",
+                          help="[Mode 1] Keep the parental reference individuals in the "
+                               "output. By default they are left out, as gghybrid's "
+                               "ggcline does by default: the clines are fitted to the "
+                               "test individuals.")
+    ggni_par.add_argument("--parental-freq-csv", default=None, metavar="FILE.csv",
+                          help="[Mode 2] CSV of precomputed per-locus parental "
+                               "frequencies (the same format estimate-hybrid-index "
+                               "takes).")
+    ggni_par.add_argument("--freq-locus-col", default="locus",
+                          help="[Mode 2] Locus-name column (default: locus).")
+    ggni_par.add_argument("--freq-pop0-col", default="freq_pop0",
+                          help="[Mode 2] Parental population 0 frequency column "
+                               "(default: freq_pop0).")
+    ggni_par.add_argument("--freq-pop1-col", default="freq_pop1",
+                          help="[Mode 2] Parental population 1 frequency column "
+                               "(default: freq_pop1).")
     ggni_p.add_argument("--output", required=True, metavar="FILE.csv",
                          help="Path to write the converted CSV to.")
 
@@ -2347,6 +2390,29 @@ def _fit_geographic_gl(args, out_dir, prefix) -> int:
     return 0
 
 
+def _genomic_curve_rows(locus_name, params, p0, p1, h_smooth) -> list[dict]:
+    """Fitted-curve points for one locus: the counted allele's expected
+    frequency p0 + (p1 - p0) * phi(h) and the ancestry curve phi(h)."""
+    from hycline.models.genomic_cline import genomic_cline_function
+    phi = genomic_cline_function(h_smooth, params)
+    freq = p0 + (p1 - p0) * phi
+    return [{"locus": locus_name, "hybrid_index": h, "fitted_freq": f, "fitted_ancestry": a}
+            for h, f, a in zip(h_smooth, freq, phi)]
+
+
+def _overlay_ancestry_curves(curve_df, out_path):
+    """Overlay plot of every locus's ancestry curve phi(h) -- comparable
+    across loci regardless of their parental allele frequencies."""
+    import matplotlib.pyplot as plt
+    from hycline.viz.plotting import plot_multi_locus_overlay
+    curves = {locus: (g["hybrid_index"].to_numpy(), g["fitted_ancestry"].to_numpy())
+              for locus, g in curve_df.groupby("locus", sort=False)}
+    fig = plot_multi_locus_overlay(curves, xlabel="Hybrid index",
+                                    ylabel="Locus ancestry phi(h)")
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
 def cmd_fit_genomic(args) -> int:
     if not Path(args.input).exists():
         print(f"\nERROR: input file not found: '{args.input}'\n", file=sys.stderr)
@@ -2366,8 +2432,6 @@ def cmd_fit_genomic(args) -> int:
 
 def _fit_genomic_hard_count(args, out_dir, prefix) -> int:
     from hycline.inference.mle_genomic import fit_genomic_cline_mle
-    from hycline.models.genomic_cline import genomic_cline_function
-    from hycline.viz.plotting import plot_multi_locus_overlay
 
     all_data = _load_genomic_multi_locus_data(args)
     print(f"  {len(all_data)} loci detected: {_format_loci_list(all_data.keys())}")
@@ -2391,14 +2455,14 @@ def _fit_genomic_hard_count(args, out_dir, prefix) -> int:
         elapsed = time.time() - t0
         print(f"  Done in {elapsed:.1f}s. {fit.summary()}")
 
-        phi_smooth = genomic_cline_function(h_smooth, fit.params)
-        for h, phi in zip(h_smooth, phi_smooth):
-            curve_rows.append({"locus": locus_name, "hybrid_index": h, "fitted_freq": phi})
+        p0, p1 = data.parental_freq_pop0, data.parental_freq_pop1
+        curve_rows.extend(_genomic_curve_rows(locus_name, fit.params, p0, p1, h_smooth))
 
         row = {
             "locus": locus_name, "n_obs": fit.n_obs, "converged": fit.success,
             "log_likelihood": fit.log_likelihood, "aicc": fit.aicc,
             "u": fit.params.u, "v": fit.params.v,
+            "parental_freq_pop0": p0, "parental_freq_pop1": p1,
         }
         if fit.std_errors is not None:
             for i, name in enumerate(["u", "v"]):
@@ -2418,13 +2482,7 @@ def _fit_genomic_hard_count(args, out_dir, prefix) -> int:
         (out_dir / f"{prefix}_failures.json").write_text(json.dumps(failures, indent=2))
 
     if args.plot_grid and not args.no_plot and len(curve_df) > 0:
-        curves = {locus: (g["hybrid_index"].to_numpy(), g["fitted_freq"].to_numpy())
-                  for locus, g in curve_df.groupby("locus", sort=False)}
-        fig = plot_multi_locus_overlay(curves, xlabel="Hybrid index",
-                                        ylabel="Locus ancestry (focal-allele frequency)")
-        fig.savefig(out_dir / f"{prefix}_overlay.png", dpi=150)
-        import matplotlib.pyplot as plt
-        plt.close(fig)
+        _overlay_ancestry_curves(curve_df, out_dir / f"{prefix}_overlay.png")
 
     run_config = {k: v for k, v in vars(args).items()}
     run_config["hycline_command"] = "fit-genomic"
@@ -2578,7 +2636,6 @@ def cmd_fit_hierarchical_genomic(args) -> int:
 def _fit_hierarchical_genomic_hard_count(args, out_dir, prefix) -> int:
     from hycline.inference.mcmc_genomic_hierarchical import fit_hierarchical_genomic_batch
     from hycline.diagnostics.convergence import check
-    from hycline.viz.plotting import plot_multi_locus_overlay
 
     all_data = _load_genomic_multi_locus_data(args)
     print(f"  {len(all_data)} loci detected: {_format_loci_list(all_data.keys())}")
@@ -2593,8 +2650,11 @@ def _fit_hierarchical_genomic_hard_count(args, out_dir, prefix) -> int:
     print(f"\nFitting hierarchically ({args.num_chains} chains, {args.num_warmup} warmup, "
           f"{args.num_samples} samples) -- this can take a while for many loci ...")
     t0 = time.time()
+    p0 = np.array([all_data[name].parental_freq_pop0 for name in locus_names])
+    p1 = np.array([all_data[name].parental_freq_pop1 for name in locus_names])
     result = fit_hierarchical_genomic_batch(
         hybrid_index, n_alleles, n_focal, locus_names=locus_names,
+        parental_freq_pop0=p0, parental_freq_pop1=p1,
         mu_u_scale=args.mu_u_scale, sigma_u_scale=args.sigma_u_scale,
         mu_log_v_loc=args.mu_log_v_loc, mu_log_v_scale=args.mu_log_v_scale,
         sigma_log_v_scale=args.sigma_log_v_scale,
@@ -2616,6 +2676,8 @@ def _fit_hierarchical_genomic_hard_count(args, out_dir, prefix) -> int:
     pop_df = result.population_summary()
     pop_df.to_csv(out_dir / f"{prefix}_hierarchical_population_summary.csv")
     locus_df = result.locus_summary()
+    locus_df["parental_freq_pop0"] = p0
+    locus_df["parental_freq_pop1"] = p1
     locus_df.to_csv(out_dir / f"{prefix}_hierarchical_locus_summary.csv", index=False)
 
     (out_dir / f"{prefix}_hierarchical_summary.txt").write_text(
@@ -2634,26 +2696,18 @@ def _fit_hierarchical_genomic_hard_count(args, out_dir, prefix) -> int:
     (out_dir / f"{prefix}_hierarchical_summary.json").write_text(
         json.dumps(summary_json, indent=2, default=str))
 
-    from hycline.models.genomic_cline import GenomicClineParams, genomic_cline_function
+    from hycline.models.genomic_cline import GenomicClineParams
     h_smooth = np.linspace(0.001, 0.999, 200)
     curve_rows = []
-    for name in locus_names:
+    for i, name in enumerate(locus_names):
         row = locus_df[locus_df["locus"] == name].iloc[0]
         params = GenomicClineParams(u=row["u_mean"], v=row["v_mean"])
-        phi_smooth = genomic_cline_function(h_smooth, params)
-        for h, phi in zip(h_smooth, phi_smooth):
-            curve_rows.append({"locus": name, "hybrid_index": h, "fitted_freq": phi})
+        curve_rows.extend(_genomic_curve_rows(name, params, p0[i], p1[i], h_smooth))
     curve_df = pd.DataFrame(curve_rows)
     curve_df.to_csv(out_dir / f"{prefix}_hierarchical_fitted_curves.csv", index=False)
 
     if args.plot_grid and not args.no_plot:
-        import matplotlib.pyplot as plt
-        curves = {locus: (g["hybrid_index"].to_numpy(), g["fitted_freq"].to_numpy())
-                  for locus, g in curve_df.groupby("locus", sort=False)}
-        fig = plot_multi_locus_overlay(curves, xlabel="Hybrid index",
-                                        ylabel="Locus ancestry (focal-allele frequency)")
-        fig.savefig(out_dir / f"{prefix}_hierarchical_overlay.png", dpi=150)
-        plt.close(fig)
+        _overlay_ancestry_curves(curve_df, out_dir / f"{prefix}_hierarchical_overlay.png")
 
     run_config = {k: v for k, v in vars(args).items()}
     run_config["hycline_command"] = "fit-hierarchical-genomic"
@@ -2774,7 +2828,6 @@ def _fit_hierarchical_geographic_gl(args, out_dir, prefix) -> int:
 def _fit_hierarchical_genomic_gl(args, out_dir, prefix) -> int:
     from hycline.inference.mcmc_genomic_hierarchical_gl import fit_hierarchical_genomic_batch_gl
     from hycline.diagnostics.convergence import check
-    from hycline.viz.plotting import plot_multi_locus_overlay
 
     all_data = _load_genomic_gl_multi_locus_data(args)
     print(f"  {len(all_data)} loci detected: {_format_loci_list(all_data.keys())}")
@@ -2789,8 +2842,11 @@ def _fit_hierarchical_genomic_gl(args, out_dir, prefix) -> int:
     print(f"\nFitting hierarchically ({args.num_chains} chains, {args.num_warmup} warmup, "
           f"{args.num_samples} samples) -- this can take a while for many loci ...")
     t0 = time.time()
+    p0 = np.array([all_data[name].parental_freq_pop0 for name in locus_names])
+    p1 = np.array([all_data[name].parental_freq_pop1 for name in locus_names])
     result = fit_hierarchical_genomic_batch_gl(
         hybrid_index, log_gl0, log_gl1, log_gl2, locus_names=locus_names,
+        parental_freq_pop0=p0, parental_freq_pop1=p1,
         mu_u_scale=args.mu_u_scale, sigma_u_scale=args.sigma_u_scale,
         mu_log_v_loc=args.mu_log_v_loc, mu_log_v_scale=args.mu_log_v_scale,
         sigma_log_v_scale=args.sigma_log_v_scale,
@@ -2809,6 +2865,8 @@ def _fit_hierarchical_genomic_gl(args, out_dir, prefix) -> int:
     pop_df = result.population_summary()
     pop_df.to_csv(out_dir / f"{prefix}_hierarchical_population_summary.csv")
     locus_df = result.locus_summary()
+    locus_df["parental_freq_pop0"] = p0
+    locus_df["parental_freq_pop1"] = p1
     locus_df.to_csv(out_dir / f"{prefix}_hierarchical_locus_summary.csv", index=False)
 
     (out_dir / f"{prefix}_hierarchical_summary.txt").write_text(
@@ -2827,26 +2885,18 @@ def _fit_hierarchical_genomic_gl(args, out_dir, prefix) -> int:
     (out_dir / f"{prefix}_hierarchical_summary.json").write_text(
         json.dumps(summary_json, indent=2, default=str))
 
-    from hycline.models.genomic_cline import GenomicClineParams, genomic_cline_function
+    from hycline.models.genomic_cline import GenomicClineParams
     h_smooth = np.linspace(0.001, 0.999, 200)
     curve_rows = []
-    for name in locus_names:
+    for i, name in enumerate(locus_names):
         row = locus_df[locus_df["locus"] == name].iloc[0]
         params = GenomicClineParams(u=row["u_mean"], v=row["v_mean"])
-        phi_smooth = genomic_cline_function(h_smooth, params)
-        for h, phi in zip(h_smooth, phi_smooth):
-            curve_rows.append({"locus": name, "hybrid_index": h, "fitted_freq": phi})
+        curve_rows.extend(_genomic_curve_rows(name, params, p0[i], p1[i], h_smooth))
     curve_df = pd.DataFrame(curve_rows)
     curve_df.to_csv(out_dir / f"{prefix}_hierarchical_fitted_curves.csv", index=False)
 
     if args.plot_grid and not args.no_plot:
-        import matplotlib.pyplot as plt
-        curves = {locus: (g["hybrid_index"].to_numpy(), g["fitted_freq"].to_numpy())
-                  for locus, g in curve_df.groupby("locus", sort=False)}
-        fig = plot_multi_locus_overlay(curves, xlabel="Hybrid index",
-                                        ylabel="Locus ancestry (focal-allele frequency)")
-        fig.savefig(out_dir / f"{prefix}_hierarchical_overlay.png", dpi=150)
-        plt.close(fig)
+        _overlay_ancestry_curves(curve_df, out_dir / f"{prefix}_hierarchical_overlay.png")
 
     run_config = {k: v for k, v in vars(args).items()}
     run_config["hycline_command"] = "fit-hierarchical-genomic"
@@ -2930,8 +2980,6 @@ def cmd_coupling_genomic(args) -> int:
 
 def _fit_genomic_gl(args, out_dir, prefix) -> int:
     from hycline.inference.mle_genotype_likelihood import fit_mle_genomic_gl
-    from hycline.models.genomic_cline import genomic_cline_function
-    from hycline.viz.plotting import plot_multi_locus_overlay
 
     all_data = _load_genomic_gl_multi_locus_data(args)
     print(f"  {len(all_data)} loci detected: {_format_loci_list(all_data.keys())}")
@@ -2954,14 +3002,14 @@ def _fit_genomic_gl(args, out_dir, prefix) -> int:
         elapsed = time.time() - t0
         print(f"  Done in {elapsed:.1f}s. {fit.summary()}")
 
-        phi_smooth = genomic_cline_function(h_smooth, fit.params)
-        for h, phi in zip(h_smooth, phi_smooth):
-            curve_rows.append({"locus": locus_name, "hybrid_index": h, "fitted_freq": phi})
+        p0, p1 = data.parental_freq_pop0, data.parental_freq_pop1
+        curve_rows.extend(_genomic_curve_rows(locus_name, fit.params, p0, p1, h_smooth))
 
         row = {
             "locus": locus_name, "n_obs": fit.n_obs, "converged": fit.success,
             "log_likelihood": fit.log_likelihood, "aicc": fit.aicc,
             "u": fit.params.u, "v": fit.params.v,
+            "parental_freq_pop0": p0, "parental_freq_pop1": p1,
         }
         if fit.std_errors is not None:
             for i, name in enumerate(["u", "v"]):
@@ -2981,13 +3029,7 @@ def _fit_genomic_gl(args, out_dir, prefix) -> int:
         (out_dir / f"{prefix}_failures.json").write_text(json.dumps(failures, indent=2))
 
     if args.plot_grid and not args.no_plot and len(curve_df) > 0:
-        import matplotlib.pyplot as plt
-        curves = {locus: (g["hybrid_index"].to_numpy(), g["fitted_freq"].to_numpy())
-                  for locus, g in curve_df.groupby("locus", sort=False)}
-        fig = plot_multi_locus_overlay(curves, xlabel="Hybrid index",
-                                        ylabel="Locus ancestry (focal-allele frequency)")
-        fig.savefig(out_dir / f"{prefix}_overlay.png", dpi=150)
-        plt.close(fig)
+        _overlay_ancestry_curves(curve_df, out_dir / f"{prefix}_overlay.png")
 
     run_config = {k: v for k, v in vars(args).items()}
     run_config["hycline_command"] = "fit-genomic"
@@ -3346,6 +3388,79 @@ def cmd_generate_geographic_input(args) -> int:
     return 0
 
 
+_PARENTAL_FREQ_FLOOR = 1e-3
+
+
+def _genomic_parental_freqs(args, fmt, data, metadata_df):
+    """Parental frequencies for generate-genomic-input. Returns
+    (parental_freqs or None, reference sample names to exclude, error
+    message or None). Frequencies are of the VCF ALT / beagle allele2."""
+    import pandas as pd
+    mode1 = args.population_col is not None
+    mode2 = args.parental_freq_csv is not None
+    if mode1 and mode2:
+        return None, [], ("--population-col and --parental-freq-csv are mutually "
+                          "exclusive -- give at most one.")
+    if not (mode1 or mode2):
+        return None, [], None
+    locus_names = list(data.locus_names if fmt == "vcf" else data.marker_names)
+
+    if mode1:
+        if args.pop0_label is None or args.pop1_label is None:
+            return None, [], "--population-col requires --pop0-label and --pop1-label."
+        labels_df = metadata_df
+        if args.parental_metadata is not None:
+            if not Path(args.parental_metadata).exists():
+                return None, [], f"--parental-metadata file not found: '{args.parental_metadata}'"
+            labels_df = pd.read_csv(args.parental_metadata)
+        from hycline.data.filter_aims import match_samples_to_populations
+        try:
+            pop0_mask, pop1_mask = match_samples_to_populations(
+                list(data.sample_names), labels_df, args.sample_col, args.population_col,
+                args.pop0_label, args.pop1_label)
+        except ValueError as e:
+            return None, [], str(e)
+        print(f"  Parental frequencies from {pop0_mask.sum()} '{args.pop0_label}' and "
+              f"{pop1_mask.sum()} '{args.pop1_label}' reference individuals.")
+        if fmt == "vcf":
+            with np.errstate(invalid="ignore"):
+                p0 = np.nanmean(data.dosage[:, pop0_mask], axis=1) / args.ploidy
+                p1 = np.nanmean(data.dosage[:, pop1_mask], axis=1) / args.ploidy
+        else:
+            from hycline.data.filter_aims import beagle_missing_mask, em_allele_freq
+            called = ~beagle_missing_mask(data.gl0, data.gl1, data.gl2)
+            p0 = em_allele_freq(data.gl0, data.gl1, data.gl2, called & pop0_mask[None, :])
+            p1 = em_allele_freq(data.gl0, data.gl1, data.gl2, called & pop1_mask[None, :])
+        refs = [] if args.include_parentals else [
+            s for s, r in zip(data.sample_names, pop0_mask | pop1_mask) if r]
+    else:
+        if not Path(args.parental_freq_csv).exists():
+            return None, [], f"--parental-freq-csv file not found: '{args.parental_freq_csv}'"
+        freq_df = pd.read_csv(args.parental_freq_csv)
+        for col in (args.freq_locus_col, args.freq_pop0_col, args.freq_pop1_col):
+            if col not in freq_df.columns:
+                return None, [], (f"column '{col}' not found in '{args.parental_freq_csv}'. "
+                                  f"Columns present: {', '.join(freq_df.columns)}")
+        by_locus = freq_df.set_index(args.freq_locus_col)
+        missing = [l for l in locus_names if l not in by_locus.index]
+        if missing:
+            return None, [], (f"'{args.parental_freq_csv}' has no row for locus(-i) "
+                              f"{_format_loci_list(missing)}.")
+        p0 = by_locus.loc[locus_names, args.freq_pop0_col].to_numpy(dtype=float)
+        p1 = by_locus.loc[locus_names, args.freq_pop1_col].to_numpy(dtype=float)
+        refs = []
+
+    p0 = np.clip(p0, _PARENTAL_FREQ_FLOOR, 1 - _PARENTAL_FREQ_FLOOR)
+    p1 = np.clip(p1, _PARENTAL_FREQ_FLOOR, 1 - _PARENTAL_FREQ_FLOOR)
+    unknown = ~(np.isfinite(p0) & np.isfinite(p1))
+    equal = ~unknown & (p0 == p1)
+    if unknown.any() or equal.any():
+        print(f"  Leaving out {int(unknown.sum())} locus(-i) with unknown and "
+              f"{int(equal.sum())} with equal parental frequencies.")
+    p0 = np.where(equal, np.nan, p0)
+    return (p0, p1), refs, None
+
+
 def cmd_generate_genomic_input(args) -> int:
     import pandas as pd
 
@@ -3376,10 +3491,16 @@ def cmd_generate_genomic_input(args) -> int:
             return 2
         _report_vcf_parse_summary(vcf_data, extract_pl=False)
 
+        parental_freqs, refs, err = _genomic_parental_freqs(args, fmt, vcf_data, metadata_df)
+        if err:
+            print(f"\nERROR: {err}\n", file=sys.stderr)
+            return 2
         try:
             info = write_genomic_hard_count_csv(vcf_data, metadata_df, args.sample_col,
                                                  args.hybrid_index_col, str(out_path),
-                                                 ploidy=args.ploidy)
+                                                 ploidy=args.ploidy,
+                                                 parental_freqs=parental_freqs,
+                                                 exclude_samples=refs)
         except ValueError as e:
             print(f"\nERROR: {e}\n", file=sys.stderr)
             return 2
@@ -3396,9 +3517,16 @@ def cmd_generate_genomic_input(args) -> int:
             return 2
         print(f"  {len(beagle_data)} markers parsed, {len(beagle_data.sample_names)} samples.")
 
+        parental_freqs, refs, err = _genomic_parental_freqs(args, fmt, beagle_data,
+                                                            metadata_df)
+        if err:
+            print(f"\nERROR: {err}\n", file=sys.stderr)
+            return 2
         try:
             info = write_beagle_genomic_gl_csv(beagle_data, metadata_df, args.sample_col,
-                                                args.hybrid_index_col, str(out_path))
+                                                args.hybrid_index_col, str(out_path),
+                                                parental_freqs=parental_freqs,
+                                                exclude_samples=refs)
         except ValueError as e:
             print(f"\nERROR: {e}\n", file=sys.stderr)
             return 2
@@ -3408,6 +3536,15 @@ def cmd_generate_genomic_input(args) -> int:
     if info["n_samples_dropped"] > 0:
         print(f"  NOTE: {info['n_samples_dropped']} {n_dropped_label} sample(s) had no "
               f"matching row in the metadata and were dropped.")
+    if refs:
+        print(f"  {len(refs)} parental reference individual(s) left out of the output "
+              f"(--include-parentals to keep them).")
+    if parental_freqs is None:
+        print("NOTE: no parental frequencies given (--population-col or "
+              "--parental-freq-csv), so every locus is treated as fixed for the counted "
+              "allele in parental population 1 (frequency 0 in population 0, 1 in "
+              "population 1). That is only right for fixed markers whose ALT allele "
+              "is population 1's; otherwise clines are distorted.", file=sys.stderr)
 
     print(f"\nWrote {out_path.resolve()}")
     print(f"  {info['n_individuals']} individuals, {info['n_loci']} loci")

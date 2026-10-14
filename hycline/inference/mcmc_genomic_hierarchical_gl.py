@@ -32,12 +32,14 @@ import jax
 jax.config.update("jax_enable_x64", True)  # see BACKEND_PHASE2.md section 11 for why
 
 import jax.numpy as jnp
+import numpy as np
 import numpyro
 import numpyro.distributions as dist
 from numpyro.infer import MCMC, NUTS
 
 from hycline.inference.mcmc_genomic_hierarchical import (
-    HierarchicalGenomicFitResult, _genomic_cline_core_jax,
+    HierarchicalGenomicFitResult, _genomic_cline_core_jax, _parental_allele_freq_jax,
+    _parental_freq_arrays,
 )
 from hycline.inference.mcmc_hierarchical_gl import _marginal_log_likelihood_jax
 
@@ -45,7 +47,7 @@ _EPS = 1e-6
 
 
 def _hierarchical_genomic_gl_batch_model(hybrid_index, log_gl0, log_gl1, log_gl2, n_loci,
-                                          mu_u_scale, sigma_u_scale,
+                                          p0, p1, mu_u_scale, sigma_u_scale,
                                           mu_log_v_loc, mu_log_v_scale, sigma_log_v_scale):
     # population-level (hyper) parameters, centered at the neutral null
     # (mu_u=0, mu_log_v=0 i.e. mu_v=1) -- see BACKEND_PHASE4.md section 8
@@ -62,9 +64,9 @@ def _hierarchical_genomic_gl_batch_model(hybrid_index, log_gl0, log_gl1, log_gl2
 
     v = jnp.exp(log_v)
     phi = _genomic_cline_core_jax(hybrid_index[None, :], u[:, None], v[:, None])
-    phi = jnp.clip(phi, _EPS, 1.0 - _EPS)
+    p = jnp.clip(_parental_allele_freq_jax(phi, p0, p1), _EPS, 1.0 - _EPS)
 
-    log_lik = _marginal_log_likelihood_jax(log_gl0, log_gl1, log_gl2, phi)
+    log_lik = _marginal_log_likelihood_jax(log_gl0, log_gl1, log_gl2, p)
     numpyro.factor("gl_marginal_likelihood", jnp.sum(log_lik))
 
 
@@ -73,6 +75,8 @@ def fit_hierarchical_genomic_batch_gl(hybrid_index, log_gl0, log_gl1, log_gl2,
                                        mu_u_scale: float = 2.0, sigma_u_scale: float = 2.0,
                                        mu_log_v_loc: float = 0.0, mu_log_v_scale: float = 1.0,
                                        sigma_log_v_scale: float = 1.0,
+                                       parental_freq_pop0: Optional[np.ndarray] = None,
+                                       parental_freq_pop1: Optional[np.ndarray] = None,
                                        num_warmup: int = 1500, num_samples: int = 1500,
                                        num_chains: int = 4, seed: int = 0
                                        ) -> HierarchicalGenomicFitResult:
@@ -114,6 +118,9 @@ def fit_hierarchical_genomic_batch_gl(hybrid_index, log_gl0, log_gl1, log_gl2,
     mu_u_scale, sigma_u_scale, mu_log_v_loc, mu_log_v_scale,
         sigma_log_v_scale : hyperprior settings, same meaning and same
         defaults as `fit_hierarchical_genomic_batch`
+    parental_freq_pop0, parental_freq_pop1 : optional (n_loci,) parental
+        frequencies of the counted allele, as in
+        `fit_hierarchical_genomic_batch`. Default 0 and 1 for every locus.
     num_warmup, num_samples, num_chains, seed : standard NUTS/MCMC controls
 
     Returns
@@ -121,6 +128,7 @@ def fit_hierarchical_genomic_batch_gl(hybrid_index, log_gl0, log_gl1, log_gl2,
     HierarchicalGenomicFitResult
     """
     n_loci = log_gl0.shape[0]
+    p0, p1 = _parental_freq_arrays(n_loci, parental_freq_pop0, parental_freq_pop1)
     if locus_names is None:
         locus_names = [f"locus_{i}" for i in range(n_loci)]
 
@@ -131,7 +139,7 @@ def fit_hierarchical_genomic_batch_gl(hybrid_index, log_gl0, log_gl1, log_gl2,
     mcmc.run(rng_key,
               hybrid_index=jnp.asarray(hybrid_index), log_gl0=jnp.asarray(log_gl0),
               log_gl1=jnp.asarray(log_gl1), log_gl2=jnp.asarray(log_gl2), n_loci=n_loci,
-              mu_u_scale=mu_u_scale, sigma_u_scale=sigma_u_scale,
+              p0=p0, p1=p1, mu_u_scale=mu_u_scale, sigma_u_scale=sigma_u_scale,
               mu_log_v_loc=mu_log_v_loc, mu_log_v_scale=mu_log_v_scale,
               sigma_log_v_scale=sigma_log_v_scale)
 

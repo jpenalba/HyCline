@@ -261,12 +261,19 @@ def write_beagle_geographic_gl_csv(beagle_data: BeagleData, metadata_df, sample_
 
 
 def write_beagle_genomic_gl_csv(beagle_data: BeagleData, metadata_df, sample_col: str,
-                                 hybrid_index_col: str, output_path: str) -> dict:
+                                 hybrid_index_col: str, output_path: str,
+                                 parental_freqs: tuple | None = None,
+                                 exclude_samples=None) -> dict:
     """Write a per-individual genotype-likelihood CSV for genomic clines
     from beagle data -- the format `read_genomic_gl_multi_locus_wide_csv`
-    (Phase 4 Component E's own reader) expects by default."""
+    (Phase 4 Component E's own reader) expects by default.
+    `parental_freqs`/`exclude_samples` as in
+    `hycline.data.vcf.write_genomic_hard_count_csv` (frequencies of
+    allele2)."""
+    from hycline.data.vcf import _drop_samples
     common_samples, idx, meta, n_dropped = _join_beagle_metadata(
         beagle_data, metadata_df, sample_col, [hybrid_index_col])
+    common_samples, idx, meta = _drop_samples(common_samples, idx, meta, exclude_samples)
 
     hybrid_index = meta[hybrid_index_col].to_numpy(dtype=float)
     if np.any((hybrid_index < 0) | (hybrid_index > 1)):
@@ -274,17 +281,25 @@ def write_beagle_genomic_gl_csv(beagle_data: BeagleData, metadata_df, sample_col
 
     base = {sample_col: common_samples, "hybrid_index": hybrid_index}
     new_columns = {}
+    n_written = 0
     for j, marker in enumerate(beagle_data.marker_names):
+        if parental_freqs is not None and not (np.isfinite(parental_freqs[0][j])
+                                               and np.isfinite(parental_freqs[1][j])):
+            continue
         log_gl0, log_gl1, log_gl2 = _beagle_log_gl(
             beagle_data.gl0[j, idx], beagle_data.gl1[j, idx], beagle_data.gl2[j, idx])
         new_columns[f"{marker}.gl0"] = log_gl0
         new_columns[f"{marker}.gl1"] = log_gl1
         new_columns[f"{marker}.gl2"] = log_gl2
+        if parental_freqs is not None:
+            new_columns[f"{marker}.p0"] = np.full(len(common_samples), parental_freqs[0][j])
+            new_columns[f"{marker}.p1"] = np.full(len(common_samples), parental_freqs[1][j])
+        n_written += 1
 
     out = pd.concat([pd.DataFrame(base), pd.DataFrame(new_columns)], axis=1)
 
     out.to_csv(output_path, index=False)
-    return {"n_individuals": len(common_samples), "n_loci": len(beagle_data),
+    return {"n_individuals": len(common_samples), "n_loci": n_written,
             "n_samples_dropped": n_dropped}
 
 

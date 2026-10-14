@@ -28,7 +28,7 @@ from scipy.special import logsumexp
 
 from hycline.data.schema import GenotypeLikelihoodTransect, GenotypeLikelihoodLocusData
 from hycline.models.cline import ClineParams, TailType, cline_function
-from hycline.models.genomic_cline import GenomicClineParams, genomic_cline_function
+from hycline.models.genomic_cline import GenomicClineParams, genomic_cline_allele_freq
 
 _EPS = 1e-10
 
@@ -81,8 +81,9 @@ def log_likelihood_genomic(data: GenotypeLikelihoodLocusData,
                             params: GenomicClineParams) -> float:
     """Total genotype-likelihood-marginalized log-likelihood of a genomic
     cline locus, summed across individuals."""
-    phi = genomic_cline_function(data.hybrid_index, params)
-    ll = _marginal_log_likelihood(data.log_gl0, data.log_gl1, data.log_gl2, phi)
+    p = genomic_cline_allele_freq(data.hybrid_index, params,
+                                  data.parental_freq_pop0, data.parental_freq_pop1)
+    ll = _marginal_log_likelihood(data.log_gl0, data.log_gl1, data.log_gl2, p)
     return float(np.sum(ll))
 
 

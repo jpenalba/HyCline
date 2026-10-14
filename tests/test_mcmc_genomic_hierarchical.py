@@ -63,6 +63,20 @@ def test_jax_genomic_core_matches_numpy_core():
     np.testing.assert_allclose(numpy_result, jax_result, atol=1e-10)
 
 
+def test_jax_parental_allele_freq_matches_numpy():
+    from hycline.inference.mcmc_genomic_hierarchical import _parental_allele_freq_jax
+    from hycline.models.genomic_cline import genomic_cline_allele_freq
+    params = GenomicClineParams(u=-0.4, v=1.6)
+    h = np.linspace(0.01, 0.99, 30)
+    p0, p1 = np.array([0.1, 0.9]), np.array([0.8, 0.2])
+    phi = np.asarray(_genomic_cline_core_jax(jnp.asarray(h), params.u, params.v))
+    jax_freq = np.asarray(_parental_allele_freq_jax(
+        jnp.asarray(np.vstack([phi, phi])), jnp.asarray(p0), jnp.asarray(p1)))
+    for i in range(2):
+        np.testing.assert_allclose(jax_freq[i], genomic_cline_allele_freq(h, params, p0[i], p1[i]),
+                                   atol=1e-10)
+
+
 def test_jax_genomic_core_neutral_locus_matches_identity():
     """u=0, v=1 should give phi(h) = h, same neutral-null check as the
     non-hierarchical genomic cline model (tests/test_genomic_cline.py)."""
