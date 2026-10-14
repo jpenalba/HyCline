@@ -76,6 +76,14 @@ memory -- they're the authoritative, up-to-date reference. `hycline
 <subcommand> --help` is always accurate for any individual command's full
 flag list.
 
+**File formats.** Tables you create yourself -- `--metadata`,
+`--parental-metadata`, `--parental-freq-file`, and trait data for
+`fit-trait`/`fit-trait-multi` -- are tab-delimited with one header row;
+a comma-separated file there is rejected with a message saying so.
+HyCline's own intermediate files (`generate-*-input` output, fit
+summaries) are CSV, and `estimate-hybrid-index` writes a tab-delimited
+table so it can be passed straight to `--metadata`.
+
 ## Choosing a fitting method: classic (HZAR-equivalent) or Bayesian
 
 Reachable both from the command line (`--method classic`/`bayesian`,
@@ -429,10 +437,10 @@ full investigation.
   raising a bare Python traceback).
 - `hycline.data.vcf` -- a pure-Python VCF parser (no `pysam`/`cyvcf2`
   dependency) underlying the `generate-geographic-input`/`generate-genomic-input` CLI
-  commands, converting a VCF + metadata CSV directly into any of this
+  commands, converting a VCF + tab-delimited metadata file directly into any of this
   project's CSV formats. `generate-genomic-input` also writes each locus's
   parental frequencies (`<locus>.p0`/`.p1`, from labelled reference
-  individuals or `--parental-freq-csv`) and by default leaves the
+  individuals or `--parental-freq-file`) and by default leaves the
   reference individuals out of the cline input, as gghybrid's `ggcline`
   does. Validated end to end against known ground truth,
   not just unit tests on hand-crafted fixtures: a synthetic geographic
@@ -609,9 +617,9 @@ catching a real problem on real data.
   default, or `mean`), in two mutually exclusive modes: compute parental
   allele frequencies directly from labeled reference individuals in your
   own genotype file (pooled maximum-likelihood frequencies for beagle
-  input), or supply them precomputed via `--parental-freq-csv`. Writes
-  individual, hybrid_index, and for `ml` the interval and number of loci
-  used. Validated against the simulator's true hybrid indices across
+  input), or supply them precomputed via `--parental-freq-file`. Writes
+  a tab-delimited table of individual, hybrid_index, and for `ml` the
+  interval and number of loci used. Validated against the simulator's true hybrid indices across
   depths, AIM fractions and missing data -- see BACKEND_PHASE3.md
   section 5 and the Genomic guide's Step 2, which also documents why it
   should be run on AIMs rather than every SNP.

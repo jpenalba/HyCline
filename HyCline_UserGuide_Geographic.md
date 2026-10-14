@@ -13,6 +13,15 @@ Every command shown below was run for real against synthetic test data while
 writing this guide, not copied from memory -- flags, output messages, and
 file names are exact.
 
+**File formats.** Files you create yourself -- metadata (sample names,
+population labels, distances, hybrid indices), parental reference labels
+and precomputed parental frequencies -- are **tab-delimited** text with
+one header row (`.tsv`). HyCline rejects a comma-separated file there
+with a message saying so. The files HyCline writes for its own later
+steps (`generate-*-input` output, fit summaries and curves) are CSV;
+`estimate-hybrid-index` writes a tab-delimited table, since it is meant
+to be used as metadata.
+
 ## Pipeline overview
 
 ```
@@ -63,7 +72,7 @@ from the `--input` file extension.
 ```bash
 hycline filter-aims \
     --input genomewide.vcf \
-    --metadata parental_labels.csv \
+    --metadata parental_labels.tsv \
     --population-col population \
     --pop1-label parent1 --pop2-label parent2 \
     --output filtered.vcf
@@ -169,7 +178,7 @@ them.
 |---|---|
 | `--input` | VCF (`.vcf`/`.vcf.gz`) or ANGSD beagle-format file (`.beagle`/`.beagle.gz`) |
 | `--format {vcf,beagle}` | Force the format instead of auto-detecting from the extension |
-| `--metadata` | **Separate** CSV: one row per individual, a sample-name column and a population-label column. Individuals not labeled as either parental population (e.g. your actual hybrid-zone samples) are simply excluded from the frequency calculation -- not an error -- so parental references and hybrid-zone individuals can live in the same `--input` file |
+| `--metadata` | **Separate** tab-delimited file: one row per individual, a sample-name column and a population-label column. Individuals not labeled as either parental population (e.g. your actual hybrid-zone samples) are simply excluded from the frequency calculation -- not an error -- so parental references and hybrid-zone individuals can live in the same `--input` file |
 | `--sample-col` | Column in `--metadata` holding individual names (default: `individual`). Must match the VCF's own `#CHROM` header row, or ANGSD's own beagle header row |
 | `--population-col` | Column in `--metadata` holding each individual's population label (default: `population`) |
 | `--pop1-label` / `--pop2-label` | Values identifying the two parental reference groups (default: `parent1`/`parent2`) |
@@ -209,7 +218,7 @@ carry genotype uncertainty.
 ```bash
 hycline generate-geographic-input \
     --input filtered.vcf \
-    --metadata metadata.csv \
+    --metadata metadata.tsv \
     --output hardcounts.csv
 ```
 
@@ -232,7 +241,7 @@ the output shape and the suggested next step both change automatically:
 ```bash
 hycline generate-geographic-input \
     --input mydata.beagle.gz \
-    --metadata metadata.csv \
+    --metadata metadata.tsv \
     --output gl.csv
 ```
 
@@ -261,7 +270,7 @@ km automatically) -- the same two options `fit-geographic` itself offers.
 ```bash
 hycline generate-geographic-input \
     --input filtered.vcf \
-    --metadata metadata.csv \
+    --metadata metadata.tsv \
     --lat-col lat --lon-col lon \
     --output hardcounts.csv
 ```
@@ -672,11 +681,11 @@ the overlay plot specifically.
 
 ```bash
 # 1. Filter to ancestry-informative markers
-hycline filter-aims --input genomewide.vcf --metadata parental_labels.csv \
+hycline filter-aims --input genomewide.vcf --metadata parental_labels.tsv \
     --pop1-label parent1 --pop2-label parent2 --output filtered.vcf
 
 # 2. Convert to HyCline's site-aggregated hard-count format
-hycline generate-geographic-input --input filtered.vcf --metadata metadata.csv \
+hycline generate-geographic-input --input filtered.vcf --metadata metadata.tsv \
     --output hardcounts.csv
 
 # 3a. Fit with classic MLE, no tail

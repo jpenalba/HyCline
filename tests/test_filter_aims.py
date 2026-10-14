@@ -115,10 +115,9 @@ BEAGLE_CONTENT = (
 def test_filter_aims_beagle_matches_hand_computation(tmp_path):
     beagle_path = tmp_path / "test.beagle"
     beagle_path.write_text(BEAGLE_CONTENT)
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": ["ind0", "ind1", "ind2"],
-                  "population": ["parent1", "parent2", "hybrid"]}).to_csv(
-        metadata_path, index=False)
+                  "population": ["parent1", "parent2", "hybrid"]}).to_csv(metadata_path, sep="\t", index=False)
 
     out_path = tmp_path / "filtered.beagle"
     result = filter_aims_beagle(str(beagle_path), str(metadata_path), str(out_path))
@@ -148,10 +147,9 @@ def test_filter_aims_csv_matches_hand_computation(tmp_path):
         "locusA": [0, 2, 1, 0],
         "locusB": [1, 1, 0, 2],
     }).to_csv(input_path, index=False)
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": ["ind0", "ind1", "ind2", "ind3"],
-                  "population": ["parent1", "parent2", "hybrid", "hybrid"]}).to_csv(
-        metadata_path, index=False)
+                  "population": ["parent1", "parent2", "hybrid", "hybrid"]}).to_csv(metadata_path, sep="\t", index=False)
 
     out_path = tmp_path / "filtered.csv"
     result = filter_aims_csv(str(input_path), str(metadata_path), str(out_path))
@@ -169,9 +167,8 @@ def test_filter_aims_csv_matches_hand_computation(tmp_path):
 def test_filter_aims_csv_no_loci_detected_raises(tmp_path):
     input_path = tmp_path / "genotypes.csv"
     pd.DataFrame({"individual": ["a"], "distance": [0]}).to_csv(input_path, index=False)
-    metadata_path = tmp_path / "metadata.csv"
-    pd.DataFrame({"individual": ["a"], "population": ["parent1"]}).to_csv(
-        metadata_path, index=False)
+    metadata_path = tmp_path / "metadata.tsv"
+    pd.DataFrame({"individual": ["a"], "population": ["parent1"]}).to_csv(metadata_path, sep="\t", index=False)
     with pytest.raises(ValueError, match="No locus columns detected"):
         filter_aims_csv(str(input_path), str(metadata_path), str(tmp_path / "out.csv"))
 
@@ -181,9 +178,9 @@ def test_filter_aims_csv_explicit_loci(tmp_path):
     pd.DataFrame({
         "individual": ["ind0", "ind1"], "locusA": [0, 2], "locusB": [0, 2],
     }).to_csv(input_path, index=False)
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": ["ind0", "ind1"],
-                  "population": ["parent1", "parent2"]}).to_csv(metadata_path, index=False)
+                  "population": ["parent1", "parent2"]}).to_csv(metadata_path, sep="\t", index=False)
 
     out_path = tmp_path / "filtered.csv"
     result = filter_aims_csv(str(input_path), str(metadata_path), str(out_path),
@@ -225,9 +222,9 @@ def test_filter_aims_csv_output_chains_into_genotype_to_gl(tmp_path):
         "individual": [f"ind{i}" for i in range(n_ind)], "distance": distance,
         "locusA": dosage,
     }).to_csv(input_path, index=False)
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": [f"ind{i}" for i in range(n_ind)],
-                  "population": population}).to_csv(metadata_path, index=False)
+                  "population": population}).to_csv(metadata_path, sep="\t", index=False)
 
     filtered_path = tmp_path / "filtered.csv"
     result = filter_aims_csv(str(input_path), str(metadata_path), str(filtered_path))
@@ -271,10 +268,9 @@ def test_filter_aims_vcf_matches_hand_computation(tmp_path):
     ]
     vcf_path = tmp_path / "test.vcf"
     vcf_path.write_text("".join(lines))
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": ["ind0", "ind1", "ind2"],
-                  "population": ["parent1", "parent2", "hybrid"]}).to_csv(
-        metadata_path, index=False)
+                  "population": ["parent1", "parent2", "hybrid"]}).to_csv(metadata_path, sep="\t", index=False)
 
     out_path = tmp_path / "filtered.vcf"
     result = filter_aims_vcf(str(vcf_path), str(metadata_path), str(out_path))
@@ -301,10 +297,9 @@ def test_filter_aims_vcf_output_preserves_lines_verbatim(tmp_path):
     ]
     vcf_path = tmp_path / "test.vcf"
     vcf_path.write_text("".join(lines))
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": ["ind0", "ind1", "ind2"],
-                  "population": ["parent1", "parent2", "hybrid"]}).to_csv(
-        metadata_path, index=False)
+                  "population": ["parent1", "parent2", "hybrid"]}).to_csv(metadata_path, sep="\t", index=False)
 
     out_path = tmp_path / "filtered.vcf"
     filter_aims_vcf(str(vcf_path), str(metadata_path), str(out_path))
@@ -326,10 +321,9 @@ def test_filter_aims_vcf_skips_and_counts_multiallelic_indel_no_gt(tmp_path):
     ]
     vcf_path = tmp_path / "test.vcf"
     vcf_path.write_text("".join(lines))
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": ["ind0", "ind1", "ind2"],
-                  "population": ["parent1", "parent2", "hybrid"]}).to_csv(
-        metadata_path, index=False)
+                  "population": ["parent1", "parent2", "hybrid"]}).to_csv(metadata_path, sep="\t", index=False)
 
     out_path = tmp_path / "filtered.vcf"
     result = filter_aims_vcf(str(vcf_path), str(metadata_path), str(out_path))
@@ -352,10 +346,9 @@ def test_filter_aims_vcf_output_chains_into_convert_vcf_geographic(tmp_path):
         lines.append(_vcf_line(100 + i * 100, f"snp{i+1}", gts))
     vcf_path = tmp_path / "test.vcf"
     vcf_path.write_text("".join(lines))
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": ["ind0", "ind1", "ind2"],
-                  "population": ["parent1", "parent2", "hybrid"]}).to_csv(
-        metadata_path, index=False)
+                  "population": ["parent1", "parent2", "hybrid"]}).to_csv(metadata_path, sep="\t", index=False)
 
     filtered_path = tmp_path / "filtered.vcf"
     filter_aims_vcf(str(vcf_path), str(metadata_path), str(filtered_path))
@@ -369,9 +362,8 @@ def test_filter_aims_vcf_output_chains_into_convert_vcf_geographic(tmp_path):
 def test_filter_aims_vcf_no_chrom_header_raises(tmp_path):
     vcf_path = tmp_path / "bad.vcf"
     vcf_path.write_text("chr1\t100\tsnp1\tA\tT\t99\tPASS\tDP=100\tGT\t0/0\n")
-    metadata_path = tmp_path / "metadata.csv"
-    pd.DataFrame({"individual": ["ind0"], "population": ["parent1"]}).to_csv(
-        metadata_path, index=False)
+    metadata_path = tmp_path / "metadata.tsv"
+    pd.DataFrame({"individual": ["ind0"], "population": ["parent1"]}).to_csv(metadata_path, sep="\t", index=False)
     with pytest.raises(ValueError, match="not a valid VCF"):
         filter_aims_vcf(str(vcf_path), str(metadata_path), str(tmp_path / "out.vcf"))
 
@@ -388,9 +380,8 @@ def _summary_vcf(tmp_path, rows, samples, populations):
              + "\t".join(gts) + "\n" for i, gts in enumerate(rows)]
     vcf_path = tmp_path / "in.vcf"
     vcf_path.write_text(header + "".join(lines))
-    meta_path = tmp_path / "meta.csv"
-    pd.DataFrame({"individual": samples, "population": populations}).to_csv(
-        meta_path, index=False)
+    meta_path = tmp_path / "meta.tsv"
+    pd.DataFrame({"individual": samples, "population": populations}).to_csv(meta_path, sep="\t", index=False)
     return vcf_path, meta_path
 
 
@@ -430,9 +421,9 @@ def test_filter_aims_beagle_reports_missing_per_sample(tmp_path):
     )
     beagle_path = tmp_path / "in.beagle"
     beagle_path.write_text(content)
-    meta_path = tmp_path / "meta.csv"
+    meta_path = tmp_path / "meta.tsv"
     pd.DataFrame({"individual": ["ind0", "ind1"],
-                  "population": ["parent1", "parent2"]}).to_csv(meta_path, index=False)
+                  "population": ["parent1", "parent2"]}).to_csv(meta_path, sep="\t", index=False)
     result = filter_aims_beagle(str(beagle_path), str(meta_path),
                                 str(tmp_path / "out.beagle"))
     np.testing.assert_array_equal(result["missing_per_sample"], [0, 1])
@@ -506,10 +497,9 @@ def test_filter_aims_beagle_excludes_missing_genotypes_from_frequencies(tmp_path
                             hom_alt, hom_alt, hom_alt]) + "\n")
     beagle_path = tmp_path / "in.beagle"
     beagle_path.write_text(content)
-    meta_path = tmp_path / "meta.csv"
+    meta_path = tmp_path / "meta.tsv"
     pd.DataFrame({"individual": ["a0", "a1", "a2", "b0", "b1", "b2"],
-                  "population": ["parent1"] * 3 + ["parent2"] * 3}).to_csv(
-        meta_path, index=False)
+                  "population": ["parent1"] * 3 + ["parent2"] * 3}).to_csv(meta_path, sep="\t", index=False)
 
     result = filter_aims_beagle(str(beagle_path), str(meta_path),
                                 str(tmp_path / "out.beagle"))
@@ -563,10 +553,9 @@ def test_filter_aims_beagle_recovers_aims_at_low_depth(tmp_path):
     row = "\t".join(["m1", "0", "1"] + [ref_hom] * 10 + [alt_hom] * 10)
     beagle_path = tmp_path / "in.beagle"
     beagle_path.write_text(header + "\n" + row + "\n")
-    meta_path = tmp_path / "meta.csv"
+    meta_path = tmp_path / "meta.tsv"
     pd.DataFrame({"individual": names,
-                  "population": ["parent1"] * 10 + ["parent2"] * 10}).to_csv(
-        meta_path, index=False)
+                  "population": ["parent1"] * 10 + ["parent2"] * 10}).to_csv(meta_path, sep="\t", index=False)
 
     result = filter_aims_beagle(str(beagle_path), str(meta_path),
                                 str(tmp_path / "out.beagle"),

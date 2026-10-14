@@ -382,9 +382,9 @@ def _build_parser() -> argparse.ArgumentParser:
                      "MLE fitting only in this pass -- no Bayesian backend yet.",
     )
     trait_g = trait_p.add_argument_group("input data")
-    trait_p.add_argument("--input", required=True, metavar="FILE.csv",
-                          help="CSV file -- one row per sampling site (default), or "
-                               "one row per individual (--raw).")
+    trait_p.add_argument("--input", required=True, metavar="FILE.tsv",
+                          help="Tab-delimited file -- one row per sampling site "
+                               "(default), or one row per individual (--raw).")
     add_distance_args(trait_g)
     trait_p.add_argument("--raw", action="store_true",
                           help="Treat --input as raw, individual-level data (one row "
@@ -439,17 +439,17 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # ---- `fit-trait-multi` subcommand ----
     traitm_p = subparsers.add_parser(
-        "fit-trait-multi", help="Fit many traits at once from a wide-format multi-trait CSV.",
+        "fit-trait-multi", help="Fit many traits at once from a wide-format, tab-delimited multi-trait file.",
         description="Fit a cline model separately to each trait in a wide-format "
-                     "multi-trait CSV (one row per site, one <trait>.mean/<trait>.n/"
+                     "multi-trait tab-delimited file (one row per site, one <trait>.mean/<trait>.n/"
                      "<trait>.sd column group per trait -- all three required per trait, "
                      "see `fit-trait --help` for why). The multi-trait analog of "
                      "`fit-trait`, mirroring `fit-geographic`'s own wide-format structure. One trait "
                      "failing to fit does not stop the others.",
     )
     traitm_g = traitm_p.add_argument_group("input data")
-    traitm_p.add_argument("--input", required=True, metavar="FILE.csv",
-                           help="CSV file with one row per sampling site.")
+    traitm_p.add_argument("--input", required=True, metavar="FILE.tsv",
+                           help="Tab-delimited file with one row per sampling site.")
     add_distance_args(traitm_g)
     traitm_g.add_argument("--mean-suffix", default=".mean",
                            help="Column suffix for each trait's site mean, e.g. '.mean' "
@@ -879,10 +879,10 @@ def _build_parser() -> argparse.ArgumentParser:
                      "given. Two ways to supply parental allele frequencies: (1) "
                      "--metadata/--population-col/--pop0-label/--pop1-label, computing "
                      "them from reference individuals labeled in a metadata file (the "
-                     "default, and the more common case), or (2) --parental-freq-csv, a "
-                     "separate CSV of precomputed per-locus frequencies of the VCF ALT / "
+                     "default, and the more common case), or (2) --parental-freq-file, a "
+                     "separate tab-delimited file of precomputed per-locus frequencies of the VCF ALT / "
                      "beagle allele2 allele. Exactly one of the two must be given. "
-                     "Output is a CSV with individual and hybrid_index columns (plus "
+                     "Output is a tab-delimited table with individual and hybrid_index columns (plus "
                      "the interval and number of loci used, for --method ml) that "
                      "merges directly into the metadata any genomic-cline command needs.",
     )
@@ -898,8 +898,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ehi_p.add_argument("--format", choices=["vcf", "beagle"], default=None,
                         help="Force the input format instead of auto-detecting it from "
                              "the --input file extension.")
-    ehi_g.add_argument("--metadata", default=None, metavar="FILE.csv",
-                        help="[Mode 1] Metadata CSV with one row per individual: a "
+    ehi_g.add_argument("--metadata", default=None, metavar="FILE.tsv",
+                        help="[Mode 1] Tab-delimited metadata file with one row per individual: a "
                              "sample-name column and a population-label column. Required "
                              "for Mode 1 (--population-col); not used for Mode 2.")
     ehi_g.add_argument("--sample-col", default="individual",
@@ -911,7 +911,7 @@ def _build_parser() -> argparse.ArgumentParser:
                              "population each individual belongs to -- used to find the "
                              "parental reference individuals for each of the two "
                              "parental populations. Mutually exclusive with "
-                             "--parental-freq-csv.")
+                             "--parental-freq-file.")
     ehi_g.add_argument("--pop0-label", default=None,
                         help="[Mode 1] Value in --population-col identifying parental "
                              "population 0's reference individuals. Required if "
@@ -920,8 +920,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="[Mode 1] Value in --population-col identifying parental "
                              "population 1's reference individuals. Required if "
                              "--population-col is given.")
-    ehi_g.add_argument("--parental-freq-csv", default=None, metavar="FILE.csv",
-                        help="[Mode 2] A separate CSV of precomputed per-locus parental "
+    ehi_g.add_argument("--parental-freq-file", default=None, metavar="FILE.tsv",
+                        help="[Mode 2] A separate tab-delimited file of precomputed per-locus parental "
                              "allele frequencies, as an alternative to --population-col "
                              "-- one row per locus, with columns identifying the locus "
                              "name and each parental population's allele frequency (see "
@@ -929,15 +929,15 @@ def _build_parser() -> argparse.ArgumentParser:
                              "your own column names). Every locus in --input must have a "
                              "matching row here. Mutually exclusive with --population-col.")
     ehi_g.add_argument("--freq-locus-col", default="locus",
-                        help="[Mode 2] Column in --parental-freq-csv holding locus names "
+                        help="[Mode 2] Column in --parental-freq-file holding locus names "
                              "(default: locus) -- must match your --input file's locus "
                              "names exactly.")
     ehi_g.add_argument("--freq-pop0-col", default="freq_pop0",
-                        help="[Mode 2] Column in --parental-freq-csv holding parental "
+                        help="[Mode 2] Column in --parental-freq-file holding parental "
                              "population 0's allele frequency at each locus (default: "
                              "freq_pop0).")
     ehi_g.add_argument("--freq-pop1-col", default="freq_pop1",
-                        help="[Mode 2] Column in --parental-freq-csv holding parental "
+                        help="[Mode 2] Column in --parental-freq-file holding parental "
                              "population 1's allele frequency at each locus (default: "
                              "freq_pop1).")
     ehi_g.add_argument("--ploidy", type=int, default=2,
@@ -963,8 +963,9 @@ def _build_parser() -> argparse.ArgumentParser:
                              "locus). Default: every locus weighted equally -- "
                              "appropriate if you've already pre-filtered to strongly "
                              "differentiated (ancestry-informative) markers.")
-    ehi_p.add_argument("--output", required=True, metavar="FILE.csv",
-                        help="Path to write the hybrid-index CSV to.")
+    ehi_p.add_argument("--output", required=True, metavar="FILE.tsv",
+                        help="Path to write the hybrid-index table to (tab-delimited, "
+                             "ready to use as generate-genomic-input's --metadata).")
 
     # ---- `generate-geographic-input` subcommand ----
     ggi_p = subparsers.add_parser(
@@ -973,7 +974,7 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Convert a VCF (biallelic SNPs; a pure-Python parser, no pysam/"
                      "cyvcf2 dependency -- see BACKEND_PHASE1.md section 9.4 for exactly "
                      "what VCF features are and aren't supported) or an ANGSD beagle-"
-                     "format file (`angsd -doGlf 2`) plus a metadata CSV mapping sample "
+                     "format file (`angsd -doGlf 2`) plus a tab-delimited metadata file mapping sample "
                      "names to geographic distance (or coordinates -- see --lat-col "
                      "below) into a HyCline-ready CSV. Input format determines the "
                      "output path, with no flag to choose otherwise: VCF input always "
@@ -1000,18 +1001,18 @@ def _build_parser() -> argparse.ArgumentParser:
     ggi_p.add_argument("--format", choices=["vcf", "beagle"], default=None,
                         help="Force the input format instead of auto-detecting it "
                              "from the --input file extension.")
-    ggi_p.add_argument("--metadata", required=True, metavar="FILE.csv",
-                        help="Metadata CSV with one row per individual. --sample-col "
+    ggi_p.add_argument("--metadata", required=True, metavar="FILE.tsv",
+                        help="Tab-delimited metadata file with one row per individual. --sample-col "
                              "must match the sample labels the VCF's own #CHROM header "
                              "row, or ANGSD's own beagle header row, actually uses.")
     ggi_p.add_argument("--sample-col", default="individual",
-                        help="Column in the metadata CSV holding sample names "
+                        help="Column in the metadata file holding sample names "
                              "(default: individual).")
     ggi_p.add_argument("--distance-col", default="distance",
-                        help="Column in the metadata CSV holding geographic distance "
+                        help="Column in the metadata file holding geographic distance "
                              "(default: distance). Ignored if --lat-col/--lon-col given.")
     ggi_p.add_argument("--lat-col", default=None,
-                        help="Column in the metadata CSV holding latitude (decimal "
+                        help="Column in the metadata file holding latitude (decimal "
                              "degrees). If given together with --lon-col, distance is "
                              "computed automatically from coordinates instead of "
                              "--distance-col -- see --transect-method. For VCF input, "
@@ -1019,7 +1020,7 @@ def _build_parser() -> argparse.ArgumentParser:
                              "(lat, lon) -- checked directly, before any distance is "
                              "computed.")
     ggi_p.add_argument("--lon-col", default=None,
-                        help="Column in the metadata CSV holding longitude (decimal "
+                        help="Column in the metadata file holding longitude (decimal "
                              "degrees). See --lat-col.")
     ggi_p.add_argument("--transect-method", choices=["reference", "pca"], default="reference",
                         help="How to collapse lat/lon coordinates to a 1D distance "
@@ -1035,7 +1036,7 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Longitude of the reference site for --transect-method "
                              "reference (default: the first row's coordinates).")
     ggi_p.add_argument("--site-col", default="site",
-                        help="[VCF input only] Column in the metadata CSV identifying "
+                        help="[VCF input only] Column in the metadata file identifying "
                              "each individual's sampling site (default: site) -- "
                              "individuals sharing a site are aggregated into one row. "
                              "Not used for beagle input, which always stays one row "
@@ -1054,7 +1055,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ggni_p = subparsers.add_parser(
         "generate-genomic-input",
         help="Convert a VCF or ANGSD beagle file + metadata into a HyCline genomic-cline CSV.",
-        description="Convert a VCF or an ANGSD beagle-format file plus a metadata CSV "
+        description="Convert a VCF or an ANGSD beagle-format file plus a tab-delimited metadata file "
                      "mapping sample names to hybrid index into a HyCline-ready CSV. "
                      "Input format determines the output path, with no flag to choose "
                      "otherwise: VCF input always produces hard-count output from GT "
@@ -1071,7 +1072,7 @@ def _build_parser() -> argparse.ArgumentParser:
                      "first and merge its output into your metadata by individual name. "
                      "Give the parental populations' allele frequencies, either from "
                      "labelled reference individuals (--population-col/--pop0-label/"
-                     "--pop1-label) or precomputed (--parental-freq-csv): the genomic "
+                     "--pop1-label) or precomputed (--parental-freq-file): the genomic "
                      "cline then models each locus's allele frequency as p0 + (p1 - p0) "
                      "* phi(h) (Bailey 2023, gghybrid), so loci needn't be fixed or "
                      "polarized. Without them every locus is treated as fixed for the "
@@ -1086,15 +1087,16 @@ def _build_parser() -> argparse.ArgumentParser:
     ggni_p.add_argument("--format", choices=["vcf", "beagle"], default=None,
                          help="Force the input format instead of auto-detecting it "
                               "from the --input file extension.")
-    ggni_p.add_argument("--metadata", required=True, metavar="FILE.csv",
-                         help="Metadata CSV with one row per individual. --sample-col "
+    ggni_p.add_argument("--metadata", required=True, metavar="FILE.tsv",
+                         help="Tab-delimited metadata file with one row per individual "
+                              "(estimate-hybrid-index's output works as is). --sample-col "
                               "must match the sample labels the VCF's own #CHROM header "
                               "row, or ANGSD's own beagle header row, actually uses.")
     ggni_p.add_argument("--sample-col", default="individual",
-                         help="Column in the metadata CSV holding sample names "
+                         help="Column in the metadata file holding sample names "
                               "(default: individual).")
     ggni_p.add_argument("--hybrid-index-col", default="hybrid_index",
-                         help="Column in the metadata CSV holding each individual's "
+                         help="Column in the metadata file holding each individual's "
                               "genome-wide hybrid index (default: hybrid_index).")
     ggni_p.add_argument("--ploidy", type=int, default=2,
                          help="[VCF input only] Ploidy, used when writing hard-count "
@@ -1118,16 +1120,16 @@ def _build_parser() -> argparse.ArgumentParser:
     ggni_par.add_argument("--pop1-label", default=None,
                           help="[Mode 1] Label of parental population 1's reference "
                                "individuals.")
-    ggni_par.add_argument("--parental-metadata", default=None, metavar="FILE.csv",
-                          help="[Mode 1] CSV with --sample-col and --population-col, if "
+    ggni_par.add_argument("--parental-metadata", default=None, metavar="FILE.tsv",
+                          help="[Mode 1] Tab-delimited file with --sample-col and --population-col, if "
                                "the population labels aren't in --metadata.")
     ggni_par.add_argument("--include-parentals", action="store_true",
                           help="[Mode 1] Keep the parental reference individuals in the "
                                "output. By default they are left out, as gghybrid's "
                                "ggcline does by default: the clines are fitted to the "
                                "test individuals.")
-    ggni_par.add_argument("--parental-freq-csv", default=None, metavar="FILE.csv",
-                          help="[Mode 2] CSV of precomputed per-locus parental "
+    ggni_par.add_argument("--parental-freq-file", default=None, metavar="FILE.tsv",
+                          help="[Mode 2] Tab-delimited file of precomputed per-locus parental "
                                "frequencies (the same format estimate-hybrid-index "
                                "takes).")
     ggni_par.add_argument("--freq-locus-col", default="locus",
@@ -1169,8 +1171,8 @@ def _build_parser() -> argparse.ArgumentParser:
     faims_p.add_argument("--format", choices=["vcf", "beagle"], default=None,
                           help="Force the input format instead of auto-detecting it "
                                "from the --input file extension.")
-    faims_p.add_argument("--metadata", required=True, metavar="FILE.csv",
-                          help="A separate CSV with one row per individual: a sample-"
+    faims_p.add_argument("--metadata", required=True, metavar="FILE.tsv",
+                          help="A separate tab-delimited file with one row per individual: a sample-"
                                "name column and a population-label column (values "
                                "--pop1-label/--pop2-label for the two parental "
                                "reference populations -- individuals with any other "
@@ -1455,6 +1457,17 @@ def _load_genomic_gl_data(args):
         )
     except TransectCSVError as e:
         print(f"\nERROR reading input data: {e}\n", file=sys.stderr)
+        sys.exit(2)
+
+
+def _read_user_table(path, what):
+    """Read a user-created tab-delimited table (metadata, parental labels or
+    frequencies), exiting with a readable error if it can't be used."""
+    from hycline.data.io import read_user_table, TransectCSVError
+    try:
+        return read_user_table(path, what)
+    except TransectCSVError as e:
+        print(f"\nERROR: {e}\n", file=sys.stderr)
         sys.exit(2)
 
 
@@ -3052,7 +3065,7 @@ def cmd_estimate_hybrid_index(args) -> int:
     from hycline.data.hybrid_index import estimate_hybrid_index
 
     mode1 = args.population_col is not None
-    mode2 = args.parental_freq_csv is not None
+    mode2 = args.parental_freq_file is not None
     if args.method == "ml" and args.weight_by_differentiation:
         print("\nERROR: --weight-by-differentiation applies to --method mean only; "
               "--method ml already weighs each locus by how informative it is.\n",
@@ -3063,12 +3076,12 @@ def cmd_estimate_hybrid_index(args) -> int:
               "--ploidy other than 2.\n", file=sys.stderr)
         return 2
     if mode1 and mode2:
-        print("\nERROR: --population-col and --parental-freq-csv are mutually exclusive "
+        print("\nERROR: --population-col and --parental-freq-file are mutually exclusive "
               "-- give exactly one (see --help for the two modes).\n", file=sys.stderr)
         return 2
     if not mode1 and not mode2:
         print("\nERROR: give either --population-col (with --pop0-label/--pop1-label) "
-              "or --parental-freq-csv to supply parental allele frequencies (see --help "
+              "or --parental-freq-file to supply parental allele frequencies (see --help "
               "for the two modes).\n", file=sys.stderr)
         return 2
     if mode1 and (args.pop0_label is None or args.pop1_label is None):
@@ -3134,7 +3147,7 @@ def cmd_estimate_hybrid_index(args) -> int:
     genotypes = dosage_by_locus[locus_idx, :].T  # (n_samples, n_loci)
 
     if mode1:
-        metadata_df = pd.read_csv(args.metadata)
+        metadata_df = _read_user_table(args.metadata, "metadata file")
         from hycline.data.filter_aims import match_samples_to_populations
         try:
             pop0_mask, pop1_mask = match_samples_to_populations(
@@ -3158,24 +3171,24 @@ def cmd_estimate_hybrid_index(args) -> int:
             parental_freq_pop0 = em_allele_freq(*gl, called & pop0_mask[None, :])
             parental_freq_pop1 = em_allele_freq(*gl, called & pop1_mask[None, :])
     else:
-        print(f"Reading precomputed parental frequencies from '{args.parental_freq_csv}' ...")
-        if not Path(args.parental_freq_csv).exists():
-            print(f"\nERROR: --parental-freq-csv file not found: "
-                  f"'{args.parental_freq_csv}'\n", file=sys.stderr)
+        print(f"Reading precomputed parental frequencies from '{args.parental_freq_file}' ...")
+        if not Path(args.parental_freq_file).exists():
+            print(f"\nERROR: --parental-freq-file file not found: "
+                  f"'{args.parental_freq_file}'\n", file=sys.stderr)
             return 2
-        freq_df = pd.read_csv(args.parental_freq_csv)
+        freq_df = _read_user_table(args.parental_freq_file, "--parental-freq-file")
         for col in (args.freq_locus_col, args.freq_pop0_col, args.freq_pop1_col):
             if col not in freq_df.columns:
-                print(f"\nERROR: column '{col}' not found in '{args.parental_freq_csv}'. "
+                print(f"\nERROR: column '{col}' not found in '{args.parental_freq_file}'. "
                       f"Columns present: {', '.join(freq_df.columns)}\n", file=sys.stderr)
                 return 2
 
         freq_by_locus = freq_df.set_index(args.freq_locus_col)
         missing_loci = [l for l in loci if l not in freq_by_locus.index]
         if missing_loci:
-            print(f"\nERROR: {args.parental_freq_csv} has no row for locus(-i) "
+            print(f"\nERROR: {args.parental_freq_file} has no row for locus(-i) "
                   f"{missing_loci} -- every locus in --input needs a matching "
-                  f"{args.freq_locus_col} entry in --parental-freq-csv.\n", file=sys.stderr)
+                  f"{args.freq_locus_col} entry in --parental-freq-file.\n", file=sys.stderr)
             return 2
 
         parental_freq_pop0 = freq_by_locus.loc[loci, args.freq_pop0_col].to_numpy(dtype=float)
@@ -3216,7 +3229,7 @@ def cmd_estimate_hybrid_index(args) -> int:
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_df.to_csv(out_path, index=False)
+    out_df.to_csv(out_path, sep="\t", index=False)
 
     print(f"\nHybrid index estimated for {len(out_df)} individuals (--method {args.method}).")
     print(f"  Range: [{h.min():.3f}, {h.max():.3f}]  (parental reference individuals should "
@@ -3305,7 +3318,6 @@ def _resolve_geographic_metadata_distance(args, metadata_df, fmt):
 
 
 def cmd_generate_geographic_input(args) -> int:
-    import pandas as pd
 
     if not Path(args.input).exists():
         print(f"\nERROR: input file not found: '{args.input}'\n", file=sys.stderr)
@@ -3319,7 +3331,7 @@ def cmd_generate_geographic_input(args) -> int:
         fmt = "beagle" if args.input.endswith((".beagle", ".beagle.gz")) else "vcf"
         print(f"Detected input format: {fmt} (from file extension; use --format to override)")
 
-    metadata_df = pd.read_csv(args.metadata)
+    metadata_df = _read_user_table(args.metadata, "metadata file")
     try:
         metadata_df, distance_col = _resolve_geographic_metadata_distance(args, metadata_df, fmt)
     except ValueError as e:
@@ -3395,11 +3407,10 @@ def _genomic_parental_freqs(args, fmt, data, metadata_df):
     """Parental frequencies for generate-genomic-input. Returns
     (parental_freqs or None, reference sample names to exclude, error
     message or None). Frequencies are of the VCF ALT / beagle allele2."""
-    import pandas as pd
     mode1 = args.population_col is not None
-    mode2 = args.parental_freq_csv is not None
+    mode2 = args.parental_freq_file is not None
     if mode1 and mode2:
-        return None, [], ("--population-col and --parental-freq-csv are mutually "
+        return None, [], ("--population-col and --parental-freq-file are mutually "
                           "exclusive -- give at most one.")
     if not (mode1 or mode2):
         return None, [], None
@@ -3412,7 +3423,7 @@ def _genomic_parental_freqs(args, fmt, data, metadata_df):
         if args.parental_metadata is not None:
             if not Path(args.parental_metadata).exists():
                 return None, [], f"--parental-metadata file not found: '{args.parental_metadata}'"
-            labels_df = pd.read_csv(args.parental_metadata)
+            labels_df = _read_user_table(args.parental_metadata, "--parental-metadata file")
         from hycline.data.filter_aims import match_samples_to_populations
         try:
             pop0_mask, pop1_mask = match_samples_to_populations(
@@ -3434,17 +3445,17 @@ def _genomic_parental_freqs(args, fmt, data, metadata_df):
         refs = [] if args.include_parentals else [
             s for s, r in zip(data.sample_names, pop0_mask | pop1_mask) if r]
     else:
-        if not Path(args.parental_freq_csv).exists():
-            return None, [], f"--parental-freq-csv file not found: '{args.parental_freq_csv}'"
-        freq_df = pd.read_csv(args.parental_freq_csv)
+        if not Path(args.parental_freq_file).exists():
+            return None, [], f"--parental-freq-file file not found: '{args.parental_freq_file}'"
+        freq_df = _read_user_table(args.parental_freq_file, "--parental-freq-file")
         for col in (args.freq_locus_col, args.freq_pop0_col, args.freq_pop1_col):
             if col not in freq_df.columns:
-                return None, [], (f"column '{col}' not found in '{args.parental_freq_csv}'. "
+                return None, [], (f"column '{col}' not found in '{args.parental_freq_file}'. "
                                   f"Columns present: {', '.join(freq_df.columns)}")
         by_locus = freq_df.set_index(args.freq_locus_col)
         missing = [l for l in locus_names if l not in by_locus.index]
         if missing:
-            return None, [], (f"'{args.parental_freq_csv}' has no row for locus(-i) "
+            return None, [], (f"'{args.parental_freq_file}' has no row for locus(-i) "
                               f"{_format_loci_list(missing)}.")
         p0 = by_locus.loc[locus_names, args.freq_pop0_col].to_numpy(dtype=float)
         p1 = by_locus.loc[locus_names, args.freq_pop1_col].to_numpy(dtype=float)
@@ -3462,7 +3473,6 @@ def _genomic_parental_freqs(args, fmt, data, metadata_df):
 
 
 def cmd_generate_genomic_input(args) -> int:
-    import pandas as pd
 
     if not Path(args.input).exists():
         print(f"\nERROR: input file not found: '{args.input}'\n", file=sys.stderr)
@@ -3476,7 +3486,7 @@ def cmd_generate_genomic_input(args) -> int:
         fmt = "beagle" if args.input.endswith((".beagle", ".beagle.gz")) else "vcf"
         print(f"Detected input format: {fmt} (from file extension; use --format to override)")
 
-    metadata_df = pd.read_csv(args.metadata)
+    metadata_df = _read_user_table(args.metadata, "metadata file")
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -3541,7 +3551,7 @@ def cmd_generate_genomic_input(args) -> int:
               f"(--include-parentals to keep them).")
     if parental_freqs is None:
         print("NOTE: no parental frequencies given (--population-col or "
-              "--parental-freq-csv), so every locus is treated as fixed for the counted "
+              "--parental-freq-file), so every locus is treated as fixed for the counted "
               "allele in parental population 1 (frequency 0 in population 0, 1 in "
               "population 1). That is only right for fixed markers whose ALT allele "
               "is population 1's; otherwise clines are distorted.", file=sys.stderr)

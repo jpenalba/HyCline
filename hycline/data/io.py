@@ -33,15 +33,45 @@ class TransectCSVError(ValueError):
 # Shared low-level helpers
 # ---------------------------------------------------------------------------
 
-def _read_csv(path: str) -> pd.DataFrame:
+def _read_csv(path: str, sep: str = ",") -> pd.DataFrame:
+    kind = "tab-delimited" if sep == "\t" else "CSV"
     try:
-        df = pd.read_csv(path)
+        df = pd.read_csv(path, sep=sep)
     except FileNotFoundError:
         raise TransectCSVError(f"Input file not found: '{path}'. Check the --input path.")
     except Exception as e:
-        raise TransectCSVError(f"Could not read '{path}' as a CSV file: {e}")
+        raise TransectCSVError(f"Could not read '{path}' as a {kind} file: {e}")
+    if sep == "\t":
+        _check_not_comma_separated(df, path)
     if df.shape[0] == 0:
         raise TransectCSVError(f"'{path}' has a header but no data rows.")
+    return df
+
+
+def _check_not_comma_separated(df: pd.DataFrame, path: str, what: str = "") -> None:
+    """A comma-separated file read as tab-delimited comes back as a single
+    column whose name still contains the commas."""
+    if df.shape[1] == 1 and "," in str(df.columns[0]):
+        label = f"{what} '{path}'" if what else f"'{path}'"
+        raise TransectCSVError(
+            f"{label} looks comma-separated, but HyCline reads user-created tables "
+            f"(metadata, parental labels and frequencies, trait data) as tab-delimited "
+            f"files. Save it as tab-delimited (TSV) -- e.g. in pandas, "
+            f"df.to_csv(path, sep='\\t', index=False).")
+
+
+def read_user_table(path: str, what: str = "file") -> pd.DataFrame:
+    """Read a user-created tab-delimited table (metadata, parental labels,
+    parental frequencies): one header row, tab-separated columns. Raises
+    `TransectCSVError` (a ValueError) with a readable message if the file is
+    missing, unreadable, or comma-separated."""
+    try:
+        df = pd.read_csv(path, sep="\t")
+    except FileNotFoundError:
+        raise TransectCSVError(f"{what} not found: '{path}'.")
+    except Exception as e:
+        raise TransectCSVError(f"Could not read {what} '{path}' as a tab-delimited file: {e}")
+    _check_not_comma_separated(df, path, what)
     return df
 
 
@@ -872,8 +902,8 @@ def read_trait_csv(path: str,
                     reference_lat: float | None = None,
                     reference_lon: float | None = None,
                     site_col: str | None = None) -> TraitTransect:
-    """Read site-aggregated quantitative trait transect data from a CSV
-    file (one row per sampling site) -- the trait analog of
+    """Read site-aggregated quantitative trait transect data from a
+    tab-delimited file (one row per sampling site) -- the trait analog of
     `read_allele_freq_csv`.
 
     Distance: either `distance_col` (a pre-computed column) or both
@@ -891,7 +921,7 @@ def read_trait_csv(path: str,
     ------
     TransectCSVError : with a message describing exactly what went wrong.
     """
-    df = _read_csv(path)
+    df = _read_csv(path, sep="\t")
 
     distance = _resolve_distance(df, path, distance_col, lat_col, lon_col,
                                   transect_method, reference_lat, reference_lon)
@@ -981,7 +1011,7 @@ def read_raw_trait_csv(path: str, trait_col: str = "trait_value",
     ------
     TransectCSVError : with a message describing exactly what went wrong.
     """
-    df = _read_csv(path)
+    df = _read_csv(path, sep="\t")
     distance = _resolve_distance(df, path, distance_col, lat_col, lon_col,
                                   transect_method, reference_lat, reference_lon)
 
@@ -1049,7 +1079,7 @@ def read_multi_trait_wide_csv(path: str,
                                site_col: str | None = None,
                                traits: list[str] | None = None
                                ) -> dict[str, TraitTransect]:
-    """Read a wide-format CSV with multiple traits (one row per site,
+    """Read a wide-format tab-delimited file with multiple traits (one row per site,
     `<trait>.mean`/`<trait>.n`/optionally `<trait>.sd` columns per trait)
     -- the trait analog of `read_multi_locus_wide_csv`. Returns a dict
     mapping trait name -> `TraitTransect`.
@@ -1058,7 +1088,7 @@ def read_multi_trait_wide_csv(path: str,
     only one trait's mean doesn't exclude that site from other traits'
     transects) -- the same convention `read_multi_locus_wide_csv` uses.
     """
-    df = _read_csv(path)
+    df = _read_csv(path, sep="\t")
 
     distance = _resolve_distance(df, path, distance_col, lat_col, lon_col,
                                   transect_method, reference_lat, reference_lon)

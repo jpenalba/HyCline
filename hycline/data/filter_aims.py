@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 
 from hycline.data.converter import DEFAULT_RESERVED_COLUMNS, detect_genotype_loci
+from hycline.data.io import read_user_table
 
 
 # Frequencies are ratios of allele counts, so a difference that is exactly
@@ -204,7 +205,7 @@ def filter_aims_beagle(input_path: str, metadata_path: str, output_path: str,
     from hycline.data.beagle import read_beagle, write_beagle
 
     beagle_data = read_beagle(input_path)
-    metadata_df = pd.read_csv(metadata_path)
+    metadata_df = read_user_table(metadata_path, "metadata file")
     pop1_mask, pop2_mask = match_samples_to_populations(
         beagle_data.sample_names, metadata_df, sample_col, population_col,
         pop1_label, pop2_label)
@@ -279,7 +280,7 @@ def filter_aims_csv(input_path: str, metadata_path: str, output_path: str,
     and still works for any caller still using it directly.
     """
     geno_df = pd.read_csv(input_path)
-    metadata_df = pd.read_csv(metadata_path)
+    metadata_df = read_user_table(metadata_path, "metadata file")
 
     if sample_col not in geno_df.columns:
         raise ValueError(f"--sample-col '{sample_col}' not found in '{input_path}'.")
@@ -359,7 +360,7 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
     """
     from hycline.data.vcf import _open_maybe_gzip, _parse_gt
 
-    metadata_df = pd.read_csv(metadata_path)
+    metadata_df = read_user_table(metadata_path, "metadata file")
 
     locus_names = []
     freq_pop1_list = []

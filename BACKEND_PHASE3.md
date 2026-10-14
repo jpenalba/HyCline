@@ -331,6 +331,17 @@ population 6% of retained loci were not AIMs. Open: realistic outlier
 fractions, and a second pass that drops flagged outliers from the
 hybrid-index set.
 
+**File formats.** User-created tables -- metadata, parental labels,
+parental frequencies (the flag is now `--parental-freq-file`, earlier
+`--parental-freq-csv`) and trait data -- are read as tab-delimited via
+`hycline.data.io.read_user_table` / `_read_csv(..., sep="\t")`, which
+reject a comma-separated file with an explicit message;
+`estimate-hybrid-index` writes a tab-delimited table. HyCline's own
+intermediate files stay CSV. `benchmarking/simulate_vcf.py` writes
+`_metadata.tsv`, `_truth.tsv` and a `_params.tsv` record of every option,
+the command line, git commit, versions and realized counts (a seed is
+drawn and recorded when none is given).
+
 ---
 
 ## 6. CLI: `fit-genomic` and `fit-genomic-multi`

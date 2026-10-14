@@ -167,7 +167,7 @@ step("Step 2. Hybrid index (estimate-hybrid-index)",
        "beagle at 30x; missing genotypes vs dropping them.", "Identical h (to ~1e-8)."],
       ["C. Simulation", "simulate_vcf.py across depth (1-30x), AIM fraction (5-100%), AIM strength, "
        "missing data, panel size, and hybrid-index distributions (uniform, beta, fixed). Use the true h "
-       "in the metadata CSV.", "Mean absolute error and bias by setting; 95% interval coverage 93-97% "
+       "in the metadata file (_metadata.tsv).", "Mean absolute error and bias by setting; 95% interval coverage 93-97% "
        "over enough replicates; no compression toward 0.5. Current: error 0.005-0.016 (ml) vs 0.010-0.106 "
        "(mean); coverage 0.90-0.97 on 40 hybrids per setting."],
       ["C. Simulation (structure)", "Pedigree-based hybrids: F1, F2 and backcrosses built from parental "
@@ -302,7 +302,7 @@ p("<font face='Courier'>benchmarking/simulate_vcf.py</font> currently provides: 
   "hybrids and reference panels (<font face='Courier'>--hybrid-freqs population</font>); and "
   "non-neutral genomic clines (barrier, permeable and biased classes among the AIMs, plus random "
   "across-locus variation in u and log v). Its truth files give AIM status, panel and source "
-  "frequencies, cline class, u and v, and true hybrid indices.")
+  "frequencies, cline class, u and v, and true hybrid indices; every run also writes a <font face='Courier'>_params.tsv</font> record of its options, command line, git commit and realized counts (metadata, truth and params files are tab-delimited).")
 table([
     ["Extension", "Why it is needed", "Benchmarks it enables"],
     ["<b>Done:</b> hybrids drawn from population frequencies, with the reference panel a sample of them "

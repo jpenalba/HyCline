@@ -13,6 +13,15 @@ Every command shown below was run for real against synthetic test data
 while writing this guide -- flags, output messages, and file names are
 exact.
 
+**File formats.** Files you create yourself -- metadata (sample names,
+population labels, distances, hybrid indices), parental reference labels
+and precomputed parental frequencies -- are **tab-delimited** text with
+one header row (`.tsv`). HyCline rejects a comma-separated file there
+with a message saying so. The files HyCline writes for its own later
+steps (`generate-*-input` output, fit summaries and curves) are CSV;
+`estimate-hybrid-index` writes a tab-delimited table, since it is meant
+to be used as metadata.
+
 ## Pipeline overview
 
 ```
@@ -55,7 +64,7 @@ Firneno et al. (2023)'s coupling coefficient (theta).
 ```bash
 hycline filter-aims \
     --input genomewide.vcf \
-    --metadata parental_labels.csv \
+    --metadata parental_labels.tsv \
     --population-col population \
     --pop1-label parent0 --pop2-label parent1 \
     --output filtered.vcf
@@ -94,9 +103,9 @@ use" below):
 ```bash
 hycline estimate-hybrid-index \
     --input hi_aims.vcf \
-    --metadata parental_labels.csv \
+    --metadata parental_labels.tsv \
     --population-col population --pop0-label parent0 --pop1-label parent1 \
-    --output hybrid_index.csv
+    --output hybrid_index.tsv
 ```
 
 Real output (on a simulated 90-sample VCF, 15 reference individuals per
@@ -113,7 +122,7 @@ Parsing 'hi_aims.vcf' ...
 Hybrid index estimated for 90 individuals (--method ml).
   Range: [0.000, 1.000]  (parental reference individuals should land near 0 or 1 -- a useful sanity check on the result)
 
-Wrote /path/to/hybrid_index.csv
+Wrote /path/to/hybrid_index.tsv
 Merge this into your metadata (e.g. via the sample-name column) to get a hybrid_index column any genomic-cline fitting command can use.
 ```
 
@@ -171,7 +180,7 @@ ALT allele:
    input, and for beagle input the pooled maximum-likelihood frequency
    from their genotype likelihoods (the estimator `filter-aims` uses), so
    low depth doesn't pull it toward 0.5. In Mode 2 they're read from
-   `--parental-freq-csv`. They are clipped to [0.001, 0.999] so that an
+   `--parental-freq-file`. They are clipped to [0.001, 0.999] so that an
    allele absent from a finite reference panel can't make a locus
    impossible -- locus A is used as 0.001/0.999. Loci without parental
    frequencies are skipped.
@@ -285,10 +294,10 @@ individuals, loosen the filter to bring in more loci.
 ### Two ways to supply parental allele frequencies
 
 **Mode 1** (shown above) -- `--metadata`/`--population-col`/`--pop0-label`/
-`--pop1-label`: a separate metadata CSV maps sample names to which
+`--pop1-label`: a separate tab-delimited metadata file maps sample names to which
 parental population each is a reference for.
 
-**Mode 2** -- `--parental-freq-csv`: a separate CSV of precomputed
+**Mode 2** -- `--parental-freq-file`: a separate tab-delimited file of precomputed
 per-locus parental frequencies (of the VCF ALT / beagle allele2 allele),
 for when you already have a reference panel's frequencies summarized
 rather than raw reference genotypes. No `--metadata` needed for this
@@ -297,9 +306,9 @@ mode.
 ```bash
 hycline estimate-hybrid-index \
     --input genomewide.vcf \
-    --parental-freq-csv parental_frequencies.csv \
+    --parental-freq-file parental_frequencies.tsv \
     --freq-pop0-col freq_pop0 --freq-pop1-col freq_pop1 \
-    --output hybrid_index.csv
+    --output hybrid_index.tsv
 ```
 
 Exactly one of the two modes must be given.
@@ -314,23 +323,23 @@ input and reference panel, and feed each output to a different step:
 
 ```bash
 # Two AIM sets from the same genome-wide file
-hycline filter-aims --input genomewide.vcf --metadata parental_labels.csv \
+hycline filter-aims --input genomewide.vcf --metadata parental_labels.tsv \
     --pop1-label parent0 --pop2-label parent1 \
     --allele-freq-diff 0.5 --output hi_aims.vcf
-hycline filter-aims --input genomewide.vcf --metadata parental_labels.csv \
+hycline filter-aims --input genomewide.vcf --metadata parental_labels.tsv \
     --pop1-label parent0 --pop2-label parent1 \
     --allele-freq-diff 0.3 --output cline_aims.vcf
 
 # Hybrid index from the stricter set
 hycline estimate-hybrid-index --input hi_aims.vcf \
-    --metadata parental_labels.csv \
+    --metadata parental_labels.tsv \
     --population-col population --pop0-label parent0 --pop1-label parent1 \
-    --output hybrid_index.csv
+    --output hybrid_index.tsv
 
 # Cline input from the looser set, using that hybrid index and the
 # parental reference individuals for each locus's parental frequencies
 hycline generate-genomic-input --input cline_aims.vcf \
-    --metadata hybrid_index.csv --parental-metadata parental_labels.csv \
+    --metadata hybrid_index.tsv --parental-metadata parental_labels.tsv \
     --population-col population --pop0-label parent0 --pop1-label parent1 \
     --output genomic_input.csv
 ```
@@ -374,15 +383,15 @@ Two things to keep in mind:
 ## Step 3: Generate genomic-cline input
 
 `generate-genomic-input --input <file>` takes a VCF or ANGSD beagle file
-directly, plus a metadata CSV giving each individual's hybrid index
+directly, plus a tab-delimited metadata file giving each individual's hybrid index
 (Step 2's output works as is), and **the parental reference individuals,
 so each locus's parental allele frequencies can be computed**:
 
 ```bash
 hycline generate-genomic-input \
     --input cline_aims.vcf \
-    --metadata hybrid_index.csv \
-    --parental-metadata parental_labels.csv \
+    --metadata hybrid_index.tsv \
+    --parental-metadata parental_labels.tsv \
     --population-col population --pop0-label parent0 --pop1-label parent1 \
     --output genomic_input.csv
 ```
@@ -423,7 +432,7 @@ VCF's ALT.
 | `--population-col`, `--pop0-label`, `--pop1-label` | Labels identifying the parental reference individuals (Mode 1). Frequencies are the references' sample frequencies for VCF input, and pooled maximum-likelihood estimates from their genotype likelihoods for beagle input |
 | `--parental-metadata` | CSV holding `--sample-col` and `--population-col`, if the labels aren't in `--metadata` |
 | `--include-parentals` | Keep the reference individuals in the output. By default they are left out, as gghybrid's `ggcline` does: clines are fitted to the test individuals |
-| `--parental-freq-csv` (+ `--freq-locus-col`, `--freq-pop0-col`, `--freq-pop1-col`) | Precomputed per-locus parental frequencies instead (Mode 2) -- the same file format `estimate-hybrid-index` takes |
+| `--parental-freq-file` (+ `--freq-locus-col`, `--freq-pop0-col`, `--freq-pop1-col`) | Precomputed per-locus parental frequencies instead (Mode 2) -- the same file format `estimate-hybrid-index` takes |
 
 Parental frequencies are clipped to [0.001, 0.999], so an individual at
 hybrid index exactly 0 or 1 can't make a locus impossible, and loci

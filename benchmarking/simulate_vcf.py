@@ -31,7 +31,7 @@ unless cline classes are requested:
   --cline-u-sd / --cline-log-v-sd      random u ~ N(0, sd), log v ~ N(0, sd)
                                        for every other locus (for testing
                                        hierarchical across-locus variation)
-The truth CSV records each SNP's cline_class, u and v.
+The truth file records each SNP's cline_class, u and v.
 
 Where p_pop1/p_pop2 come from (--hybrid-freqs):
   panel       (default) the reference panels' realized sample frequencies,
@@ -59,14 +59,20 @@ Missingness is decided before genotypes are drawn, and AIM status is
 enforced on the called (non-missing) pop1 and pop2 genotypes, so missing
 data never pushes an AIM's realized frequency outside the cutoff.
 
-Alongside the VCF the script writes a metadata CSV (columns: individual,
-population, hybrid_index, missing_fraction, plus mean_depth when reads are
-simulated) usable directly with HyCline's --metadata/--sample-col/
---population-col options, and a truth CSV recording each SNP's AIM status
-and realized parental frequencies (from the true, non-missing genotypes),
-plus source_freq_pop1/source_freq_pop2 (the frequencies the hybrids were
-drawn from: the panel frequencies or the population frequencies) and the
-cline columns.
+Alongside the VCF the script writes three tab-delimited files:
+  <stem>_metadata.tsv  individual, population, hybrid_index, missing_fraction
+                       (plus mean_depth when reads are simulated); usable
+                       directly as HyCline's --metadata.
+  <stem>_truth.tsv     per SNP: AIM status, realized parental frequencies
+                       (from the true, non-missing genotypes), low_pop,
+                       source_freq_pop1/source_freq_pop2 (the frequencies
+                       the hybrids were drawn from: the panel or the
+                       population frequencies), cline_class, u and v.
+  <stem>_params.tsv    the simulation's parameters: every option's value,
+                       the command line, the script's git commit, date,
+                       software versions, output files and realized counts
+                       (AIMs, cline classes, missing genotypes, depth).
+The VCF header also records the command line (##simulate_vcf_command).
 
 Genotype likelihoods: --format-beagle also writes an ANGSD-style beagle file
 (`angsd -doGlf 2` layout) for the same samples and SNPs. Reads are simulated
@@ -230,13 +236,17 @@ def parse_args(argv=None):
     p.add_argument("--output", "-o", required=True,
                    help="Output VCF path (.vcf or .vcf.gz).")
     p.add_argument("--metadata", default=None,
-                   help="Output metadata CSV path (individual,population). "
-                        "Default: <output stem>_metadata.csv.")
+                   help="Output metadata path (tab-delimited). "
+                        "Default: <output stem>_metadata.tsv.")
     p.add_argument("--truth", default=None,
-                   help="Output per-SNP truth CSV path. "
-                        "Default: <output stem>_truth.csv.")
+                   help="Output per-SNP truth path (tab-delimited). "
+                        "Default: <output stem>_truth.tsv.")
+    p.add_argument("--params", default=None,
+                   help="Output path for the record of simulation parameters "
+                        "(tab-delimited). Default: <output stem>_params.tsv.")
     p.add_argument("--seed", type=int, default=None,
-                   help="Random seed for reproducibility.")
+                   help="Random seed for reproducibility. Without it a seed is "
+                        "drawn at random and recorded in the params file.")
     args = p.parse_args(argv)
 
     for name in ("n_pop1", "n_pop2"):
@@ -516,8 +526,64 @@ BASE_CODE = {"A": "0", "C": "1", "G": "2", "T": "3"}
 GT_STR = {0: "0/0", 1: "0/1", 2: "1/1"}
 
 
+def _command_line(argv=None) -> str:
+    import shlex
+    argv = sys.argv[1:] if argv is None else list(argv)
+    return " ".join(shlex.quote(a) for a in ["simulate_vcf.py", *argv])
+
+
+def _git_commit() -> str:
+    """The commit of the repository holding this script, if available."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent),
+                              "rev-parse", "HEAD"], capture_output=True, text=True,
+                             timeout=10)
+        commit = out.stdout.strip()
+        if not commit:
+            return "unknown"
+        dirty = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent),
+                                "status", "--porcelain", "--", Path(__file__).name],
+                               capture_output=True, text=True, timeout=10).stdout.strip()
+        return commit + (" (simulate_vcf.py modified)" if dirty else "")
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
+def write_params(path: str, args, realized: dict, outputs: dict, command: str) -> None:
+    """Record every option's value plus provenance and realized counts as a
+    two-column tab-delimited file (parameter, value)."""
+    import datetime
+    import platform
+
+    def fmt(value):
+        if isinstance(value, dict):
+            return ";".join(f"{k}={v}" for k, v in value.items())
+        if isinstance(value, (list, tuple)):
+            return ";".join(map(str, value))
+        return "" if value is None else str(value)
+
+    rows = [("command", command),
+            ("script", "benchmarking/simulate_vcf.py"),
+            ("git_commit", _git_commit()),
+            ("date_utc", datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")),
+            ("python_version", platform.python_version()),
+            ("numpy_version", np.__version__)]
+    rows += [(f"option.{k}", fmt(v)) for k, v in sorted(vars(args).items())]
+    rows += [(f"output.{k}", fmt(v)) for k, v in outputs.items()]
+    rows += [(f"realized.{k}", fmt(v)) for k, v in realized.items()]
+    with open(path, "w") as f:
+        f.write("parameter\tvalue\n")
+        for k, v in rows:
+            f.write(f"{k}\t{v}\n".replace("\r", " "))
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
+    command = _command_line(argv)
+    if args.seed is None:
+        # Draw a seed and record it (params file), so any run can be repeated.
+        args.seed = int(np.random.SeedSequence().entropy)
     rng = np.random.default_rng(args.seed)
     # Reads get their own stream, so turning beagle output or called
     # genotypes on/off never changes the simulated genotypes for a given seed.
@@ -559,8 +625,9 @@ def main(argv=None) -> int:
 
     out_vcf = args.output
     stem = _stem(out_vcf)
-    meta_path = args.metadata or f"{stem}_metadata.csv"
-    truth_path = args.truth or f"{stem}_truth.csv"
+    meta_path = args.metadata or f"{stem}_metadata.tsv"
+    truth_path = args.truth or f"{stem}_truth.tsv"
+    params_path = args.params or f"{stem}_params.tsv"
     beagle_path = None
     if args.format_beagle:
         beagle_path = args.beagle_output or (
@@ -591,6 +658,8 @@ def main(argv=None) -> int:
     with _open(out_vcf) as vcf, open(truth_path, "w") as truth:
         vcf.write("##fileformat=VCFv4.2\n")
         vcf.write("##source=HyCline_benchmarking_simulate_vcf\n")
+        vcf.write(f"##simulate_vcf_command={command}\n")
+        vcf.write(f"##simulate_vcf_params={params_path}\n")
         for c in range(args.n_chrom):
             length = snps_per_chrom * args.snp_spacing + args.snp_spacing
             vcf.write(f"##contig=<ID=chr{c + 1},length={length}>\n")
@@ -603,8 +672,9 @@ def main(argv=None) -> int:
         vcf.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"
                   + "\t".join(samples) + "\n")
 
-        truth.write("chrom,pos,id,marker,is_aim,freq_pop1,freq_pop2,low_pop,"
-                    "source_freq_pop1,source_freq_pop2,cline_class,u,v\n")
+        truth.write("\t".join(["chrom", "pos", "id", "marker", "is_aim", "freq_pop1",
+                               "freq_pop2", "low_pop", "source_freq_pop1",
+                               "source_freq_pop2", "cline_class", "u", "v"]) + "\n")
 
         for s in range(args.n_snps):
             chrom = f"chr{s // snps_per_chrom + 1}"
@@ -678,16 +748,17 @@ def main(argv=None) -> int:
             else:
                 low_pop = (("pop1" if f1 < f2 else "pop2")
                            if aim and called1.any() and called2.any() else "")
-            truth.write(f"{chrom},{pos},{snp_id},{marker},{int(aim)},"
-                        f"{f1:.6f},{f2:.6f},{low_pop},{src1:.6f},{src2:.6f},"
-                        f"{cline_class[s]},{cline_u[s]:.6f},{cline_v[s]:.6f}\n")
+            truth.write("\t".join([
+                chrom, str(pos), snp_id, marker, str(int(aim)), f"{f1:.6f}", f"{f2:.6f}",
+                low_pop, f"{src1:.6f}", f"{src2:.6f}", cline_class[s],
+                f"{cline_u[s]:.6f}", f"{cline_v[s]:.6f}"]) + "\n")
 
     if beagle:
         beagle.close()
 
     with open(meta_path, "w") as meta:
-        meta.write("individual,population,hybrid_index,missing_fraction"
-                   + (",mean_depth" if simulate_reads else "") + "\n")
+        meta.write("individual\tpopulation\thybrid_index\tmissing_fraction"
+                   + ("\tmean_depth" if simulate_reads else "") + "\n")
         hi_iter = iter(hybrid_index)
         for i, (name, pop, n_miss) in enumerate(zip(samples, pops, missing_per_sample)):
             if pop == "pop1":
@@ -696,10 +767,10 @@ def main(argv=None) -> int:
                 hi = "1"
             else:
                 hi = f"{next(hi_iter):.6f}"
-            row = f"{name},{pop},{hi},{n_miss / args.n_snps:.6f}"
+            row = f"{name}\t{pop}\t{hi}\t{n_miss / args.n_snps:.6f}"
             if simulate_reads:
                 n_called = args.n_snps - n_miss
-                row += f",{depth_sum[i] / n_called:.3f}" if n_called else ",0"
+                row += f"\t{depth_sum[i] / n_called:.3f}" if n_called else "\t0"
             meta.write(row + "\n")
 
     print(f"Wrote {out_vcf}: {n_samples} samples "
@@ -722,9 +793,22 @@ def main(argv=None) -> int:
         n_called = n_samples * args.n_snps - total_missing
         print(f"Mean simulated read depth per called genotype: "
               f"{depth_sum.sum() / max(n_called, 1):.2f}.")
+    realized = {
+        "n_samples": n_samples, "n_aims": n_aims,
+        "n_missing_genotypes": total_missing,
+        "missing_fraction": f"{total_missing / (n_samples * args.n_snps):.6f}",
+        **{f"n_cline_{c}": int((cline_class == c).sum())
+           for c in ("neutral", "barrier", "permeable", "biased", "random")},
+    }
+    if simulate_reads:
+        realized["mean_depth_per_called_genotype"] = (
+            f"{depth_sum.sum() / max(n_samples * args.n_snps - total_missing, 1):.4f}")
+    outputs = {"output_vcf": out_vcf, "output_beagle": beagle_path or "",
+               "output_metadata": meta_path, "output_truth": truth_path}
+    write_params(params_path, args, realized, outputs, command)
     if beagle_path:
         print(f"Wrote {beagle_path}.")
-    print(f"Wrote {meta_path} and {truth_path}.")
+    print(f"Wrote {meta_path}, {truth_path} and {params_path}.")
     return 0
 
 

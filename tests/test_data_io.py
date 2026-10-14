@@ -789,12 +789,12 @@ def test_convert_genotype_csv_to_gl_csv_no_fragmentation_warning_at_scale(tmp_pa
 def test_read_trait_csv_basic(tmp_path):
     from hycline.data.io import read_trait_csv
 
-    csv_path = tmp_path / "trait.csv"
+    csv_path = tmp_path / "trait.tsv"
     csv_path.write_text(
-        "site,distance,trait_mean,n,trait_sd\n"
-        "s0,0,10.2,8,1.1\n"
-        "s1,50,15.5,10,1.3\n"
-        "s2,100,20.1,12,0.9\n"
+        "site\tdistance\ttrait_mean\tn\ttrait_sd\n"
+        "s0\t0\t10.2\t8\t1.1\n"
+        "s1\t50\t15.5\t10\t1.3\n"
+        "s2\t100\t20.1\t12\t0.9\n"
     )
     t = read_trait_csv(str(csv_path), site_col="site", sd_col="trait_sd")
     assert len(t) == 3
@@ -807,8 +807,8 @@ def test_read_trait_csv_basic(tmp_path):
 def test_read_trait_csv_no_sd_col_leaves_trait_sd_none(tmp_path):
     from hycline.data.io import read_trait_csv
 
-    csv_path = tmp_path / "trait.csv"
-    csv_path.write_text("distance,trait_mean,n\n0,10.2,8\n50,15.5,10\n")
+    csv_path = tmp_path / "trait.tsv"
+    csv_path.write_text("distance\ttrait_mean\tn\n0\t10.2\t8\n50\t15.5\t10\n")
     t = read_trait_csv(str(csv_path))
     assert t.trait_sd is None
 
@@ -816,8 +816,8 @@ def test_read_trait_csv_no_sd_col_leaves_trait_sd_none(tmp_path):
 def test_read_trait_csv_missing_mean_col_actionable_error(tmp_path):
     from hycline.data.io import read_trait_csv, TransectCSVError
 
-    csv_path = tmp_path / "trait.csv"
-    csv_path.write_text("distance,n\n0,8\n50,10\n")
+    csv_path = tmp_path / "trait.tsv"
+    csv_path.write_text("distance\tn\n0\t8\n50\t10\n")
     with pytest.raises(TransectCSVError, match="--mean-col"):
         read_trait_csv(str(csv_path))
 
@@ -827,10 +827,10 @@ def test_read_multi_trait_wide_csv_auto_detects_traits(tmp_path):
 
     csv_path = tmp_path / "multi.csv"
     csv_path.write_text(
-        "distance,mass.mean,mass.n,mass.sd,beak.mean,beak.n\n"
-        "0,10.0,8,1.0,5.0,8\n"
-        "50,15.0,10,1.2,7.0,10\n"
-        "100,20.0,12,0.8,9.0,12\n"
+        "distance\tmass.mean\tmass.n\tmass.sd\tbeak.mean\tbeak.n\n"
+        "0\t10.0\t8\t1.0\t5.0\t8\n"
+        "50\t15.0\t10\t1.2\t7.0\t10\n"
+        "100\t20.0\t12\t0.8\t9.0\t12\n"
     )
     traits = read_multi_trait_wide_csv(str(csv_path))
     assert set(traits.keys()) == {"mass", "beak"}
@@ -844,10 +844,10 @@ def test_read_multi_trait_wide_csv_drops_missing_rows_independently_per_trait(tm
 
     csv_path = tmp_path / "multi.csv"
     csv_path.write_text(
-        "distance,mass.mean,mass.n,beak.mean,beak.n\n"
-        "0,10.0,8,5.0,8\n"
-        "50,,10,7.0,10\n"
-        "100,20.0,12,9.0,12\n"
+        "distance\tmass.mean\tmass.n\tbeak.mean\tbeak.n\n"
+        "0\t10.0\t8\t5.0\t8\n"
+        "50\t\t10\t7.0\t10\n"
+        "100\t20.0\t12\t9.0\t12\n"
     )
     traits = read_multi_trait_wide_csv(str(csv_path))
     assert len(traits["mass"]) == 2  # row 1 dropped (missing mass.mean)
@@ -858,7 +858,7 @@ def test_read_multi_trait_wide_csv_no_traits_detected_actionable_error(tmp_path)
     from hycline.data.io import read_multi_trait_wide_csv, TransectCSVError
 
     csv_path = tmp_path / "multi.csv"
-    csv_path.write_text("distance,foo\n0,1\n50,2\n")
+    csv_path.write_text("distance\tfoo\n0\t1\n50\t2\n")
     with pytest.raises(TransectCSVError, match="No traits detected"):
         read_multi_trait_wide_csv(str(csv_path))
 
@@ -885,9 +885,9 @@ def test_read_multi_trait_wide_csv_output_chains_into_fit_mle_trait_recovers_kno
         site_means.append(obs.mean())
         site_sds.append(obs.std())
 
-    csv_path = tmp_path / "trait.csv"
+    csv_path = tmp_path / "trait.tsv"
     pd.DataFrame({"distance": distance, "size.mean": site_means, "size.n": n,
-                  "size.sd": site_sds}).to_csv(csv_path, index=False)
+                  "size.sd": site_sds}).to_csv(csv_path, sep="\t", index=False)
 
     traits = read_multi_trait_wide_csv(str(csv_path))
     fit = fit_mle_trait(traits["size"])
@@ -904,12 +904,12 @@ def test_read_raw_trait_csv_aggregates_correctly_with_site_col(tmp_path):
 
     csv_path = tmp_path / "raw.csv"
     csv_path.write_text(
-        "individual,site,distance,trait_value\n"
-        "i1,A,0,1.0\n"
-        "i2,A,0,1.2\n"
-        "i3,A,0,0.9\n"
-        "i4,B,50,5.0\n"
-        "i5,B,50,5.5\n"
+        "individual\tsite\tdistance\ttrait_value\n"
+        "i1\tA\t0\t1.0\n"
+        "i2\tA\t0\t1.2\n"
+        "i3\tA\t0\t0.9\n"
+        "i4\tB\t50\t5.0\n"
+        "i5\tB\t50\t5.5\n"
     )
     t = read_raw_trait_csv(str(csv_path), trait_col="trait_value", site_col="site")
     assert len(t) == 2
@@ -924,7 +924,7 @@ def test_read_raw_trait_csv_groups_by_exact_distance_without_site_col(tmp_path):
 
     csv_path = tmp_path / "raw.csv"
     csv_path.write_text(
-        "distance,trait_value\n0,1.0\n0,1.2\n0,0.9\n50,5.0\n50,5.5\n"
+        "distance\ttrait_value\n0\t1.0\n0\t1.2\n0\t0.9\n50\t5.0\n50\t5.5\n"
     )
     t = read_raw_trait_csv(str(csv_path), trait_col="trait_value")
     assert len(t) == 2
@@ -935,7 +935,7 @@ def test_read_raw_trait_csv_inconsistent_distance_within_site_raises(tmp_path):
     from hycline.data.io import read_raw_trait_csv, TransectCSVError
 
     csv_path = tmp_path / "raw.csv"
-    csv_path.write_text("site,distance,trait_value\nA,0,1.0\nA,5,2.0\n")
+    csv_path.write_text("site\tdistance\ttrait_value\nA\t0\t1.0\nA\t5\t2.0\n")
     with pytest.raises(TransectCSVError, match="inconsistent"):
         read_raw_trait_csv(str(csv_path), trait_col="trait_value", site_col="site")
 
@@ -944,7 +944,7 @@ def test_read_raw_trait_csv_drops_missing_values_not_counted_in_n(tmp_path):
     from hycline.data.io import read_raw_trait_csv
 
     csv_path = tmp_path / "raw.csv"
-    csv_path.write_text("site,distance,trait_value\nA,0,1.0\nA,0,\nA,0,2.0\n")
+    csv_path.write_text("site\tdistance\ttrait_value\nA\t0\t1.0\nA\t0\t\nA\t0\t2.0\n")
     t = read_raw_trait_csv(str(csv_path), trait_col="trait_value", site_col="site")
     assert t.n[0] == 2
 
@@ -953,7 +953,7 @@ def test_read_raw_trait_csv_missing_trait_col_actionable_error(tmp_path):
     from hycline.data.io import read_raw_trait_csv, TransectCSVError
 
     csv_path = tmp_path / "raw.csv"
-    csv_path.write_text("site,distance\nA,0\n")
+    csv_path.write_text("site\tdistance\nA\t0\n")
     with pytest.raises(TransectCSVError, match="--trait-col"):
         read_raw_trait_csv(str(csv_path))
 
@@ -980,7 +980,7 @@ def test_read_raw_trait_csv_output_chains_into_fit_mle_trait_recovers_known_clin
         for j, v in enumerate(obs):
             rows.append({"site": f"site{i}", "distance": site_distance[i], "trait_value": v})
     csv_path = tmp_path / "raw.csv"
-    pd.DataFrame(rows).to_csv(csv_path, index=False)
+    pd.DataFrame(rows).to_csv(csv_path, sep="\t", index=False)
 
     transect = read_raw_trait_csv(str(csv_path), trait_col="trait_value", site_col="site")
     fit = fit_mle_trait(transect)
@@ -1022,3 +1022,27 @@ def test_genomic_readers_pick_up_parental_frequency_columns(tmp_path):
     hard.drop(columns=["L1.p0"]).to_csv(tmp_path / "half.csv", index=False)
     with pytest.raises(TransectCSVError, match="only one of"):
         read_genomic_cline_multi_locus_wide_csv(str(tmp_path / "half.csv"))
+
+
+# ---------------------------------------------------------------------------
+# user-created tables are tab-delimited
+# ---------------------------------------------------------------------------
+
+def test_read_user_table_reads_tab_delimited_and_rejects_commas(tmp_path):
+    from hycline.data.io import TransectCSVError, read_user_table, read_trait_csv
+    good = tmp_path / "meta.tsv"
+    good.write_text("individual\tpopulation\na\tparent1\nb\tparent2\n")
+    df = read_user_table(str(good), "metadata file")
+    assert list(df.columns) == ["individual", "population"] and len(df) == 2
+
+    bad = tmp_path / "meta.csv"
+    bad.write_text("individual,population\na,parent1\n")
+    with pytest.raises(TransectCSVError, match="looks comma-separated"):
+        read_user_table(str(bad), "metadata file")
+    with pytest.raises(TransectCSVError, match="not found"):
+        read_user_table(str(tmp_path / "missing.tsv"), "metadata file")
+
+    trait = tmp_path / "trait.csv"
+    trait.write_text("distance,trait_mean,n\n0,10.2,8\n50,15.5,10\n")
+    with pytest.raises(TransectCSVError, match="looks comma-separated"):
+        read_trait_csv(str(trait))

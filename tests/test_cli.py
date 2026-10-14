@@ -1267,7 +1267,7 @@ def _write_hybrid_index_input_vcf(vcf_path, metadata_path, seed=71, n_loci=20,
         [{"individual": f"pop0_ref{i}", "population": "house"} for i in range(n_ref_each)]
         + [{"individual": f"pop1_ref{i}", "population": "spanish"} for i in range(n_ref_each)]
     )
-    pd.DataFrame(meta_rows).to_csv(metadata_path, index=False)
+    pd.DataFrame(meta_rows).to_csv(metadata_path, sep="\t", index=False)
 
     return true_h
 
@@ -1290,10 +1290,10 @@ def test_cli_estimate_hybrid_index_recovers_known_true_hybrid_index(tmp_path):
     import pandas as pd
 
     vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     true_h = _write_hybrid_index_input_vcf(vcf_path, metadata_path)
 
-    output_path = tmp_path / "hybrid_index.csv"
+    output_path = tmp_path / "hybrid_index.tsv"
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
         "--population-col", "population", "--pop0-label", "house",
@@ -1301,7 +1301,7 @@ def test_cli_estimate_hybrid_index_recovers_known_true_hybrid_index(tmp_path):
     ])
     assert result.returncode == 0, result.stderr
 
-    out_df = pd.read_csv(output_path)
+    out_df = pd.read_csv(output_path, sep="\t")
     assert len(out_df) == 15 + 15 + 30
     assert set(out_df.columns) == {"individual", "hybrid_index", "hybrid_index_lower",
                                    "hybrid_index_upper", "n_loci"}
@@ -1330,10 +1330,10 @@ def test_cli_estimate_hybrid_index_orients_alleles_by_parental_frequency(tmp_pat
     import numpy as np
 
     vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     true_h = _write_hybrid_index_input_vcf(vcf_path, metadata_path,
                                            flip_every_other=True)
-    output_path = tmp_path / "hybrid_index.csv"
+    output_path = tmp_path / "hybrid_index.tsv"
     for extra in (["--method", "mean"], ["--method", "mean", "--weight-by-differentiation"],
                   ["--method", "ml"]):
         result = _run_cli([
@@ -1342,7 +1342,7 @@ def test_cli_estimate_hybrid_index_orients_alleles_by_parental_frequency(tmp_pat
             "--pop1-label", "spanish", "--output", str(output_path), *extra,
         ])
         assert result.returncode == 0, result.stderr
-        out_df = pd.read_csv(output_path)
+        out_df = pd.read_csv(output_path, sep="\t")
         h = out_df.set_index("individual")["hybrid_index"]
         assert h[h.index.str.startswith("pop0")].mean() < 0.1
         assert h[h.index.str.startswith("pop1")].mean() > 0.9
@@ -1363,10 +1363,9 @@ def test_cli_estimate_hybrid_index_beagle_missing_genotypes_not_counted(tmp_path
             for j in range(4)]
     beagle_path = tmp_path / "in.beagle"
     beagle_path.write_text(header + "\n" + "\n".join(rows) + "\n")
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": names,
-                  "population": ["house", "house", "spanish", "spanish", "hybrid"]}).to_csv(
-        metadata_path, index=False)
+                  "population": ["house", "house", "spanish", "spanish", "hybrid"]}).to_csv(metadata_path, sep="\t", index=False)
     output_path = tmp_path / "hi.csv"
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(beagle_path), "--metadata",
@@ -1374,7 +1373,7 @@ def test_cli_estimate_hybrid_index_beagle_missing_genotypes_not_counted(tmp_path
         "--pop1-label", "spanish", "--method", "mean", "--output", str(output_path),
     ])
     assert result.returncode == 0, result.stderr
-    h = pd.read_csv(output_path).set_index("individual")["hybrid_index"]
+    h = pd.read_csv(output_path, sep="\t").set_index("individual")["hybrid_index"]
     # x is missing at 3 of 4 loci and pure house at the fourth: 0, not 0.375
     assert h["x"] == pytest.approx(0.0, abs=1e-9)
 
@@ -1397,8 +1396,8 @@ def test_cli_estimate_hybrid_index_ml_recovers_hybrid_index_at_low_depth(tmp_pat
                     "--n-snps", "1000", "--aim-percent", "30", "--missing-global", "0.1",
                     "--format-beagle", "--mean-depth", "2", "--seed", "21",
                     "--output", str(prefix)], check=True, capture_output=True)
-    metadata = tmp_path / "zone_metadata.csv"
-    truth = pd.read_csv(metadata).set_index("individual")
+    metadata = tmp_path / "zone_metadata.tsv"
+    truth = pd.read_csv(metadata, sep="\t").set_index("individual")
 
     errors = {}
     for method, extra in (("ml", []), ("mean", ["--weight-by-differentiation"])):
@@ -1410,7 +1409,7 @@ def test_cli_estimate_hybrid_index_ml_recovers_hybrid_index_at_low_depth(tmp_pat
             "--output", str(out), *extra,
         ])
         assert result.returncode == 0, result.stderr
-        est = pd.read_csv(out).set_index("individual").join(truth, rsuffix="_true")
+        est = pd.read_csv(out, sep="\t").set_index("individual").join(truth, rsuffix="_true")
         hybrids = est[est["population"] == "popH"]
         errors[method] = np.mean(np.abs(hybrids["hybrid_index"] - hybrids["hybrid_index_true"]))
         if method == "ml":
@@ -1434,6 +1433,53 @@ def _simulated_zone(tmp_path, *args):
     return tmp_path / "zone"
 
 
+def test_cli_filter_aims_comma_separated_metadata_gives_clear_error(tmp_path):
+    header = ("##fileformat=VCFv4.2\n"
+              "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tind0\tind1\n")
+    vcf_path = tmp_path / "g.vcf"
+    vcf_path.write_text(header + "chr1\t100\tlocusA\tA\tT\t99\tPASS\t.\tGT\t0/0\t1/1\n")
+    metadata_path = tmp_path / "metadata.csv"
+    pd.DataFrame({"individual": ["ind0", "ind1"],
+                  "population": ["parent1", "parent2"]}).to_csv(metadata_path, index=False)
+    result = _run_cli(["filter-aims", "--input", str(vcf_path), "--metadata",
+                       str(metadata_path), "--output", str(tmp_path / "o.vcf")])
+    assert result.returncode == 2
+    assert "looks comma-separated" in result.stderr and "tab-delimited" in result.stderr
+
+
+def test_simulator_writes_tsv_outputs_and_reproducible_params(tmp_path):
+    """benchmarking/simulate_vcf.py: tab-delimited metadata/truth, a params
+    record, and a recorded seed that reproduces a run made without --seed."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    script = str(repo / "benchmarking" / "simulate_vcf.py")
+    base = ["--n-pop1", "6", "--n-pop2", "6", "--n-popH", "8", "--n-snps", "40",
+            "--aim-percent", "50", "--barrier-percent", "20", "--format-beagle"]
+    subprocess.run([sys.executable, script, *base, "--output", str(tmp_path / "a.vcf")],
+                   check=True, capture_output=True)
+    params = pd.read_csv(tmp_path / "a_params.tsv", sep="\t", keep_default_na=False)
+    p = dict(zip(params["parameter"], params["value"]))
+    assert p["option.n_snps"] == "40" and p["option.barrier_percent"] == "20.0"
+    assert p["realized.n_aims"] == "20" and p["realized.n_cline_barrier"] == "4"
+    assert p["output.output_truth"].endswith("a_truth.tsv")
+    meta = pd.read_csv(tmp_path / "a_metadata.tsv", sep="\t")
+    truth = pd.read_csv(tmp_path / "a_truth.tsv", sep="\t")
+    assert list(meta.columns[:3]) == ["individual", "population", "hybrid_index"]
+    assert {"cline_class", "u", "v", "source_freq_pop1"} <= set(truth.columns)
+    assert "##simulate_vcf_command=" in (tmp_path / "a.vcf").read_text()
+
+    subprocess.run([sys.executable, script, *base, "--seed", p["option.seed"],
+                    "--output", str(tmp_path / "b.vcf")], check=True, capture_output=True)
+    strip = lambda f: [l for l in (tmp_path / f).read_text().splitlines()
+                       if not l.startswith("##simulate_vcf")]
+    assert strip("a.vcf") == strip("b.vcf")
+    assert (tmp_path / "a.beagle").read_text() == (tmp_path / "b.beagle").read_text()
+    assert (tmp_path / "a_truth.tsv").read_text() == (tmp_path / "b_truth.tsv").read_text()
+
+
 def test_cli_default_hybrid_index_gives_unflattened_genomic_clines(tmp_path):
     """Regression test: the ml hybrid index puts parental references at
     exactly 0 or 1. Fitted with them under the original cline model
@@ -1446,7 +1492,7 @@ def test_cli_default_hybrid_index_gives_unflattened_genomic_clines(tmp_path):
     prefix = _simulated_zone(tmp_path, "--n-pop1", "15", "--n-pop2", "15", "--n-popH", "40",
                              "--n-snps", "200", "--aim-percent", "100",
                              "--aim-cutoff", "0.05", "--seed", "4")
-    vcf, meta = f"{prefix}.vcf", f"{prefix}_metadata.csv"
+    vcf, meta = f"{prefix}.vcf", f"{prefix}_metadata.tsv"
     hi = tmp_path / "hi.csv"
     result = _run_cli(["estimate-hybrid-index", "--input", vcf, "--metadata", meta,
                        "--population-col", "population", "--pop0-label", "pop1",
@@ -1459,7 +1505,7 @@ def test_cli_default_hybrid_index_gives_unflattened_genomic_clines(tmp_path):
                        "--output", str(genomic)])
     assert result.returncode == 0, result.stderr
 
-    truth = pd.read_csv(f"{prefix}_truth.csv").set_index("id")
+    truth = pd.read_csv(f"{prefix}_truth.tsv", sep="\t").set_index("id")
     # ALT is parental population 1's allele where pop1 (population 0) is low,
     # and at least one parental carries the minority allele.
     forward = [l for l in truth.index
@@ -1478,7 +1524,7 @@ def test_cli_default_hybrid_index_gives_unflattened_genomic_clines(tmp_path):
 
 def test_cli_estimate_hybrid_index_ml_rejects_mean_only_options(tmp_path):
     vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     _write_hybrid_index_input_vcf(vcf_path, metadata_path)
     base = ["estimate-hybrid-index", "--input", str(vcf_path), "--metadata",
             str(metadata_path), "--population-col", "population", "--pop0-label", "house",
@@ -1493,9 +1539,9 @@ def test_cli_estimate_hybrid_index_ml_rejects_mean_only_options(tmp_path):
 
 def test_cli_estimate_hybrid_index_weight_by_differentiation_runs(tmp_path):
     vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     _write_hybrid_index_input_vcf(vcf_path, metadata_path)
-    output_path = tmp_path / "hybrid_index.csv"
+    output_path = tmp_path / "hybrid_index.tsv"
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
         "--population-col", "population", "--pop0-label", "house",
@@ -1510,9 +1556,9 @@ def test_cli_estimate_hybrid_index_explicit_loci(tmp_path):
     import pandas as pd
 
     vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     _write_hybrid_index_input_vcf(vcf_path, metadata_path, n_loci=5)
-    output_path = tmp_path / "hybrid_index.csv"
+    output_path = tmp_path / "hybrid_index.tsv"
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
         "--population-col", "population", "--pop0-label", "house",
@@ -1520,14 +1566,14 @@ def test_cli_estimate_hybrid_index_explicit_loci(tmp_path):
         "--output", str(output_path),
     ])
     assert result.returncode == 0, result.stderr
-    assert pd.read_csv(output_path).shape[0] > 0
+    assert pd.read_csv(output_path, sep="\t").shape[0] > 0
 
 
 def test_cli_estimate_hybrid_index_actionable_error_missing_population_label(tmp_path):
     vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     _write_hybrid_index_input_vcf(vcf_path, metadata_path)
-    output_path = tmp_path / "hybrid_index.csv"
+    output_path = tmp_path / "hybrid_index.tsv"
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
         "--population-col", "population", "--pop0-label", "nonexistent_label",
@@ -1539,9 +1585,9 @@ def test_cli_estimate_hybrid_index_actionable_error_missing_population_label(tmp
 
 def test_cli_estimate_hybrid_index_actionable_error_missing_column(tmp_path):
     vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     _write_hybrid_index_input_vcf(vcf_path, metadata_path)
-    output_path = tmp_path / "hybrid_index.csv"
+    output_path = tmp_path / "hybrid_index.tsv"
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
         "--population-col", "nonexistent_column", "--pop0-label", "house",
@@ -1560,9 +1606,9 @@ def test_cli_estimate_hybrid_index_output_chains_into_genomic_fitting(tmp_path):
     from hycline.models.genomic_cline import GenomicClineParams, genomic_cline_function
 
     vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     _write_hybrid_index_input_vcf(vcf_path, metadata_path, n_hybrid=40)
-    hi_path = tmp_path / "hybrid_index.csv"
+    hi_path = tmp_path / "hybrid_index.tsv"
     r1 = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
         "--population-col", "population", "--pop0-label", "house",
@@ -1570,7 +1616,7 @@ def test_cli_estimate_hybrid_index_output_chains_into_genomic_fitting(tmp_path):
     ])
     assert r1.returncode == 0, r1.stderr
 
-    hi_df = pd.read_csv(hi_path)
+    hi_df = pd.read_csv(hi_path, sep="\t")
     hybrid_rows = hi_df[hi_df["individual"].str.startswith("hybrid")].reset_index(drop=True)
 
     # simulate a real genomic-cline locus using the estimated hybrid index
@@ -1597,7 +1643,7 @@ def test_cli_estimate_hybrid_index_output_chains_into_genomic_fitting(tmp_path):
 
 
 def test_cli_estimate_hybrid_index_precomputed_frequencies_matches_mode1(tmp_path):
-    """Mode 2 (--parental-freq-csv) should give numerically identical
+    """Mode 2 (--parental-freq-file) should give numerically identical
     results to Mode 1 (--population-col) when given the frequencies Mode
     1 would itself have computed -- verified to exact equality, not just
     'runs and looks plausible'."""
@@ -1606,11 +1652,11 @@ def test_cli_estimate_hybrid_index_precomputed_frequencies_matches_mode1(tmp_pat
     from hycline.data.vcf import read_vcf
 
     vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     _write_hybrid_index_input_vcf(vcf_path, metadata_path)
 
     vcf_data = read_vcf(str(vcf_path))
-    meta = pd.read_csv(metadata_path)
+    meta = pd.read_csv(metadata_path, sep="\t")
     sample_idx = {s: i for i, s in enumerate(vcf_data.sample_names)}
     pop0_samples = meta[meta["population"] == "house"]["individual"]
     pop1_samples = meta[meta["population"] == "spanish"]["individual"]
@@ -1630,25 +1676,25 @@ def test_cli_estimate_hybrid_index_precomputed_frequencies_matches_mode1(tmp_pat
         "freq_pop0": np.nanmean(vcf_data.dosage[:, pop0_cols], axis=1) / 2,
         "freq_pop1": np.nanmean(vcf_data.dosage[:, pop1_cols], axis=1) / 2,
     })
-    freq_path = tmp_path / "parental_freq.csv"
-    freq_df.to_csv(freq_path, index=False)
+    freq_path = tmp_path / "parental_freq.tsv"
+    freq_df.to_csv(freq_path, sep="\t", index=False)
 
     hi2_path = tmp_path / "mode2.csv"
     r2 = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path),
-        "--parental-freq-csv", str(freq_path), "--output", str(hi2_path),
+        "--parental-freq-file", str(freq_path), "--output", str(hi2_path),
     ])
     assert r2.returncode == 0, r2.stderr
 
-    hi1 = pd.read_csv(hi1_path)
-    hi2 = pd.read_csv(hi2_path)
+    hi1 = pd.read_csv(hi1_path, sep="\t")
+    hi2 = pd.read_csv(hi2_path, sep="\t")
     merged = hi1.merge(hi2, on="individual", suffixes=("_1", "_2"))
     np.testing.assert_allclose(merged["hybrid_index_1"], merged["hybrid_index_2"])
 
 
 def test_cli_estimate_hybrid_index_neither_mode_given_actionable_error(tmp_path):
     vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     _write_hybrid_index_input_vcf(vcf_path, metadata_path)
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path),
@@ -1662,16 +1708,15 @@ def test_cli_estimate_hybrid_index_both_modes_given_actionable_error(tmp_path):
     import pandas as pd
 
     vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     _write_hybrid_index_input_vcf(vcf_path, metadata_path)
     freq_path = tmp_path / "freq.csv"
-    pd.DataFrame({"locus": ["locus0"], "freq_pop0": [0.1], "freq_pop1": [0.9]}).to_csv(
-        freq_path, index=False)
+    pd.DataFrame({"locus": ["locus0"], "freq_pop0": [0.1], "freq_pop1": [0.9]}).to_csv(freq_path, sep="\t", index=False)
 
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
         "--population-col", "population", "--pop0-label", "house", "--pop1-label", "spanish",
-        "--parental-freq-csv", str(freq_path), "--output", str(tmp_path / "out.csv"),
+        "--parental-freq-file", str(freq_path), "--output", str(tmp_path / "out.csv"),
     ])
     assert result.returncode != 0
     assert "mutually exclusive" in result.stderr
@@ -1681,16 +1726,15 @@ def test_cli_estimate_hybrid_index_missing_locus_in_freq_csv_actionable_error(tm
     import pandas as pd
 
     vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     _write_hybrid_index_input_vcf(vcf_path, metadata_path, n_loci=5)
     freq_path = tmp_path / "freq.csv"
     pd.DataFrame({"locus": ["locus0", "locus1"],
-                  "freq_pop0": [0.1, 0.1], "freq_pop1": [0.9, 0.9]}).to_csv(
-        freq_path, index=False)
+                  "freq_pop0": [0.1, 0.1], "freq_pop1": [0.9, 0.9]}).to_csv(freq_path, sep="\t", index=False)
 
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path),
-        "--parental-freq-csv", str(freq_path), "--output", str(tmp_path / "out.csv"),
+        "--parental-freq-file", str(freq_path), "--output", str(tmp_path / "out.csv"),
     ])
     assert result.returncode != 0
     assert "no row for locus" in result.stderr
@@ -1701,7 +1745,7 @@ def test_cli_estimate_hybrid_index_mode1_requires_metadata(tmp_path):
     beagle input: --population-col (Mode 1) now requires --metadata,
     since a VCF/beagle file has no room for its own population column."""
     vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     _write_hybrid_index_input_vcf(vcf_path, metadata_path)
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path),
@@ -1740,19 +1784,18 @@ def test_cli_estimate_hybrid_index_beagle_input_works(tmp_path):
     beagle_path = tmp_path / "test.beagle"
     beagle_path.write_text("".join(lines))
 
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": individuals,
-                  "population": ["house"] * n_ref + ["spanish"] * n_ref}).to_csv(
-        metadata_path, index=False)
+                  "population": ["house"] * n_ref + ["spanish"] * n_ref}).to_csv(metadata_path, sep="\t", index=False)
 
-    output_path = tmp_path / "hybrid_index.csv"
+    output_path = tmp_path / "hybrid_index.tsv"
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(beagle_path), "--metadata", str(metadata_path),
         "--population-col", "population", "--pop0-label", "house", "--pop1-label", "spanish",
         "--output", str(output_path),
     ])
     assert result.returncode == 0, result.stderr
-    out_df = pd.read_csv(output_path)
+    out_df = pd.read_csv(output_path, sep="\t")
     assert len(out_df) == 2 * n_ref
     house_h = out_df[out_df["individual"].str.startswith("pop0")]["hybrid_index"]
     spanish_h = out_df[out_df["individual"].str.startswith("pop1")]["hybrid_index"]
@@ -1815,9 +1858,9 @@ def test_cli_generate_geographic_input_vcf_gives_actionable_guidance_on_skipped_
     )
     vcf_path = tmp_path / "test.vcf"
     vcf_path.write_text(vcf_content)
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": ["sampleA", "sampleB"], "distance": [0, 10],
-                  "site": ["X", "Y"]}).to_csv(metadata_path, index=False)
+                  "site": ["X", "Y"]}).to_csv(metadata_path, sep="\t", index=False)
 
     result = _run_cli([
         "generate-geographic-input", "--input", str(vcf_path), "--metadata", str(metadata_path),
@@ -1839,9 +1882,9 @@ def test_cli_generate_geographic_input_vcf_no_guidance_when_nothing_skipped(tmp_
     )
     vcf_path = tmp_path / "test.vcf"
     vcf_path.write_text(vcf_content)
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": ["sampleA", "sampleB"], "distance": [0, 10],
-                  "site": ["X", "Y"]}).to_csv(metadata_path, index=False)
+                  "site": ["X", "Y"]}).to_csv(metadata_path, sep="\t", index=False)
 
     result = _run_cli([
         "generate-geographic-input", "--input", str(vcf_path), "--metadata", str(metadata_path),
@@ -1878,11 +1921,11 @@ def test_cli_generate_geographic_input_vcf_lat_lon_recovers_known_cline(tmp_path
 
     vcf_path = tmp_path / "test.vcf"
     _write_test_vcf(vcf_path, sample_names, [dosage], ["locus0"])
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({
         "individual": sample_names, "lat": individual_lat, "lon": individual_lon,
         "site": [f"site{i}" for i in np.repeat(np.arange(n_sites), n_per_site)],
-    }).to_csv(metadata_path, index=False)
+    }).to_csv(metadata_path, sep="\t", index=False)
 
     converted_path = tmp_path / "converted.csv"
     r1 = _run_cli([
@@ -1907,10 +1950,10 @@ def test_cli_generate_geographic_input_vcf_inconsistent_coordinates_actionable_e
     sample_names = ["ind0", "ind1"]
     vcf_path = tmp_path / "test.vcf"
     _write_test_vcf(vcf_path, sample_names, [np.array([0, 2])], ["locus0"])
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     # both individuals assigned to site 'S0' but with different coordinates
     pd.DataFrame({"individual": sample_names, "site": ["S0", "S0"],
-                  "lat": [40.0, 41.0], "lon": [-74.0, -74.0]}).to_csv(metadata_path, index=False)
+                  "lat": [40.0, 41.0], "lon": [-74.0, -74.0]}).to_csv(metadata_path, sep="\t", index=False)
 
     result = _run_cli([
         "generate-geographic-input", "--input", str(vcf_path), "--metadata", str(metadata_path),
@@ -1931,10 +1974,10 @@ def test_cli_generate_geographic_input_beagle_lat_lon_computes_correct_distance(
     )
     beagle_path = tmp_path / "test.beagle"
     beagle_path.write_text(beagle_content)
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     lat, lon = [40.0, 41.0], [-74.0, -73.0]
     pd.DataFrame({"individual": ["ind0", "ind1"], "site": ["S0", "S1"],
-                  "lat": lat, "lon": lon}).to_csv(metadata_path, index=False)
+                  "lat": lat, "lon": lon}).to_csv(metadata_path, sep="\t", index=False)
 
     out_path = tmp_path / "out.csv"
     result = _run_cli([
@@ -1958,9 +2001,9 @@ def test_cli_generate_geographic_input_vcf_output_format_identical_for_single_an
     automatically)."""
     import numpy as np
     sample_names = [f"ind{i}" for i in range(10)]
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": sample_names, "site": [f"S{i}" for i in range(10)],
-                  "distance": range(10)}).to_csv(metadata_path, index=False)
+                  "distance": range(10)}).to_csv(metadata_path, sep="\t", index=False)
 
     rng = np.random.default_rng(5)
     single_vcf = tmp_path / "single.vcf"
@@ -2012,11 +2055,11 @@ def test_cli_generate_geographic_input_vcf_recovers_known_cline(tmp_path):
 
     vcf_path = tmp_path / "test.vcf"
     _write_test_vcf(vcf_path, sample_names, [dosage], ["locus0"])
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({
         "individual": sample_names, "distance": individual_distance,
         "site": [f"site{i}" for i in np.repeat(np.arange(n_sites), n_per_site)],
-    }).to_csv(metadata_path, index=False)
+    }).to_csv(metadata_path, sep="\t", index=False)
 
     converted_path = tmp_path / "converted.csv"
     r1 = _run_cli([
@@ -2049,9 +2092,8 @@ def test_cli_generate_genomic_input_vcf_recovers_known_barrier_locus(tmp_path):
 
     vcf_path = tmp_path / "test.vcf"
     _write_test_vcf(vcf_path, sample_names, [dosage], ["locus0"])
-    metadata_path = tmp_path / "metadata.csv"
-    pd.DataFrame({"individual": sample_names, "hybrid_index": hybrid_index}).to_csv(
-        metadata_path, index=False)
+    metadata_path = tmp_path / "metadata.tsv"
+    pd.DataFrame({"individual": sample_names, "hybrid_index": hybrid_index}).to_csv(metadata_path, sep="\t", index=False)
 
     converted_path = tmp_path / "converted.csv"
     r1 = _run_cli([
@@ -2072,7 +2114,7 @@ def test_cli_generate_genomic_input_vcf_recovers_known_barrier_locus(tmp_path):
 
 
 def test_cli_generate_geographic_input_missing_input_file_error(tmp_path):
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     metadata_path.write_text("individual,distance,site\nind0,0,X\n")
     result = _run_cli([
         "generate-geographic-input", "--input", str(tmp_path / "nonexistent.vcf"),
@@ -2090,7 +2132,7 @@ def _neutral_zone_pipeline(tmp_path, with_parentals=True, extra_ggi=()):
     prefix = _simulated_zone(tmp_path, "--n-pop1", "15", "--n-pop2", "15", "--n-popH", "50",
                              "--n-snps", "600", "--aim-percent", "30",
                              "--aim-freq-diff", "0.3", "--seed", "12")
-    vcf, meta = f"{prefix}.vcf", f"{prefix}_metadata.csv"
+    vcf, meta = f"{prefix}.vcf", f"{prefix}_metadata.tsv"
     labels = ["--population-col", "population", "--pop0-label", "pop1", "--pop1-label", "pop2"]
     aims = tmp_path / "aims.vcf"
     assert _run_cli(["filter-aims", "--input", vcf, "--metadata", meta, "--pop1-label", "pop1",
@@ -2111,7 +2153,7 @@ def _neutral_zone_pipeline(tmp_path, with_parentals=True, extra_ggi=()):
                        "--no-plot", "--output-dir", str(tmp_path / "fit")])
     assert result.returncode == 0, result.stderr
     summary = pd.read_csv(tmp_path / "fit" / "hycline_summary.csv")
-    truth = pd.read_csv(f"{prefix}_truth.csv").set_index("id")
+    truth = pd.read_csv(f"{prefix}_truth.tsv", sep="\t").set_index("id")
     return summary, truth, ggi_result, genomic
 
 
@@ -2150,7 +2192,7 @@ def test_cli_generate_genomic_input_parental_options(tmp_path):
     import numpy as np
     prefix = _simulated_zone(tmp_path, "--n-pop1", "6", "--n-pop2", "6", "--n-popH", "10",
                              "--n-snps", "20", "--aim-percent", "100", "--seed", "3")
-    vcf, meta = f"{prefix}.vcf", f"{prefix}_metadata.csv"
+    vcf, meta = f"{prefix}.vcf", f"{prefix}_metadata.tsv"
     labels = ["--population-col", "population", "--pop0-label", "pop1", "--pop1-label", "pop2"]
     out = tmp_path / "g.csv"
 
@@ -2159,16 +2201,16 @@ def test_cli_generate_genomic_input_parental_options(tmp_path):
     assert result.returncode == 0, result.stderr
     g = pd.read_csv(out)
     assert len(g) == 22
-    truth = pd.read_csv(f"{prefix}_truth.csv").set_index("id")
+    truth = pd.read_csv(f"{prefix}_truth.tsv", sep="\t").set_index("id")
     # parental frequencies are the reference panels' ALT frequencies, clipped
     np.testing.assert_allclose(g["snp1.p0"].iloc[0], np.clip(truth.loc["snp1", "freq_pop1"], 1e-3, 1 - 1e-3))
     np.testing.assert_allclose(g["snp1.p1"].iloc[0], np.clip(truth.loc["snp1", "freq_pop2"], 1e-3, 1 - 1e-3))
 
-    freq_csv = tmp_path / "freqs.csv"
+    freq_csv = tmp_path / "freqs.tsv"
     pd.DataFrame({"locus": [f"snp{i}" for i in range(1, 21)], "freq_pop0": 0.2,
-                  "freq_pop1": [0.2] + [0.9] * 19}).to_csv(freq_csv, index=False)
+                  "freq_pop1": [0.2] + [0.9] * 19}).to_csv(freq_csv, sep="\t", index=False)
     result = _run_cli(["generate-genomic-input", "--input", vcf, "--metadata", meta,
-                       "--parental-freq-csv", str(freq_csv), "--output", str(out)])
+                       "--parental-freq-file", str(freq_csv), "--output", str(out)])
     assert result.returncode == 0, result.stderr
     assert "1 with equal parental frequencies" in result.stdout
     g = pd.read_csv(out)
@@ -2176,7 +2218,7 @@ def test_cli_generate_genomic_input_parental_options(tmp_path):
     assert len(g) == 22  # no labels in Mode 2, so nobody is left out
 
     result = _run_cli(["generate-genomic-input", "--input", vcf, "--metadata", meta, *labels,
-                       "--parental-freq-csv", str(freq_csv), "--output", str(out)])
+                       "--parental-freq-file", str(freq_csv), "--output", str(out)])
     assert result.returncode == 2 and "mutually exclusive" in result.stderr
 
 
@@ -2198,10 +2240,10 @@ def test_cli_generate_geographic_input_vcf_site_aggregation_matches_hand_computa
     dosage = np.array([0, 2, 1, 1])  # ind0,ind1 at site X; ind2,ind3 at site Y
     vcf_path = tmp_path / "test.vcf"
     _write_test_vcf(vcf_path, sample_names, [dosage], ["locus0"])
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({
         "individual": sample_names, "distance": [0, 0, 10, 10], "site": ["X", "X", "Y", "Y"],
-    }).to_csv(metadata_path, index=False)
+    }).to_csv(metadata_path, sep="\t", index=False)
 
     out_path = tmp_path / "out.csv"
     result = _run_cli([
@@ -2248,9 +2290,9 @@ def test_cli_filter_aims_next_step_guidance_references_live_commands(tmp_path):
     line = "chr1\t100\tlocusA\tA\tT\t99\tPASS\t.\tGT\t0/0\t1/1\n"
     vcf_path = tmp_path / "genotypes.vcf"
     vcf_path.write_text(header + line)
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": ["ind0", "ind1"],
-                  "population": ["parent1", "parent2"]}).to_csv(metadata_path, index=False)
+                  "population": ["parent1", "parent2"]}).to_csv(metadata_path, sep="\t", index=False)
 
     vcf_result = _run_cli([
         "filter-aims", "--input", str(vcf_path), "--metadata", str(metadata_path),
@@ -2284,9 +2326,9 @@ def test_cli_filter_aims_writes_summary_and_warnings(tmp_path):
     import gzip
     with gzip.open(vcf_path, "wt") as fh:
         fh.write(header + lines)
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": ["ind0", "ind1"],
-                  "population": ["parent1", "parent2"]}).to_csv(metadata_path, index=False)
+                  "population": ["parent1", "parent2"]}).to_csv(metadata_path, sep="\t", index=False)
 
     result = _run_cli([
         "filter-aims", "--input", str(vcf_path), "--metadata", str(metadata_path),
@@ -2327,10 +2369,9 @@ def test_cli_filter_aims_beagle_auto_detect_and_filter(tmp_path):
     )
     beagle_path = tmp_path / "test.beagle"
     beagle_path.write_text(beagle_content)
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": ["ind0", "ind1", "ind2"],
-                  "population": ["parent1", "parent2", "hybrid"]}).to_csv(
-        metadata_path, index=False)
+                  "population": ["parent1", "parent2", "hybrid"]}).to_csv(metadata_path, sep="\t", index=False)
 
     out_path = tmp_path / "filtered.beagle"
     result = _run_cli([
@@ -2383,9 +2424,9 @@ def test_cli_filter_aims_vcf_end_to_end_recovers_known_cline(tmp_path):
     vcf_path = tmp_path / "genotypes.vcf"
     vcf_path.write_text(header + line_informative + line_uninformative)
 
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": individuals, "population": population,
-                  "distance": distance, "site": individuals}).to_csv(metadata_path, index=False)
+                  "distance": distance, "site": individuals}).to_csv(metadata_path, sep="\t", index=False)
 
     filtered_path = tmp_path / "filtered.vcf"
     r1 = _run_cli([
@@ -2421,9 +2462,9 @@ def test_cli_filter_aims_no_loci_pass_gives_warning_not_crash(tmp_path):
     line = "chr1\t100\tlocusA\tA\tT\t99\tPASS\t.\tGT\t0/1\t0/1\n"  # both intermediate, uninformative
     input_path = tmp_path / "genotypes.vcf"
     input_path.write_text(header + line)
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": ["ind0", "ind1"],
-                  "population": ["parent1", "parent2"]}).to_csv(metadata_path, index=False)
+                  "population": ["parent1", "parent2"]}).to_csv(metadata_path, sep="\t", index=False)
 
     out_path = tmp_path / "filtered.vcf"
     result = _run_cli([
@@ -2452,9 +2493,9 @@ def test_cli_filter_aims_custom_thresholds(tmp_path):
     line = "chr1\t100\tlocusA\tA\tT\t99\tPASS\t.\tGT\t0/0\t1/1\n"
     input_path = tmp_path / "genotypes.vcf"
     input_path.write_text(header + line)
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": ["ind0", "ind1"],
-                  "population": ["parent1", "parent2"]}).to_csv(metadata_path, index=False)
+                  "population": ["parent1", "parent2"]}).to_csv(metadata_path, sep="\t", index=False)
 
     out_path = tmp_path / "filtered.vcf"
     result = _run_cli([
@@ -2483,10 +2524,9 @@ def _write_freq_diff_vcf(tmp_path):
              for i, (snp, gts) in enumerate(rows.items())]
     vcf_path = tmp_path / "freqs.vcf"
     vcf_path.write_text(header + "".join(lines))
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": names,
-                  "population": ["parent1"] * 5 + ["parent2"] * 5}).to_csv(
-        metadata_path, index=False)
+                  "population": ["parent1"] * 5 + ["parent2"] * 5}).to_csv(metadata_path, sep="\t", index=False)
     return vcf_path, metadata_path
 
 
@@ -2582,9 +2622,8 @@ def _write_beagle_geographic_recovery_files(tmp_path, true_center=70, true_width
     beagle_path = tmp_path / "test.beagle"
     beagle_path.write_text("\t".join(header) + "\n" + "\t".join(row) + "\n")
 
-    metadata_path = tmp_path / "metadata.csv"
-    pd.DataFrame({"individual": sample_names, "distance": distance}).to_csv(
-        metadata_path, index=False)
+    metadata_path = tmp_path / "metadata.tsv"
+    pd.DataFrame({"individual": sample_names, "distance": distance}).to_csv(metadata_path, sep="\t", index=False)
     return beagle_path, metadata_path
 
 
@@ -2615,7 +2654,7 @@ def test_cli_generate_geographic_input_vcf_always_hard_count_beagle_always_gl(tm
     vcf_path.write_text(header + line)
     vcf_metadata = tmp_path / "vcf_meta.csv"
     pd.DataFrame({"individual": ["ind0", "ind1"], "site": ["S0", "S1"],
-                  "distance": [0, 10]}).to_csv(vcf_metadata, index=False)
+                  "distance": [0, 10]}).to_csv(vcf_metadata, sep="\t", index=False)
 
     vcf_out = tmp_path / "vcf_out.csv"
     r1 = _run_cli(["generate-geographic-input", "--input", str(vcf_path),
@@ -2632,7 +2671,7 @@ def test_cli_generate_geographic_input_vcf_always_hard_count_beagle_always_gl(tm
     beagle_path.write_text(beagle_content)
     beagle_metadata = tmp_path / "beagle_meta.csv"
     pd.DataFrame({"individual": ["ind0", "ind1"],
-                  "distance": [0, 10]}).to_csv(beagle_metadata, index=False)
+                  "distance": [0, 10]}).to_csv(beagle_metadata, sep="\t", index=False)
 
     beagle_out = tmp_path / "beagle_out.csv"
     r2 = _run_cli(["generate-geographic-input", "--input", str(beagle_path),
@@ -2689,9 +2728,8 @@ def test_cli_generate_genomic_input_beagle_recovers_known_barrier_locus(tmp_path
         row += [f"{v:.4f}" for v in make_gl(g)]
     beagle_path = tmp_path / "test.beagle"
     beagle_path.write_text("\t".join(header) + "\n" + "\t".join(row) + "\n")
-    metadata_path = tmp_path / "metadata.csv"
-    pd.DataFrame({"individual": sample_names, "hybrid_index": hybrid_index}).to_csv(
-        metadata_path, index=False)
+    metadata_path = tmp_path / "metadata.tsv"
+    pd.DataFrame({"individual": sample_names, "hybrid_index": hybrid_index}).to_csv(metadata_path, sep="\t", index=False)
 
     converted_path = tmp_path / "converted.csv"
     r1 = _run_cli([
@@ -2721,10 +2759,10 @@ def test_cli_filter_aims_then_generate_geographic_input_beagle_full_chain(tmp_pa
     )
     beagle_path = tmp_path / "test.beagle"
     beagle_path.write_text(beagle_content)
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": ["ind0", "ind1", "ind2"],
                   "population": ["parent1", "parent2", "hybrid"],
-                  "distance": [0, 100, 50]}).to_csv(metadata_path, index=False)
+                  "distance": [0, 100, 50]}).to_csv(metadata_path, sep="\t", index=False)
 
     filtered_path = tmp_path / "filtered.beagle"
     r1 = _run_cli([
@@ -2746,7 +2784,7 @@ def test_cli_filter_aims_then_generate_geographic_input_beagle_full_chain(tmp_pa
 
 
 def test_cli_generate_geographic_input_beagle_missing_file_actionable_error(tmp_path):
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     metadata_path.write_text("individual,distance,site\nind0,0,X\n")
     result = _run_cli([
         "generate-geographic-input", "--input", str(tmp_path / "nonexistent.beagle"),
@@ -2939,7 +2977,7 @@ def test_cli_fit_trait_raw_input_recovers_known_cline(tmp_path):
         for v in obs:
             rows.append({"site": f"site{i}", "distance": site_distance[i], "trait_value": v})
     input_path = tmp_path / "raw.csv"
-    pd.DataFrame(rows).to_csv(input_path, index=False)
+    pd.DataFrame(rows).to_csv(input_path, sep="\t", index=False)
     out_dir = tmp_path / "out"
 
     result = _run_cli([
@@ -2955,7 +2993,7 @@ def test_cli_fit_trait_raw_input_recovers_known_cline(tmp_path):
 def test_cli_fit_trait_missing_sd_col_without_raw_actionable_error(tmp_path):
     input_path = tmp_path / "agg.csv"
     pd.DataFrame({"distance": [0, 50, 100], "trait_mean": [1.0, 5.0, 9.0],
-                  "n": [10, 10, 10]}).to_csv(input_path, index=False)
+                  "n": [10, 10, 10]}).to_csv(input_path, sep="\t", index=False)
     result = _run_cli([
         "fit-trait", "--input", str(input_path), "--output-dir", str(tmp_path / "out"),
     ])
@@ -2990,10 +3028,10 @@ def test_cli_fit_trait_raw_and_aggregated_give_consistent_results(tmp_path):
         site_ns.append(len(obs))
 
     raw_path = tmp_path / "raw.csv"
-    pd.DataFrame(raw_rows).to_csv(raw_path, index=False)
+    pd.DataFrame(raw_rows).to_csv(raw_path, sep="\t", index=False)
     agg_path = tmp_path / "agg.csv"
     pd.DataFrame({"distance": site_distance, "trait_mean": site_means, "n": site_ns,
-                  "trait_sd": site_sds}).to_csv(agg_path, index=False)
+                  "trait_sd": site_sds}).to_csv(agg_path, sep="\t", index=False)
 
     out_raw = tmp_path / "out_raw"
     r1 = _run_cli([
@@ -3043,7 +3081,7 @@ def _write_hzar_trait_csv(path, seed=901, tail_type_str="none", true_center=70.0
 
     pd.DataFrame({"site": [f"s{i}" for i in range(n_sites)], "distance": distance,
                   "trait_mean": site_means, "n": n_per_site, "trait_sd": site_sds}).to_csv(
-        path, index=False)
+        path, sep="\t", index=False)
     return {"center": true_center, "width": true_width}
 
 
@@ -3120,7 +3158,7 @@ def test_cli_fit_trait_multi_fits_multiple_traits_and_recovers_known_cline(tmp_p
         data[f"{trait}.n"] = n_per_site
         data[f"{trait}.sd"] = sds
     input_path = tmp_path / "multi_trait.csv"
-    pd.DataFrame(data).to_csv(input_path, index=False)
+    pd.DataFrame(data).to_csv(input_path, sep="\t", index=False)
 
     out_dir = tmp_path / "out"
     result = _run_cli([
@@ -3164,7 +3202,7 @@ def test_cli_fit_trait_multi_skips_trait_missing_sd_column(tmp_path):
     data["no_sd.mean"] = means_b
     data["no_sd.n"] = n_per_site
     input_path = tmp_path / "multi_trait.csv"
-    pd.DataFrame(data).to_csv(input_path, index=False)
+    pd.DataFrame(data).to_csv(input_path, sep="\t", index=False)
 
     out_dir = tmp_path / "out"
     result = _run_cli([

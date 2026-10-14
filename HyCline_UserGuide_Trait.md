@@ -33,19 +33,21 @@ Classic MLE fitting only -- no Bayesian backend for trait clines yet.
 
 ## `fit-trait`: one trait at a time
 
-Two input styles, matching HZAR's own:
+Two input styles, matching HZAR's own. Either way the input is a
+**tab-delimited** file with one header row (a comma-separated file is
+rejected with a message saying so).
 
 **Site-aggregated (default)** -- one row per site, with mean/n/SD
 columns:
 
 ```bash
-hycline fit-trait --input bodysize.csv --sd-col trait_sd --output-dir results/
+hycline fit-trait --input bodysize.tsv --sd-col trait_sd --output-dir results/
 ```
 
 Real output:
 
 ```
-Reading input data from 'bodysize.csv' ...
+Reading input data from 'bodysize.tsv' ...
   10 sampling sites loaded.
 Fitting (tail=none, HZAR-parity variance model) ...
 Done in 0.0s. Trait cline fit (tail=none, HZAR-parity variance model): success=True, logL=-115.932, AICc=301.865, n=10, k=7
@@ -70,7 +72,7 @@ mean -- there's no single-shared-variance fallback in this project).
 aggregated internally to the same shape:
 
 ```bash
-hycline fit-trait --input measurements.csv --raw \
+hycline fit-trait --input measurements.tsv --raw \
     --trait-col hybrid_index --site-col site --output-dir results/
 ```
 
@@ -96,7 +98,7 @@ as `fit-geographic`, using the same underlying calculation.
 ### Tail models
 
 ```bash
-hycline fit-trait --input measurements.csv --sd-col trait_sd --tail mirror --output-dir results/
+hycline fit-trait --input measurements.tsv --sd-col trait_sd --tail mirror --output-dir results/
 ```
 
 Real output on a genuine tail-model dataset:
@@ -132,7 +134,7 @@ values directly.
 ## `fit-trait-multi`: many traits at once
 
 ```bash
-hycline fit-trait-multi --input multitrait.csv --output-dir results/
+hycline fit-trait-multi --input multitrait.tsv --output-dir results/
 ```
 
 Wide-format input: one row per site, with a `<trait>.mean`/`<trait>.n`/
@@ -195,7 +197,7 @@ handling was built for this -- it's a direct, already-working use of the
 existing `--raw`/`--trait-col` machinery, verified here with a real run.
 
 ```bash
-hycline fit-trait --input individuals_with_hi.csv --raw \
+hycline fit-trait --input individuals_with_hi.tsv --raw \
     --trait-col hybrid_index --site-col site --output-dir results/
 ```
 

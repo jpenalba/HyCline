@@ -275,12 +275,12 @@ def test_write_beagle_geographic_gl_csv_recovers_known_cline(tmp_path):
     beagle_path = tmp_path / "test.beagle"
     beagle_path.write_text("\t".join(header) + "\n" + "\t".join(row) + "\n")
 
-    metadata_path = tmp_path / "metadata.csv"
+    metadata_path = tmp_path / "metadata.tsv"
     pd.DataFrame({"individual": sample_names, "distance": distance}).to_csv(
-        metadata_path, index=False)
+        metadata_path, sep="\t", index=False)
 
     data = read_beagle(str(beagle_path))
-    metadata_df = pd.read_csv(metadata_path)
+    metadata_df = pd.read_csv(metadata_path, sep="\t")
     gl_path = tmp_path / "converted.csv"
     write_beagle_geographic_gl_csv(data, metadata_df, "individual", "distance", str(gl_path))
 
