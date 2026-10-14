@@ -6,23 +6,29 @@ parental reference populations. It's the x-axis variable the genomic
 cline model (`hycline.models.genomic_cline`) is fit against, and this
 module is what produces it in the first place from raw genotype data.
 
-WHAT'S IMPLEMENTED: a simple mean-proportion estimator -- for each
-individual, the mean (across loci) of that individual's observed
-"population-1" allele frequency, optionally weighted by each locus's
-allele-frequency differentiation between the parental populations. This
-is a standard, defensible baseline estimator, and is exactly what you'd
-compute by hand as "fraction of alleles matching parental population 1
-across N markers."
+WHAT'S IMPLEMENTED:
+  - `estimate_hybrid_index_ml` (the CLI default, `--method ml`): the
+    maximum-likelihood hybrid index. Each locus's allele frequency in an
+    individual with hybrid index h is (1 - h) p0 + h p1 from the parental
+    frequencies, genotypes are Hardy-Weinberg given that frequency, and h
+    maximizes the likelihood of the individual's genotypes (hard calls
+    as one-hot likelihoods, or beagle genotype likelihoods), with a 95%
+    likelihood-profile interval. The same likelihood gghybrid uses
+    (Bailey 2023), without its Beta prior. The Genomic user guide
+    (Step 2, "How the estimate is made") walks through it step by step
+    with a worked example.
+  - `estimate_hybrid_index` (`--method mean`): the mean, across loci, of
+    each individual's parental-population-1 allele dosage (loci oriented
+    by the parental frequencies), optionally weighted by differentiation.
+    Treats every locus as diagnostic, so partially differentiated loci and
+    low depth pull it toward 0.5.
 
-WHAT'S NOT IMPLEMENTED: the more sophisticated Bayesian hybrid-index
-estimators in `gghybrid` and `bgchm` model each locus's contribution with
-an explicit likelihood and place a prior over h, propagating uncertainty
-in h itself into the downstream genomic cline fit. The mean-proportion
-estimator here treats h as a fixed, known covariate once estimated --
-consistent with how Fitzpatrick (2013)'s original logit-logistic model
-description treats hybrid index, but a real simplification relative to
-the current state of the art. Flagged here rather than silently matched
-to a more sophisticated method it isn't. See BACKEND_PHASE3.md section 3.
+WHAT'S NOT IMPLEMENTED: propagating uncertainty in h into the downstream
+genomic cline fit, as the Bayesian models in `gghybrid` and `bgchm` do.
+Both estimators hand on h as a point estimate (the `ml` interval is
+reported, not used), consistent with how Fitzpatrick (2013)'s
+logit-logistic model treats hybrid index as a known covariate. See
+BACKEND_PHASE3.md section 5.
 """
 
 from __future__ import annotations

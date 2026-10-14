@@ -150,6 +150,85 @@ it models partially differentiated loci rather than treating every
 locus as diagnostic, so a locus with frequencies 0.3 and 0.6 counts for
 what it is and nearly undifferentiated loci carry almost no weight.
 
+#### Step by step, with a worked example
+
+The worked example is one individual at three loci, counting the VCF
+ALT allele:
+
+| Locus | p0 (ALT freq., parental pop. 0) | p1 (parental pop. 1) | Genotype |
+|---|---|---|---|
+| A | 0.0 | 1.0 (fixed) | 1 (heterozygote) |
+| B | 0.9 | 0.3 (ALT is mostly pop. 0's allele) | 1 (heterozygote) |
+| C | 0.5 | 0.6 (barely differentiated) | 2 (homozygous ALT) |
+
+1. **Read genotypes and mark missing ones.** VCF `GT` calls become ALT
+   counts (0/1/2) and `./.` is missing. Beagle keeps each individual's
+   three genotype likelihoods; a row of three equal values (ANGSD's
+   `0.333333` triple for an individual with no reads) is missing.
+2. **Get each locus's parental frequencies p0 and p1** -- frequencies of
+   the counted allele (VCF ALT, beagle allele2). In Mode 1 they come from
+   the labelled reference individuals: their sample frequency for VCF
+   input, and for beagle input the pooled maximum-likelihood frequency
+   from their genotype likelihoods (the estimator `filter-aims` uses), so
+   low depth doesn't pull it toward 0.5. In Mode 2 they're read from
+   `--parental-freq-csv`. They are clipped to [0.001, 0.999] so that an
+   allele absent from a finite reference panel can't make a locus
+   impossible -- locus A is used as 0.001/0.999. Loci without parental
+   frequencies are skipped.
+3. **Express genotypes as likelihoods.** A VCF call becomes 1 for the
+   called genotype and 0 for the other two; beagle likelihoods are
+   normalized to sum to 1. Missing genotypes get 1/3 each, which adds the
+   same constant at every h and so has no effect.
+4. **Write down the likelihood of h.** In an individual with hybrid
+   index h, each allele copy comes from parental population 1 with
+   probability h, so the counted allele's frequency at a locus is
+   p(h) = (1 - h) p0 + h p1, and under Hardy-Weinberg proportions the
+   genotype probabilities are (1-p)^2, 2p(1-p), p^2. Each locus adds
+   log[L0 (1-p)^2 + L1 2p(1-p) + L2 p^2] to the individual's
+   log-likelihood. For the example:
+
+   | h | p(h) at A, B, C | P(observed genotype) at A, B, C | log-likelihood |
+   |---|---|---|---|
+   | 0 | 0.001, 0.90, 0.50 | 0.002, 0.18, 0.25 | -9.32 |
+   | 0.25 | 0.25, 0.75, 0.525 | 0.375, 0.375, 0.276 | -3.25 |
+   | 0.5 | 0.50, 0.60, 0.55 | 0.50, 0.48, 0.30 | -2.62 |
+   | **0.576** | 0.576, 0.554, 0.558 | 0.488, 0.494, 0.311 | **-2.59** |
+   | 1 | 0.999, 0.30, 0.60 | 0.002, 0.42, 0.36 | -8.11 |
+
+   Locus A, fixed, carries most of the information: a heterozygote is
+   nearly impossible at h = 0 or 1. Locus B is handled without any
+   flipping -- its ALT frequency simply falls as h rises. Locus C's term
+   barely changes with h (0.25 to 0.36), so it barely moves the estimate;
+   weakly differentiated loci down-weight themselves.
+5. **Find the maximum.** Each locus's term is a quadratic in h, so its
+   coefficients are computed once. The log-likelihood is evaluated on a
+   grid of 21 values (0, 0.05, ..., 1), because it can have more than one
+   peak; then, around the best grid point, bisection on the sign of the
+   slope narrows h down to about 1e-10. A maximum at 0 or 1 is reached as
+   that boundary, which is why parental reference individuals often come
+   out at exactly 0 or 1. Example: **h = 0.576**.
+6. **Compute the 95% interval**: every h whose log-likelihood is within
+   1.92 of the maximum (the chi-square likelihood-profile rule). Each end
+   is found by walking the grid outward to the first point below that
+   level and bisecting; if no grid point on one side is below it, the
+   interval reaches 0 or 1. Example: **[0.089, 0.964]** -- wide, because
+   three loci say little; with hundreds of AIMs intervals are typically a
+   few hundredths wide.
+7. **Write one row per individual**, reference individuals included:
+   `hybrid_index`, `hybrid_index_lower`, `hybrid_index_upper`, and
+   `n_loci` (loci with a usable genotype; 3 in the example). Step 3 then
+   leaves the reference individuals out of the cline-fitting input by
+   default, so their exact 0 or 1 values don't enter the cline fit.
+
+Assumptions: the parental frequencies are treated as exact (with many
+weakly differentiated loci their errors accumulate -- see "Which loci to
+use"); each individual's alleles are treated as independent draws given
+h, so F1s, heterozygous at every fixed AIM, aren't modelled specially;
+and h is passed on as a point estimate. This is the hybrid-index
+likelihood gghybrid uses (Bailey 2023, section 2.1.1), which places a
+Beta prior on h and reports the posterior mode; with a uniform prior
+that mode equals this maximum-likelihood estimate.
+
 Measured against the simulator's true hybrid indices (15 + 15 reference
 individuals, 40 hybrids, 2000 SNPs, 10% missing data), mean absolute
 error of the hybrids' estimates:
@@ -171,9 +250,9 @@ partially differentiated loci and, for beagle input, low depth pull its
 estimates toward 0.5. That compression carries into Step 4: on the
 simulated example below (where every locus is neutral, true v = 1), a
 `mean` hybrid index made the fitted clines come out at a median v of
-about 2, against about 1.05 with `ml`. Use `ml` for cline fitting. `--weight-by-differentiation` applies to
-`--method mean` only, and `--method ml` requires diploid data
-(`--ploidy 2`).
+about 2, against about 1.05 with `ml`. Use `ml` for cline fitting.
+`--weight-by-differentiation` applies to `--method mean` only, and
+`--method ml` requires diploid data (`--ploidy 2`).
 
 Neither method carries the uncertainty in h into the genomic-cline fit
 (Step 4 treats h as known, unlike the Bayesian hybrid-index models in
