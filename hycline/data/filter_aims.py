@@ -85,37 +85,62 @@ def describe_aim_criterion(low_threshold: float = 0.1, high_threshold: float = 0
 
 def match_samples_to_populations(sample_names: list, metadata_df: pd.DataFrame,
                                   sample_col: str, population_col: str,
-                                  pop1_label: str, pop2_label: str) -> tuple:
+                                  pop1_label: str, pop2_label: str,
+                                  label_flags: tuple = ("--pop1-label", "--pop2-label")) -> tuple:
     """Match a fixed-order list of sample names against a metadata
     DataFrame's population labels, returning boolean masks (aligned to
     `sample_names`' order) for each population.
 
-    Individuals with no metadata entry, or a label other than
-    `pop1_label`/`pop2_label` (e.g. hybrid-zone individuals also present
-    in the same file as the parental references), are simply excluded
-    from both masks -- not an error. Only an empty population (zero
-    matching samples) or a missing required column raises.
+    Individuals in the input file with no metadata entry, or with a label
+    other than `pop1_label`/`pop2_label` (e.g. hybrid-zone individuals
+    also present in the same file as the parental references), are simply
+    excluded from both masks -- not an error. The reverse is an error:
+    every sample the metadata labels `pop1_label` or `pop2_label` must
+    appear in `sample_names` exactly, so a parental reference panel is
+    never silently shrunk by a naming mismatch (or by a hand-edited file
+    whose header line uses spaces instead of tabs, which merges several
+    sample names into one). A missing required column, or a label with
+    no metadata rows at all, also raises. `label_flags` names the CLI
+    options the two labels came from, for the error messages.
     """
     if sample_col not in metadata_df.columns:
         raise ValueError(f"--sample-col '{sample_col}' not found in the metadata file.")
     if population_col not in metadata_df.columns:
         raise ValueError(f"--population-col '{population_col}' not found in the metadata file.")
 
+    input_samples = set(sample_names)
+    for label, flag in zip((pop1_label, pop2_label), label_flags):
+        listed = metadata_df.loc[metadata_df[population_col] == label, sample_col]
+        listed = [str(s) for s in listed.dropna()]
+        if not listed:
+            raise ValueError(
+                f"No samples labeled '{label}' ({flag}) found in the metadata file "
+                f"(column '{population_col}')."
+            )
+        absent = [s for s in listed if s not in input_samples]
+        if absent:
+            shown = ", ".join(absent[:5]) + (f" and {len(absent) - 5} more"
+                                              if len(absent) > 5 else "")
+            msg = (
+                f"{len(absent)} of the {len(listed)} samples labeled '{label}' ({flag}) "
+                f"in the metadata file are not in the input file: {shown}. Every "
+                f"parental reference sample in the metadata must match a sample name "
+                f"in the input file exactly (the VCF #CHROM line or the beagle header "
+                f"row); the input file has {len(sample_names)} samples."
+            )
+            merged = [s for s in sample_names if any(c.isspace() for c in s)]
+            if merged:
+                msg += (
+                    f" The input file has sample names containing whitespace (e.g. "
+                    f"'{merged[0][:60]}{'...' if len(merged[0]) > 60 else ''}'), which usually means its header line uses spaces "
+                    f"instead of tabs between sample names."
+                )
+            raise ValueError(msg)
+
     meta_by_sample = metadata_df.set_index(sample_col)[population_col]
     labels = [meta_by_sample.get(s) for s in sample_names]
     pop1_mask = np.array([l == pop1_label for l in labels])
     pop2_mask = np.array([l == pop2_label for l in labels])
-
-    if not pop1_mask.any():
-        raise ValueError(
-            f"No samples labeled '{pop1_label}' (--pop1-label) found in the metadata "
-            f"file, matched against {len(sample_names)} samples in the input file."
-        )
-    if not pop2_mask.any():
-        raise ValueError(
-            f"No samples labeled '{pop2_label}' (--pop2-label) found in the metadata "
-            f"file, matched against {len(sample_names)} samples in the input file."
-        )
     return pop1_mask, pop2_mask
 
 

@@ -181,7 +181,7 @@ them.
 | `--metadata` | **Separate** tab-delimited file: one row per individual, a sample-name column and a population-label column. Individuals not labeled as either parental population (e.g. your actual hybrid-zone samples) are simply excluded from the frequency calculation -- not an error -- so parental references and hybrid-zone individuals can live in the same `--input` file |
 | `--sample-col` | Column in `--metadata` holding individual names (default: `individual`). Must match the VCF's own `#CHROM` header row, or ANGSD's own beagle header row |
 | `--population-col` | Column in `--metadata` holding each individual's population label (default: `population`) |
-| `--pop1-label` / `--pop2-label` | Values identifying the two parental reference groups (default: `parent1`/`parent2`) |
+| `--pop1-label` / `--pop2-label` | Values identifying the two parental reference groups (default: `parent1`/`parent2`). Every sample the metadata gives either label must be in the input file under exactly that name (the VCF `#CHROM` line or beagle header); otherwise filter-aims stops and lists the missing names. Input-file samples with no metadata row, or another label, are ignored |
 | `--minor-allele-freq M` | Retain a locus if one parental population's frequency is at or below M and the other's is at or above 1 - M, in either direction (default 0.1, i.e. <= 0.1 and >= 0.9) |
 | `--allele-freq-diff D` | Instead of `--minor-allele-freq`: retain a locus if the two parental frequencies differ by at least D, wherever they sit -- D = 0.7 keeps 0.1 vs 0.8, 0.12 vs 0.82, 0 vs 0.75 and so on. The two flags are mutually exclusive |
 | `--summary` | Path for the summary file (default: `--output` with its extension replaced by `_summary.txt`) |

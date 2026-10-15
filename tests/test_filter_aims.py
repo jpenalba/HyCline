@@ -93,6 +93,45 @@ def test_match_samples_to_populations_empty_population_raises():
                                       "parent1", "parent2")
 
 
+def test_match_samples_to_populations_parental_sample_absent_from_input_raises():
+    # A parental reference sample listed in the metadata but absent from the
+    # input file is an error, not a silently smaller panel.
+    metadata = pd.DataFrame({
+        "individual": ["a", "b", "c", "d"],
+        "population": ["parent1", "parent1", "parent2", "parent2"],
+    })
+    with pytest.raises(ValueError, match=r"1 of the 2 samples labeled 'parent2'.*: d\b"):
+        match_samples_to_populations(["a", "b", "c"], metadata, "individual",
+                                      "population", "parent1", "parent2")
+
+
+def test_filter_aims_vcf_space_separated_chrom_line_names_the_cause(tmp_path):
+    # Regression: a hand-written VCF whose #CHROM line separated the pop2
+    # sample names with spaces read as 11 samples (10 pop1 + one merged
+    # name), and filter-aims reported only "No samples labeled 'pop2'".
+    pop1 = [f"sample{i}_pop1" for i in range(1, 11)]
+    pop2 = [f"sample{i}_pop2" for i in range(1, 11)]
+    meta = tmp_path / "meta.txt"
+    meta.write_text("individual\tpopulation\n"
+                    + "".join(f"{s}\tpop1\n" for s in pop1)
+                    + "".join(f"{s}\tpop2\n" for s in pop2))
+    vcf = tmp_path / "in.vcf"
+    vcf.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"
+        + "\t".join(pop1) + "\t" + " ".join(pop2) + "\n"
+        "chr1\t1\tl1\tA\tT\t.\t.\t.\tGT\t" + "\t".join(["0/0"] * 10)
+        + "\t" + "\t".join(["1/1"] * 10) + "\n")
+    with pytest.raises(ValueError) as exc:
+        filter_aims_vcf(str(vcf), str(meta), str(tmp_path / "out.vcf"),
+                        sample_col="individual", population_col="population",
+                        pop1_label="pop1", pop2_label="pop2")
+    msg = str(exc.value)
+    assert "10 of the 10 samples labeled 'pop2'" in msg
+    assert "the input file has 11 samples" in msg
+    assert "spaces instead of tabs" in msg
+
+
 def test_match_samples_to_populations_missing_column_raises():
     metadata = pd.DataFrame({"sample": ["a"], "pop": ["parent1"]})
     with pytest.raises(ValueError, match="--sample-col"):

@@ -563,9 +563,14 @@ together, and only the two reference groups are needed to judge a
 locus's informativeness. Individuals with no metadata entry, or a label
 other than the two parental population labels (e.g. hybrid-zone
 individuals), are simply excluded from the frequency calculation, not
-treated as an error -- `match_samples_to_populations` only raises if a
-whole population ends up with zero matched individuals, or a required
-column is missing.
+treated as an error. `match_samples_to_populations` raises if a required
+column is missing, if a parental label has no metadata rows, or if any
+sample the metadata gives a parental label is absent from the input
+file -- a reference panel is never silently shrunk by a sample-name
+mismatch. The error lists the absent names and, when an input-file
+sample name contains whitespace, points at a header line that uses
+spaces instead of tabs (the hand-written-VCF case that prompted the
+check).
 
 **Output preserves the input format and modifies nothing except which
 rows survive.** The beagle writer doesn't recompute or renormalize

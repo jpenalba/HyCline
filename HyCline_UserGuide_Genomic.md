@@ -295,7 +295,8 @@ individuals, loosen the filter to bring in more loci.
 
 **Mode 1** (shown above) -- `--metadata`/`--population-col`/`--pop0-label`/
 `--pop1-label`: a separate tab-delimited metadata file maps sample names to which
-parental population each is a reference for.
+parental population each is a reference for. Every sample it labels as a
+parental reference must be in the VCF/beagle file under exactly that name.
 
 **Mode 2** -- `--parental-freq-file`: a separate tab-delimited file of precomputed
 per-locus parental frequencies (of the VCF ALT / beagle allele2 allele),
@@ -430,7 +431,7 @@ VCF's ALT.
 | Flag | Meaning |
 |---|---|
 | `--population-col`, `--pop0-label`, `--pop1-label` | Labels identifying the parental reference individuals (Mode 1). Frequencies are the references' sample frequencies for VCF input, and pooled maximum-likelihood estimates from their genotype likelihoods for beagle input |
-| `--parental-metadata` | CSV holding `--sample-col` and `--population-col`, if the labels aren't in `--metadata` |
+| `--parental-metadata` | Tab-delimited file holding `--sample-col` and `--population-col`, if the labels aren't in `--metadata` |
 | `--include-parentals` | Keep the reference individuals in the output. By default they are left out, as gghybrid's `ggcline` does: clines are fitted to the test individuals |
 | `--parental-freq-file` (+ `--freq-locus-col`, `--freq-pop0-col`, `--freq-pop1-col`) | Precomputed per-locus parental frequencies instead (Mode 2) -- the same file format `estimate-hybrid-index` takes |
 
@@ -445,7 +446,10 @@ every locus whose ALT allele belonged to parental population 0 then
 fitted at the lower bound of v.
 
 Individuals present in the VCF/beagle file but absent from `--metadata`
-are dropped, not an error. `--hybrid-index-col` (default
+are dropped, not an error. The reverse is an error: every sample the
+metadata labels with `--pop0-label` or `--pop1-label` must match a sample
+name in the VCF `#CHROM` line or beagle header exactly, and the error
+lists the ones that don't. `--hybrid-index-col` (default
 `hybrid_index`) names the hybrid-index column.
 
 **The input format determines the output, with no flag to choose

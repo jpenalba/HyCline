@@ -3152,7 +3152,8 @@ def cmd_estimate_hybrid_index(args) -> int:
         try:
             pop0_mask, pop1_mask = match_samples_to_populations(
                 sample_names, metadata_df, args.sample_col, args.population_col,
-                args.pop0_label, args.pop1_label)
+                args.pop0_label, args.pop1_label,
+                label_flags=("--pop0-label", "--pop1-label"))
         except ValueError as e:
             print(f"\nERROR: {e}\n", file=sys.stderr)
             return 2
@@ -3428,7 +3429,8 @@ def _genomic_parental_freqs(args, fmt, data, metadata_df):
         try:
             pop0_mask, pop1_mask = match_samples_to_populations(
                 list(data.sample_names), labels_df, args.sample_col, args.population_col,
-                args.pop0_label, args.pop1_label)
+                args.pop0_label, args.pop1_label,
+                label_flags=("--pop0-label", "--pop1-label"))
         except ValueError as e:
             return None, [], str(e)
         print(f"  Parental frequencies from {pop0_mask.sum()} '{args.pop0_label}' and "
