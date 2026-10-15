@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "pytest-xdist>=3.0"]
 bayes = ["numpyro>=0.14", "arviz>=0.16", "jax>=0.4", "pymc>=5.0"]
 
 [project.scripts]

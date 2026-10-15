@@ -898,7 +898,8 @@ pytest tests/test_cline.py tests/test_mle.py tests/test_manakin_validation.py te
 # Phase 2 (adds NumPyro/JAX/ArviZ/PyMC)
 pip install -e ".[dev,bayes]"
 python examples/demo_bayesian_manakin.py
-pytest   # full suite, including tests/test_api.py and tests/test_cli.py, needs the bayes extra
+pytest -n 4   # full suite in parallel (pytest-xdist), including tests/test_api.py and tests/test_cli.py, needs the bayes extra
+python scripts/select_tests.py --run   # only the tests affected by uncommitted changes
 ```
 
 (If you just want to run fits from the command line rather than write

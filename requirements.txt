@@ -9,3 +9,4 @@ matplotlib>=3.7
 
 # For running the test suite
 # pytest>=7.0
+# pytest-xdist>=3.0   (parallel runs: pytest tests/ -n 4)

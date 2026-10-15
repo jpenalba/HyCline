@@ -2,8 +2,10 @@
 
 A Python successor to the R package HZAR (Derryberry et al. 2014) for hybrid
 zone cline analysis, extended to genomic clines, quantitative trait clines,
-and coupling/concordance analysis. 410 tests, all passing as of this file's
-last update. CLI entry point: `hycline` (or `python run_hycline.py`).
+and coupling/concordance analysis. All tests pass except one known,
+pre-existing failure, `test_mcmc_numpyro.py::
+test_diagnostics_check_runs_and_flags_nothing_on_a_clean_fit` (R-hat 1.0136
+against a 1.01 cutoff). CLI entry point: `hycline` (or `python run_hycline.py`).
 
 **Before doing anything else, read `README.md` in full** -- particularly the
 "What's implemented" and "Not yet implemented (see the architecture plan)"
@@ -66,10 +68,14 @@ to hold itself to throughout (see "Key principles" below).
   `mcmc_genomic_hierarchical.py`, `mcmc_pymc.py`).
 - `hycline/data/` -- readers/writers, VCF/beagle handling, AIM filtering.
 - `hycline/viz/` -- plotting.
-- `tests/` -- 410 tests. `test_cli.py` and the MCMC test files are the
-  slowest; if the environment has tight per-command timeouts, split large
-  test runs into batches rather than assuming a single `pytest tests/` call
-  will complete.
+- `tests/` -- 476 tests. `test_cli.py` (every test runs the CLI as a
+  subprocess, paying ~1.2 s of start-up) and the MCMC test files are the
+  slowest. Run them in parallel with pytest-xdist (`pytest tests/ -n 4`);
+  if the environment has tight per-command timeouts, split large runs into
+  batches rather than assuming a single call will complete.
+- `scripts/select_tests.py` -- selects the tests affected by the current
+  changes (`--run` runs them, in parallel; `--base origin/main` includes
+  local commits). See "Testing" below.
 - `HyCline_UserGuide_*.md` -- user-facing docs per pipeline (Geographic,
   Genomic, Coupling, Trait, StudyDesign), verified command-by-command
   against real output, not just written from the code.
@@ -95,6 +101,28 @@ to hold itself to throughout (see "Key principles" below).
 - **Documentation describes only the current state** -- no stale command
   names, no "previously/used to" language, no historical framing creeping
   into user-facing docs.
-- **Run the full test suite before considering anything done**, and
-  reconcile the batch counts against the total collected count explicitly
-  -- don't report "tests passing" from a partial run.
+- **Targeted tests while working, the full suite before pushing to main**
+  (see "Testing" below). Reconcile the full suite's batch counts against
+  the total collected count explicitly, and never report "tests passing"
+  from a partial run -- say which tests ran.
+
+## Testing
+
+- **While working:** `python scripts/select_tests.py --run` runs only the
+  tests affected by uncommitted changes (`--base <ref>` to compare against
+  something other than HEAD; pytest arguments go after `--`). It traces
+  imports between `hycline` modules, maps `cli.py` changes and library
+  changes to the CLI commands they reach and selects `test_cli.py` tests by
+  the commands they run, runs changed test files in full, and selects
+  tests that mention a changed data or script file (`examples/`,
+  `benchmarking/`). Docs select nothing; anything it can't trace
+  (`run_hycline.py`, `pyproject.toml`, requirements files, shared parts of
+  `cli.py`) selects the full suite. Run it without `--run` to see what it
+  picked and why.
+- **Before pushing to main:** the full suite, `pytest tests/ -n 4` (or in
+  batches, e.g. `test_cli.py` / the `test_mcmc*.py` files / everything else,
+  if a single call would hit a timeout), with the counts reconciled
+  against `pytest tests/ --co -q`. The selector traces names statically,
+  so it can miss a dependency it can't see (a file read through a path
+  built at run time, behaviour reached only through a subprocess other
+  than the CLI); the full suite is what catches those.
