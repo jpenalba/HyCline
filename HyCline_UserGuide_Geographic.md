@@ -196,6 +196,20 @@ sample sizes.
 | `--min-parental-n` | Warn when a parental population, or a retained AIM's called individuals in a parental population, number fewer than this (default 10) |
 | `--max-sample-missing` | Warn about parental individuals missing data at more than this fraction of loci checked (default 0.5) |
 
+**Loci right at the cutoff.** With n individuals in a parental panel,
+allele frequencies come in steps of 1/(2n) -- 0.025 for 20 diploids -- so
+some loci sit exactly at a cutoff such as 0.05. For VCF input their
+frequency is exactly 0.05 and they are retained. For beagle input the
+frequency is a maximum-likelihood estimate from the genotype likelihoods,
+which homozygotes' small non-zero heterozygote likelihoods (from
+sequencing error) nudge slightly past the cutoff, so about half of such
+loci are dropped. In simulations (20 + 20 parental individuals, AIMs up to
+0.05) this cost a 0.05 cutoff about half of the AIMs that were not fixed
+in both panels, while a 0.1 cutoff retained 99-100% of AIMs from a mean
+depth of about 4x up. If loci at a particular frequency matter to you,
+set the cutoff a little above that step (e.g. 0.055 rather than 0.05 with
+20 individuals).
+
 For VCF input, sites are also silently checked against a biallelic-SNP-with-
 GT scope (multiallelic sites, indels, and sites with no `GT` field are
 skipped, not guessed at). When any are skipped, you'll see an extra line:
