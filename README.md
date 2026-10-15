@@ -614,10 +614,11 @@ catching a real problem on real data.
   mean-dosage estimator (loci oriented by the parental frequencies,
   optionally weighted by differentiation), as `--method mean`.
 - `hycline estimate-hybrid-index` -- the CLI command (`--method ml`
-  default, or `mean`), in two mutually exclusive modes: compute parental
-  allele frequencies directly from labeled reference individuals in your
-  own genotype file (pooled maximum-likelihood frequencies for beagle
-  input), or supply them precomputed via `--parental-freq-file`. Writes
+  default, or `mean`): takes a VCF or beagle file and a metadata file
+  labelling the parental reference individuals in it (`--pop1-label`,
+  hybrid index 0, and `--pop2-label`, hybrid index 1, as in
+  `filter-aims`), and estimates parental allele frequencies from them
+  (pooled maximum-likelihood frequencies for beagle input). Diploid. Writes
   a tab-delimited table of individual, hybrid_index, and for `ml` the
   interval and number of loci used. Validated against the simulator's true hybrid indices across
   depths, AIM fractions and missing data -- see BACKEND_PHASE3.md

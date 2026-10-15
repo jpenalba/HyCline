@@ -862,7 +862,7 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Estimate each individual's genome-wide hybrid index (the x-axis "
                      "variable genomic cline fitting needs). The default --method ml is "
                      "the maximum-likelihood hybrid index: each locus's allele frequency "
-                     "in an individual with hybrid index h is (1 - h) * p0 + h * p1 from "
+                     "in an individual with hybrid index h is (1 - h) * p1 + h * p2 from "
                      "the two parental frequencies, genotypes follow Hardy-Weinberg "
                      "proportions given that frequency, and h maximizes the likelihood "
                      "of the individual's genotypes -- hard calls for VCF input, full "
@@ -876,12 +876,12 @@ def _build_parser() -> argparse.ArgumentParser:
                      "by low depth. Neither propagates uncertainty in h into later "
                      "cline fits (see BACKEND_PHASE3.md section 5). Format is "
                      "auto-detected from the --input file extension unless --format is "
-                     "given. Two ways to supply parental allele frequencies: (1) "
-                     "--metadata/--population-col/--pop0-label/--pop1-label, computing "
-                     "them from reference individuals labeled in a metadata file (the "
-                     "default, and the more common case), or (2) --parental-freq-file, a "
-                     "separate tab-delimited file of precomputed per-locus frequencies of the VCF ALT / "
-                     "beagle allele2 allele. Exactly one of the two must be given. "
+                     "given. Parental allele frequencies are estimated from the reference "
+                     "individuals labeled --pop1-label and --pop2-label in --metadata: "
+                     "sample frequencies for VCF input, pooled maximum-likelihood "
+                     "estimates from genotype likelihoods for beagle input. Hybrid index "
+                     "is the proportion of ancestry from --pop2-label: 0 = pure "
+                     "--pop1-label, 1 = pure --pop2-label. Genotypes are diploid. "
                      "Output is a tab-delimited table with individual and hybrid_index columns (plus "
                      "the interval and number of loci used, for --method ml) that "
                      "merges directly into the metadata any genomic-cline command needs.",
@@ -889,63 +889,36 @@ def _build_parser() -> argparse.ArgumentParser:
     ehi_g = ehi_p.add_argument_group("input data")
     ehi_p.add_argument("--input", required=True, metavar="FILE",
                         help="VCF file (.vcf or .vcf.gz) or ANGSD beagle-format file "
-                             "(.beagle or .beagle.gz). Should include the parental "
-                             "reference individuals too if using --population-col (mode "
-                             "1) -- hybrid index is computed for every individual "
-                             "present, including references, as a sanity check (they "
-                             "should land near 0 or 1). Format is auto-detected from the "
-                             "file extension unless --format is given.")
+                             "(.beagle or .beagle.gz), holding the parental reference "
+                             "individuals as well as the individuals to estimate. Hybrid "
+                             "index is computed for every individual present, references "
+                             "included, as a sanity check (they should land near 0 or 1). "
+                             "Format is auto-detected from the file extension unless "
+                             "--format is given.")
     ehi_p.add_argument("--format", choices=["vcf", "beagle"], default=None,
                         help="Force the input format instead of auto-detecting it from "
                              "the --input file extension.")
-    ehi_g.add_argument("--metadata", default=None, metavar="FILE.tsv",
-                        help="[Mode 1] Tab-delimited metadata file with one row per individual: a "
-                             "sample-name column and a population-label column. Required "
-                             "for Mode 1 (--population-col); not used for Mode 2.")
+    ehi_g.add_argument("--metadata", required=True, metavar="FILE.tsv",
+                        help="Tab-delimited metadata file with one row per individual: a "
+                             "sample-name column and a population-label column. Only "
+                             "the parental reference individuals need rows; every sample "
+                             "labeled --pop1-label or --pop2-label must be in --input "
+                             "under exactly that name.")
     ehi_g.add_argument("--sample-col", default="individual",
                         help="Column in --metadata holding sample/individual names "
                              "(default: individual). Must match the VCF's own #CHROM "
                              "header row, or ANGSD's own beagle header row.")
-    ehi_g.add_argument("--population-col", default=None,
-                        help="[Mode 1] Column in --metadata identifying which "
-                             "population each individual belongs to -- used to find the "
-                             "parental reference individuals for each of the two "
-                             "parental populations. Mutually exclusive with "
-                             "--parental-freq-file.")
-    ehi_g.add_argument("--pop0-label", default=None,
-                        help="[Mode 1] Value in --population-col identifying parental "
-                             "population 0's reference individuals. Required if "
-                             "--population-col is given.")
-    ehi_g.add_argument("--pop1-label", default=None,
-                        help="[Mode 1] Value in --population-col identifying parental "
-                             "population 1's reference individuals. Required if "
-                             "--population-col is given.")
-    ehi_g.add_argument("--parental-freq-file", default=None, metavar="FILE.tsv",
-                        help="[Mode 2] A separate tab-delimited file of precomputed per-locus parental "
-                             "allele frequencies, as an alternative to --population-col "
-                             "-- one row per locus, with columns identifying the locus "
-                             "name and each parental population's allele frequency (see "
-                             "--freq-locus-col/--freq-pop0-col/--freq-pop1-col to match "
-                             "your own column names). Every locus in --input must have a "
-                             "matching row here. Mutually exclusive with --population-col.")
-    ehi_g.add_argument("--freq-locus-col", default="locus",
-                        help="[Mode 2] Column in --parental-freq-file holding locus names "
-                             "(default: locus) -- must match your --input file's locus "
-                             "names exactly.")
-    ehi_g.add_argument("--freq-pop0-col", default="freq_pop0",
-                        help="[Mode 2] Column in --parental-freq-file holding parental "
-                             "population 0's allele frequency at each locus (default: "
-                             "freq_pop0).")
-    ehi_g.add_argument("--freq-pop1-col", default="freq_pop1",
-                        help="[Mode 2] Column in --parental-freq-file holding parental "
-                             "population 1's allele frequency at each locus (default: "
-                             "freq_pop1).")
-    ehi_g.add_argument("--ploidy", type=int, default=2,
-                        help="Ploidy of the genotype calls (default: 2, diploid). Used "
-                             "to normalize dosage to a frequency for both input formats.")
-    ehi_g.add_argument("--loci", default=None,
-                        help="Comma-separated list of locus names to use (default: "
-                             "every locus in the file).")
+    ehi_g.add_argument("--population-col", default="population",
+                        help="Column in --metadata holding each individual's population "
+                             "label (default: population).")
+    ehi_g.add_argument("--pop1-label", default="parent1",
+                        help="Value in --population-col identifying the first parental "
+                             "population's reference individuals (hybrid index 0; "
+                             "default: parent1).")
+    ehi_g.add_argument("--pop2-label", default="parent2",
+                        help="Value in --population-col identifying the second parental "
+                             "population's reference individuals (hybrid index 1; "
+                             "default: parent2).")
     ehi_g.add_argument("--max-variants", type=int, default=None,
                         help="[VCF input only] Optional cap on the number of biallelic "
                              "SNPs to parse. Ignored for beagle input.")
@@ -3063,40 +3036,17 @@ def _fit_genomic_gl(args, out_dir, prefix) -> int:
 def cmd_estimate_hybrid_index(args) -> int:
     import pandas as pd
     from hycline.data.hybrid_index import estimate_hybrid_index
+    from hycline.data.filter_aims import match_samples_to_populations
 
-    mode1 = args.population_col is not None
-    mode2 = args.parental_freq_file is not None
     if args.method == "ml" and args.weight_by_differentiation:
         print("\nERROR: --weight-by-differentiation applies to --method mean only; "
               "--method ml already weighs each locus by how informative it is.\n",
               file=sys.stderr)
         return 2
-    if args.method == "ml" and args.ploidy != 2:
-        print("\nERROR: --method ml models diploid genotypes; use --method mean for "
-              "--ploidy other than 2.\n", file=sys.stderr)
-        return 2
-    if mode1 and mode2:
-        print("\nERROR: --population-col and --parental-freq-file are mutually exclusive "
-              "-- give exactly one (see --help for the two modes).\n", file=sys.stderr)
-        return 2
-    if not mode1 and not mode2:
-        print("\nERROR: give either --population-col (with --pop0-label/--pop1-label) "
-              "or --parental-freq-file to supply parental allele frequencies (see --help "
-              "for the two modes).\n", file=sys.stderr)
-        return 2
-    if mode1 and (args.pop0_label is None or args.pop1_label is None):
-        print("\nERROR: --population-col requires --pop0-label and --pop1-label too.\n",
-              file=sys.stderr)
-        return 2
-    if mode1 and args.metadata is None:
-        print("\nERROR: --population-col (Mode 1) requires --metadata to supply "
-              "population labels -- a VCF/beagle file has no room for a population "
-              "column of its own.\n", file=sys.stderr)
-        return 2
-
-    if not Path(args.input).exists():
-        print(f"\nERROR: input file not found: '{args.input}'\n", file=sys.stderr)
-        return 2
+    for path, what in ((args.input, "input file"), (args.metadata, "metadata file")):
+        if not Path(path).exists():
+            print(f"\nERROR: {what} not found: '{path}'\n", file=sys.stderr)
+            return 2
 
     fmt = args.format
     if fmt is None:
@@ -3112,9 +3062,9 @@ def cmd_estimate_hybrid_index(args) -> int:
             print(f"\nERROR: {e}\n", file=sys.stderr)
             return 2
         _report_vcf_parse_summary(data, extract_pl=False)
-        all_locus_names = list(data.locus_names)
+        loci = list(data.locus_names)
         sample_names = list(data.sample_names)
-        dosage_by_locus = data.dosage  # (n_loci, n_samples)
+        genotypes = data.dosage.T  # (n_samples, n_loci)
     else:
         from hycline.data.beagle import read_beagle, _beagle_expected_dosage
         from hycline.data.filter_aims import beagle_missing_mask
@@ -3124,78 +3074,39 @@ def cmd_estimate_hybrid_index(args) -> int:
             print(f"\nERROR: {e}\n", file=sys.stderr)
             return 2
         print(f"  {len(data)} markers parsed, {len(data.sample_names)} samples.")
-        all_locus_names = list(data.marker_names)
+        loci = list(data.marker_names)
         sample_names = list(data.sample_names)
-        dosage_by_locus = _beagle_expected_dosage(data.gl0, data.gl1, data.gl2)
+        dosage = _beagle_expected_dosage(data.gl0, data.gl1, data.gl2)
         # ANGSD's equal-likelihood "no data" rows would otherwise count as a
         # heterozygote (expected dosage 1) and pull hybrid indices toward 0.5.
-        dosage_by_locus[beagle_missing_mask(data.gl0, data.gl1, data.gl2)] = np.nan
-
-    if args.loci:
-        loci = [l.strip() for l in args.loci.split(",")]
-        missing = [l for l in loci if l not in all_locus_names]
-        if missing:
-            print(f"\nERROR: requested loci {missing} not found in '{args.input}'.\n",
-                  file=sys.stderr)
-            return 2
-    else:
-        loci = all_locus_names
+        missing = beagle_missing_mask(data.gl0, data.gl1, data.gl2)
+        dosage[missing] = np.nan
+        genotypes = dosage.T  # (n_samples, n_loci)
     print(f"  {len(loci)} loci detected: {_format_loci_list(loci)}")
 
-    position = {name: i for i, name in enumerate(all_locus_names)}
-    locus_idx = [position[l] for l in loci]
-    genotypes = dosage_by_locus[locus_idx, :].T  # (n_samples, n_loci)
+    metadata_df = _read_user_table(args.metadata, "metadata file")
+    try:
+        pop1_mask, pop2_mask = match_samples_to_populations(
+            sample_names, metadata_df, args.sample_col, args.population_col,
+            args.pop1_label, args.pop2_label)
+    except ValueError as e:
+        print(f"\nERROR: {e}\n", file=sys.stderr)
+        return 2
+    print(f"  --pop1-label '{args.pop1_label}' (hybrid index 0): "
+          f"{pop1_mask.sum()} reference individuals")
+    print(f"  --pop2-label '{args.pop2_label}' (hybrid index 1): "
+          f"{pop2_mask.sum()} reference individuals")
 
-    if mode1:
-        metadata_df = _read_user_table(args.metadata, "metadata file")
-        from hycline.data.filter_aims import match_samples_to_populations
-        try:
-            pop0_mask, pop1_mask = match_samples_to_populations(
-                sample_names, metadata_df, args.sample_col, args.population_col,
-                args.pop0_label, args.pop1_label,
-                label_flags=("--pop0-label", "--pop1-label"))
-        except ValueError as e:
-            print(f"\nERROR: {e}\n", file=sys.stderr)
-            return 2
-        print(f"  Parental population 0 ('{args.pop0_label}'): {pop0_mask.sum()} reference individuals")
-        print(f"  Parental population 1 ('{args.pop1_label}'): {pop1_mask.sum()} reference individuals")
-
-        if fmt == "vcf":
-            from hycline.data.filter_aims import nanmean_quiet
-            parental_freq_pop0 = nanmean_quiet(genotypes[pop0_mask], axis=0) / args.ploidy
-            parental_freq_pop1 = nanmean_quiet(genotypes[pop1_mask], axis=0) / args.ploidy
-        else:
-            # Pooled maximum-likelihood frequencies from the reference
-            # individuals' genotype likelihoods, as filter-aims uses.
-            from hycline.data.filter_aims import em_allele_freq
-            gl = [g[locus_idx] for g in (data.gl0, data.gl1, data.gl2)]
-            called = ~beagle_missing_mask(*gl)
-            parental_freq_pop0 = em_allele_freq(*gl, called & pop0_mask[None, :])
-            parental_freq_pop1 = em_allele_freq(*gl, called & pop1_mask[None, :])
+    if fmt == "vcf":
+        from hycline.data.filter_aims import nanmean_quiet
+        freq_pop1 = nanmean_quiet(genotypes[pop1_mask], axis=0) / 2
+        freq_pop2 = nanmean_quiet(genotypes[pop2_mask], axis=0) / 2
     else:
-        print(f"Reading precomputed parental frequencies from '{args.parental_freq_file}' ...")
-        if not Path(args.parental_freq_file).exists():
-            print(f"\nERROR: --parental-freq-file file not found: "
-                  f"'{args.parental_freq_file}'\n", file=sys.stderr)
-            return 2
-        freq_df = _read_user_table(args.parental_freq_file, "--parental-freq-file")
-        for col in (args.freq_locus_col, args.freq_pop0_col, args.freq_pop1_col):
-            if col not in freq_df.columns:
-                print(f"\nERROR: column '{col}' not found in '{args.parental_freq_file}'. "
-                      f"Columns present: {', '.join(freq_df.columns)}\n", file=sys.stderr)
-                return 2
-
-        freq_by_locus = freq_df.set_index(args.freq_locus_col)
-        missing_loci = [l for l in loci if l not in freq_by_locus.index]
-        if missing_loci:
-            print(f"\nERROR: {args.parental_freq_file} has no row for locus(-i) "
-                  f"{missing_loci} -- every locus in --input needs a matching "
-                  f"{args.freq_locus_col} entry in --parental-freq-file.\n", file=sys.stderr)
-            return 2
-
-        parental_freq_pop0 = freq_by_locus.loc[loci, args.freq_pop0_col].to_numpy(dtype=float)
-        parental_freq_pop1 = freq_by_locus.loc[loci, args.freq_pop1_col].to_numpy(dtype=float)
-        print(f"  Matched precomputed frequencies for all {len(loci)} loci.")
+        # Pooled maximum-likelihood frequencies from the reference
+        # individuals' genotype likelihoods, as filter-aims uses.
+        from hycline.data.filter_aims import em_allele_freq
+        freq_pop1 = em_allele_freq(data.gl0, data.gl1, data.gl2, ~missing & pop1_mask[None, :])
+        freq_pop2 = em_allele_freq(data.gl0, data.gl1, data.gl2, ~missing & pop2_mask[None, :])
 
     if args.method == "ml":
         from hycline.data.hybrid_index import estimate_hybrid_index_ml
@@ -3204,11 +3115,10 @@ def cmd_estimate_hybrid_index(args) -> int:
             gl = [(genotypes == k).astype(float) for k in range(3)]
             include = ~np.isnan(genotypes)
         else:
-            gl = [g[locus_idx].T for g in (data.gl0, data.gl1, data.gl2)]
-            include = ~beagle_missing_mask(*gl)
+            gl = [g.T for g in (data.gl0, data.gl1, data.gl2)]
+            include = ~missing.T
         try:
-            ml = estimate_hybrid_index_ml(*gl, parental_freq_pop0, parental_freq_pop1,
-                                          include=include)
+            ml = estimate_hybrid_index_ml(*gl, freq_pop1, freq_pop2, include=include)
         except ValueError as e:
             print(f"\nERROR: {e}\n", file=sys.stderr)
             return 2
@@ -3220,8 +3130,8 @@ def cmd_estimate_hybrid_index(args) -> int:
     else:
         try:
             h = estimate_hybrid_index(
-                genotypes, ploidy=args.ploidy,
-                parental_freq_pop0=parental_freq_pop0, parental_freq_pop1=parental_freq_pop1,
+                genotypes, ploidy=2,
+                parental_freq_pop0=freq_pop1, parental_freq_pop1=freq_pop2,
                 weight_by_differentiation=args.weight_by_differentiation,
             )
         except ValueError as e:

@@ -95,7 +95,14 @@ Genomic clines need each individual's **genome-wide hybrid index** (0 =
 pure parental population 0, 1 = pure parental population 1) as the x-axis
 variable. `estimate-hybrid-index` computes it directly from a VCF or ANGSD
 beagle file -- format auto-detected from the `--input` file extension, the
-same pattern every other conversion command in HyCline uses.
+same pattern every other conversion command in HyCline uses -- and a
+tab-delimited metadata file labelling the parental reference individuals,
+which must be in the same VCF/beagle file. The labels use `filter-aims`'s
+flags: `--pop1-label` is the population at hybrid index 0 (parental
+population 0 below) and `--pop2-label` the one at hybrid index 1
+(parental population 1). Every sample labelled with either must be in the
+input file under exactly that name; samples with no row, or another label,
+are simply estimated. Genotypes are diploid.
 
 Run it on ancestry-informative markers from Step 1 (see "Which loci to
 use" below):
@@ -104,7 +111,7 @@ use" below):
 hycline estimate-hybrid-index \
     --input hi_aims.vcf \
     --metadata parental_labels.tsv \
-    --population-col population --pop0-label parent0 --pop1-label parent1 \
+    --pop1-label parent0 --pop2-label parent1 \
     --output hybrid_index.tsv
 ```
 
@@ -116,8 +123,8 @@ Detected input format: vcf (from file extension; use --format to override)
 Parsing 'hi_aims.vcf' ...
   395 biallelic SNPs parsed, 90 samples.
   395 loci detected: ['snp21', 'snp22', 'snp55', 'snp63', 'snp75', 'snp91', 'snp119', 'snp122', 'snp125', 'snp150'] ... and 385 more
-  Parental population 0 ('parent0'): 15 reference individuals
-  Parental population 1 ('parent1'): 15 reference individuals
+  --pop1-label 'parent0' (hybrid index 0): 15 reference individuals
+  --pop2-label 'parent1' (hybrid index 1): 15 reference individuals
 
 Hybrid index estimated for 90 individuals (--method ml).
   Range: [0.000, 1.000]  (parental reference individuals should land near 0 or 1 -- a useful sanity check on the result)
@@ -130,9 +137,9 @@ The output has one row per individual, parental references included so
 you can check they land near 0 or 1:
 
 ```
-individual,hybrid_index,hybrid_index_lower,hybrid_index_upper,n_loci
-sample1_pop1,0.0,0.0,0.00912283000070602,371
-sample33_popH,0.18347595310769976,0.13992310611065473,0.23034432947169986,374
+individual	hybrid_index	hybrid_index_lower	hybrid_index_upper	n_loci
+sample1_pop1	0.0	0.0	0.00912283000070602	371
+sample33_popH	0.18347595310769976	0.13992310611065473	0.23034432947169986	374
 ```
 
 `hybrid_index_lower`/`hybrid_index_upper` are a 95% likelihood-profile
@@ -175,12 +182,11 @@ ALT allele:
    three genotype likelihoods; a row of three equal values (ANGSD's
    `0.333333` triple for an individual with no reads) is missing.
 2. **Get each locus's parental frequencies p0 and p1** -- frequencies of
-   the counted allele (VCF ALT, beagle allele2). In Mode 1 they come from
-   the labelled reference individuals: their sample frequency for VCF
-   input, and for beagle input the pooled maximum-likelihood frequency
-   from their genotype likelihoods (the estimator `filter-aims` uses), so
-   low depth doesn't pull it toward 0.5. In Mode 2 they're read from
-   `--parental-freq-file`. They are clipped to [0.001, 0.999] so that an
+   the counted allele (VCF ALT, beagle allele2). They come from the
+   labelled reference individuals: their sample frequency for VCF input,
+   and for beagle input the pooled maximum-likelihood frequency from their
+   genotype likelihoods (the estimator `filter-aims` uses), so low depth
+   doesn't pull it toward 0.5. They are clipped to [0.001, 0.999] so that an
    allele absent from a finite reference panel can't make a locus
    impossible -- locus A is used as 0.001/0.999. Loci without parental
    frequencies are skipped.
@@ -260,8 +266,7 @@ estimates toward 0.5. That compression carries into Step 4: on the
 simulated example below (where every locus is neutral, true v = 1), a
 `mean` hybrid index made the fitted clines come out at a median v of
 about 2, against about 1.05 with `ml`. Use `ml` for cline fitting.
-`--weight-by-differentiation` applies to `--method mean` only, and
-`--method ml` requires diploid data (`--ploidy 2`).
+`--weight-by-differentiation` applies to `--method mean` only.
 
 Neither method carries the uncertainty in h into the genomic-cline fit
 (Step 4 treats h as known, unlike the Bayesian hybrid-index models in
@@ -291,29 +296,6 @@ above:
 The interval width is the practical guide: if it's wide for most
 individuals, loosen the filter to bring in more loci.
 
-### Two ways to supply parental allele frequencies
-
-**Mode 1** (shown above) -- `--metadata`/`--population-col`/`--pop0-label`/
-`--pop1-label`: a separate tab-delimited metadata file maps sample names to which
-parental population each is a reference for. Every sample it labels as a
-parental reference must be in the VCF/beagle file under exactly that name.
-
-**Mode 2** -- `--parental-freq-file`: a separate tab-delimited file of precomputed
-per-locus parental frequencies (of the VCF ALT / beagle allele2 allele),
-for when you already have a reference panel's frequencies summarized
-rather than raw reference genotypes. No `--metadata` needed for this
-mode.
-
-```bash
-hycline estimate-hybrid-index \
-    --input genomewide.vcf \
-    --parental-freq-file parental_frequencies.tsv \
-    --freq-pop0-col freq_pop0 --freq-pop1-col freq_pop1 \
-    --output hybrid_index.tsv
-```
-
-Exactly one of the two modes must be given.
-
 ### Using one AIM set for hybrid index and another for cline fitting
 
 Hybrid index and the clines themselves don't have to use the same loci.
@@ -334,7 +316,7 @@ hycline filter-aims --input genomewide.vcf --metadata parental_labels.tsv \
 # Hybrid index from the stricter set
 hycline estimate-hybrid-index --input hi_aims.vcf \
     --metadata parental_labels.tsv \
-    --population-col population --pop0-label parent0 --pop1-label parent1 \
+    --pop1-label parent0 --pop2-label parent1 \
     --output hybrid_index.tsv
 
 # Cline input from the looser set, using that hybrid index and the
@@ -430,10 +412,10 @@ VCF's ALT.
 
 | Flag | Meaning |
 |---|---|
-| `--population-col`, `--pop0-label`, `--pop1-label` | Labels identifying the parental reference individuals (Mode 1). Frequencies are the references' sample frequencies for VCF input, and pooled maximum-likelihood estimates from their genotype likelihoods for beagle input |
+| `--population-col`, `--pop0-label`, `--pop1-label` | Labels identifying the parental reference individuals. Frequencies are the references' sample frequencies for VCF input, and pooled maximum-likelihood estimates from their genotype likelihoods for beagle input |
 | `--parental-metadata` | Tab-delimited file holding `--sample-col` and `--population-col`, if the labels aren't in `--metadata` |
 | `--include-parentals` | Keep the reference individuals in the output. By default they are left out, as gghybrid's `ggcline` does: clines are fitted to the test individuals |
-| `--parental-freq-file` (+ `--freq-locus-col`, `--freq-pop0-col`, `--freq-pop1-col`) | Precomputed per-locus parental frequencies instead (Mode 2) -- the same file format `estimate-hybrid-index` takes |
+| `--parental-freq-file` (+ `--freq-locus-col`, `--freq-pop0-col`, `--freq-pop1-col`) | Precomputed per-locus parental frequencies instead of reference individuals: a tab-delimited file, one row per locus |
 
 Parental frequencies are clipped to [0.001, 0.999], so an individual at
 hybrid index exactly 0 or 1 can't make a locus impossible, and loci

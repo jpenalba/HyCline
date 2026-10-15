@@ -1275,8 +1275,10 @@ def _write_hybrid_index_input_vcf(vcf_path, metadata_path, seed=71, n_loci=20,
 def test_cli_estimate_hybrid_index_help_runs_without_error():
     result = _run_cli(["estimate-hybrid-index", "--help"])
     assert result.returncode == 0
-    assert "--pop0-label" in result.stdout
     assert "--pop1-label" in result.stdout
+    assert "--pop2-label" in result.stdout
+    for removed in ("--pop0-label", "--parental-freq-file", "--ploidy", "--loci"):
+        assert removed not in result.stdout
     assert "--weight-by-differentiation" in result.stdout
 
 
@@ -1296,8 +1298,8 @@ def test_cli_estimate_hybrid_index_recovers_known_true_hybrid_index(tmp_path):
     output_path = tmp_path / "hybrid_index.tsv"
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
-        "--population-col", "population", "--pop0-label", "house",
-        "--pop1-label", "spanish", "--method", "ml", "--output", str(output_path),
+        "--population-col", "population", "--pop1-label", "house",
+        "--pop2-label", "spanish", "--method", "ml", "--output", str(output_path),
     ])
     assert result.returncode == 0, result.stderr
 
@@ -1338,8 +1340,8 @@ def test_cli_estimate_hybrid_index_orients_alleles_by_parental_frequency(tmp_pat
                   ["--method", "ml"]):
         result = _run_cli([
             "estimate-hybrid-index", "--input", str(vcf_path), "--metadata",
-            str(metadata_path), "--population-col", "population", "--pop0-label", "house",
-            "--pop1-label", "spanish", "--output", str(output_path), *extra,
+            str(metadata_path), "--population-col", "population", "--pop1-label", "house",
+            "--pop2-label", "spanish", "--output", str(output_path), *extra,
         ])
         assert result.returncode == 0, result.stderr
         out_df = pd.read_csv(output_path, sep="\t")
@@ -1369,8 +1371,8 @@ def test_cli_estimate_hybrid_index_beagle_missing_genotypes_not_counted(tmp_path
     output_path = tmp_path / "hi.csv"
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(beagle_path), "--metadata",
-        str(metadata_path), "--population-col", "population", "--pop0-label", "house",
-        "--pop1-label", "spanish", "--method", "mean", "--output", str(output_path),
+        str(metadata_path), "--population-col", "population", "--pop1-label", "house",
+        "--pop2-label", "spanish", "--method", "mean", "--output", str(output_path),
     ])
     assert result.returncode == 0, result.stderr
     h = pd.read_csv(output_path, sep="\t").set_index("individual")["hybrid_index"]
@@ -1405,7 +1407,7 @@ def test_cli_estimate_hybrid_index_ml_recovers_hybrid_index_at_low_depth(tmp_pat
         result = _run_cli([
             "estimate-hybrid-index", "--input", str(tmp_path / "zone.beagle"),
             "--metadata", str(metadata), "--population-col", "population",
-            "--pop0-label", "pop1", "--pop1-label", "pop2", "--method", method,
+            "--pop1-label", "pop1", "--pop2-label", "pop2", "--method", method,
             "--output", str(out), *extra,
         ])
         assert result.returncode == 0, result.stderr
@@ -1495,8 +1497,8 @@ def test_cli_default_hybrid_index_gives_unflattened_genomic_clines(tmp_path):
     vcf, meta = f"{prefix}.vcf", f"{prefix}_metadata.tsv"
     hi = tmp_path / "hi.csv"
     result = _run_cli(["estimate-hybrid-index", "--input", vcf, "--metadata", meta,
-                       "--population-col", "population", "--pop0-label", "pop1",
-                       "--pop1-label", "pop2", "--output", str(hi)])
+                       "--population-col", "population", "--pop1-label", "pop1",
+                       "--pop2-label", "pop2", "--output", str(hi)])
     assert result.returncode == 0, result.stderr
     genomic = tmp_path / "genomic.csv"
     result = _run_cli(["generate-genomic-input", "--input", vcf, "--metadata", str(hi),
@@ -1527,14 +1529,11 @@ def test_cli_estimate_hybrid_index_ml_rejects_mean_only_options(tmp_path):
     metadata_path = tmp_path / "metadata.tsv"
     _write_hybrid_index_input_vcf(vcf_path, metadata_path)
     base = ["estimate-hybrid-index", "--input", str(vcf_path), "--metadata",
-            str(metadata_path), "--population-col", "population", "--pop0-label", "house",
-            "--pop1-label", "spanish", "--method", "ml", "--output", str(tmp_path / "hi.csv")]
+            str(metadata_path), "--population-col", "population", "--pop1-label", "house",
+            "--pop2-label", "spanish", "--method", "ml", "--output", str(tmp_path / "hi.csv")]
     result = _run_cli(base + ["--weight-by-differentiation"])
     assert result.returncode == 2
     assert "--method mean only" in result.stderr
-    result = _run_cli(base + ["--ploidy", "4"])
-    assert result.returncode == 2
-    assert "diploid" in result.stderr
 
 
 def test_cli_estimate_hybrid_index_weight_by_differentiation_runs(tmp_path):
@@ -1544,29 +1543,12 @@ def test_cli_estimate_hybrid_index_weight_by_differentiation_runs(tmp_path):
     output_path = tmp_path / "hybrid_index.tsv"
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
-        "--population-col", "population", "--pop0-label", "house",
-        "--pop1-label", "spanish", "--method", "mean", "--weight-by-differentiation",
+        "--population-col", "population", "--pop1-label", "house",
+        "--pop2-label", "spanish", "--method", "mean", "--weight-by-differentiation",
         "--output", str(output_path),
     ])
     assert result.returncode == 0, result.stderr
     assert output_path.exists()
-
-
-def test_cli_estimate_hybrid_index_explicit_loci(tmp_path):
-    import pandas as pd
-
-    vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.tsv"
-    _write_hybrid_index_input_vcf(vcf_path, metadata_path, n_loci=5)
-    output_path = tmp_path / "hybrid_index.tsv"
-    result = _run_cli([
-        "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
-        "--population-col", "population", "--pop0-label", "house",
-        "--pop1-label", "spanish", "--loci", "locus0,locus1,locus2",
-        "--output", str(output_path),
-    ])
-    assert result.returncode == 0, result.stderr
-    assert pd.read_csv(output_path, sep="\t").shape[0] > 0
 
 
 def test_cli_estimate_hybrid_index_actionable_error_missing_population_label(tmp_path):
@@ -1576,8 +1558,8 @@ def test_cli_estimate_hybrid_index_actionable_error_missing_population_label(tmp
     output_path = tmp_path / "hybrid_index.tsv"
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
-        "--population-col", "population", "--pop0-label", "nonexistent_label",
-        "--pop1-label", "spanish", "--output", str(output_path),
+        "--population-col", "population", "--pop1-label", "nonexistent_label",
+        "--pop2-label", "spanish", "--output", str(output_path),
     ])
     assert result.returncode != 0
     assert "no samples labeled" in result.stderr.lower()
@@ -1590,8 +1572,8 @@ def test_cli_estimate_hybrid_index_actionable_error_missing_column(tmp_path):
     output_path = tmp_path / "hybrid_index.tsv"
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
-        "--population-col", "nonexistent_column", "--pop0-label", "house",
-        "--pop1-label", "spanish", "--output", str(output_path),
+        "--population-col", "nonexistent_column", "--pop1-label", "house",
+        "--pop2-label", "spanish", "--output", str(output_path),
     ])
     assert result.returncode != 0
     assert "not found" in result.stderr
@@ -1611,8 +1593,8 @@ def test_cli_estimate_hybrid_index_output_chains_into_genomic_fitting(tmp_path):
     hi_path = tmp_path / "hybrid_index.tsv"
     r1 = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
-        "--population-col", "population", "--pop0-label", "house",
-        "--pop1-label", "spanish", "--output", str(hi_path),
+        "--population-col", "population", "--pop1-label", "house",
+        "--pop2-label", "spanish", "--output", str(hi_path),
     ])
     assert r1.returncode == 0, r1.stderr
 
@@ -1642,119 +1624,19 @@ def test_cli_estimate_hybrid_index_output_chains_into_genomic_fitting(tmp_path):
     assert summary_df.loc[0, "v"] > 1.5  # true v=3.0
 
 
-def test_cli_estimate_hybrid_index_precomputed_frequencies_matches_mode1(tmp_path):
-    """Mode 2 (--parental-freq-file) should give numerically identical
-    results to Mode 1 (--population-col) when given the frequencies Mode
-    1 would itself have computed -- verified to exact equality, not just
-    'runs and looks plausible'."""
-    import numpy as np
-    import pandas as pd
-    from hycline.data.vcf import read_vcf
-
-    vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.tsv"
-    _write_hybrid_index_input_vcf(vcf_path, metadata_path)
-
-    vcf_data = read_vcf(str(vcf_path))
-    meta = pd.read_csv(metadata_path, sep="\t")
-    sample_idx = {s: i for i, s in enumerate(vcf_data.sample_names)}
-    pop0_samples = meta[meta["population"] == "house"]["individual"]
-    pop1_samples = meta[meta["population"] == "spanish"]["individual"]
-    pop0_cols = [sample_idx[s] for s in pop0_samples]
-    pop1_cols = [sample_idx[s] for s in pop1_samples]
-
-    hi1_path = tmp_path / "mode1.csv"
-    r1 = _run_cli([
-        "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
-        "--population-col", "population", "--pop0-label", "house",
-        "--pop1-label", "spanish", "--output", str(hi1_path),
-    ])
-    assert r1.returncode == 0, r1.stderr
-
-    freq_df = pd.DataFrame({
-        "locus": vcf_data.locus_names,
-        "freq_pop0": np.nanmean(vcf_data.dosage[:, pop0_cols], axis=1) / 2,
-        "freq_pop1": np.nanmean(vcf_data.dosage[:, pop1_cols], axis=1) / 2,
-    })
-    freq_path = tmp_path / "parental_freq.tsv"
-    freq_df.to_csv(freq_path, sep="\t", index=False)
-
-    hi2_path = tmp_path / "mode2.csv"
-    r2 = _run_cli([
-        "estimate-hybrid-index", "--input", str(vcf_path),
-        "--parental-freq-file", str(freq_path), "--output", str(hi2_path),
-    ])
-    assert r2.returncode == 0, r2.stderr
-
-    hi1 = pd.read_csv(hi1_path, sep="\t")
-    hi2 = pd.read_csv(hi2_path, sep="\t")
-    merged = hi1.merge(hi2, on="individual", suffixes=("_1", "_2"))
-    np.testing.assert_allclose(merged["hybrid_index_1"], merged["hybrid_index_2"])
-
-
-def test_cli_estimate_hybrid_index_neither_mode_given_actionable_error(tmp_path):
+def test_cli_estimate_hybrid_index_requires_metadata(tmp_path):
+    """Parental frequencies always come from reference individuals labeled
+    in --metadata, so it is required."""
     vcf_path = tmp_path / "genotypes.vcf"
     metadata_path = tmp_path / "metadata.tsv"
     _write_hybrid_index_input_vcf(vcf_path, metadata_path)
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(vcf_path),
+        "--pop1-label", "house", "--pop2-label", "spanish",
         "--output", str(tmp_path / "out.csv"),
     ])
     assert result.returncode != 0
-    assert "give either --population-col" in result.stderr
-
-
-def test_cli_estimate_hybrid_index_both_modes_given_actionable_error(tmp_path):
-    import pandas as pd
-
-    vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.tsv"
-    _write_hybrid_index_input_vcf(vcf_path, metadata_path)
-    freq_path = tmp_path / "freq.csv"
-    pd.DataFrame({"locus": ["locus0"], "freq_pop0": [0.1], "freq_pop1": [0.9]}).to_csv(freq_path, sep="\t", index=False)
-
-    result = _run_cli([
-        "estimate-hybrid-index", "--input", str(vcf_path), "--metadata", str(metadata_path),
-        "--population-col", "population", "--pop0-label", "house", "--pop1-label", "spanish",
-        "--parental-freq-file", str(freq_path), "--output", str(tmp_path / "out.csv"),
-    ])
-    assert result.returncode != 0
-    assert "mutually exclusive" in result.stderr
-
-
-def test_cli_estimate_hybrid_index_missing_locus_in_freq_csv_actionable_error(tmp_path):
-    import pandas as pd
-
-    vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.tsv"
-    _write_hybrid_index_input_vcf(vcf_path, metadata_path, n_loci=5)
-    freq_path = tmp_path / "freq.csv"
-    pd.DataFrame({"locus": ["locus0", "locus1"],
-                  "freq_pop0": [0.1, 0.1], "freq_pop1": [0.9, 0.9]}).to_csv(freq_path, sep="\t", index=False)
-
-    result = _run_cli([
-        "estimate-hybrid-index", "--input", str(vcf_path),
-        "--parental-freq-file", str(freq_path), "--output", str(tmp_path / "out.csv"),
-    ])
-    assert result.returncode != 0
-    assert "no row for locus" in result.stderr
-
-
-def test_cli_estimate_hybrid_index_mode1_requires_metadata(tmp_path):
-    """Regression test for a real design consequence of moving to VCF/
-    beagle input: --population-col (Mode 1) now requires --metadata,
-    since a VCF/beagle file has no room for its own population column."""
-    vcf_path = tmp_path / "genotypes.vcf"
-    metadata_path = tmp_path / "metadata.tsv"
-    _write_hybrid_index_input_vcf(vcf_path, metadata_path)
-    result = _run_cli([
-        "estimate-hybrid-index", "--input", str(vcf_path),
-        "--population-col", "population", "--pop0-label", "house",
-        "--pop1-label", "spanish", "--output", str(tmp_path / "out.csv"),
-    ])
-    assert result.returncode != 0
-    assert "requires --metadata" in result.stderr
-
+    assert "required: --metadata" in result.stderr
 
 def test_cli_estimate_hybrid_index_beagle_input_works(tmp_path):
     """Confirms estimate-hybrid-index accepts beagle input directly,
@@ -1791,7 +1673,7 @@ def test_cli_estimate_hybrid_index_beagle_input_works(tmp_path):
     output_path = tmp_path / "hybrid_index.tsv"
     result = _run_cli([
         "estimate-hybrid-index", "--input", str(beagle_path), "--metadata", str(metadata_path),
-        "--population-col", "population", "--pop0-label", "house", "--pop1-label", "spanish",
+        "--population-col", "population", "--pop1-label", "house", "--pop2-label", "spanish",
         "--output", str(output_path),
     ])
     assert result.returncode == 0, result.stderr
@@ -2134,13 +2016,14 @@ def _neutral_zone_pipeline(tmp_path, with_parentals=True, extra_ggi=()):
                              "--aim-freq-diff", "0.3", "--seed", "12")
     vcf, meta = f"{prefix}.vcf", f"{prefix}_metadata.tsv"
     labels = ["--population-col", "population", "--pop0-label", "pop1", "--pop1-label", "pop2"]
+    ehi_labels = ["--pop1-label", "pop1", "--pop2-label", "pop2"]
     aims = tmp_path / "aims.vcf"
     assert _run_cli(["filter-aims", "--input", vcf, "--metadata", meta, "--pop1-label", "pop1",
                      "--pop2-label", "pop2", "--allele-freq-diff", "0.3",
                      "--output", str(aims)]).returncode == 0
     hi = tmp_path / "hi.csv"
     result = _run_cli(["estimate-hybrid-index", "--input", str(aims), "--metadata", meta,
-                       *labels, "--method", "ml", "--output", str(hi)])
+                       *ehi_labels, "--method", "ml", "--output", str(hi)])
     assert result.returncode == 0, result.stderr
     genomic = tmp_path / "genomic.csv"
     ggi = ["generate-genomic-input", "--input", str(aims), "--metadata", str(hi),
@@ -2194,6 +2077,7 @@ def test_cli_generate_genomic_input_parental_options(tmp_path):
                              "--n-snps", "20", "--aim-percent", "100", "--seed", "3")
     vcf, meta = f"{prefix}.vcf", f"{prefix}_metadata.tsv"
     labels = ["--population-col", "population", "--pop0-label", "pop1", "--pop1-label", "pop2"]
+    ehi_labels = ["--pop1-label", "pop1", "--pop2-label", "pop2"]
     out = tmp_path / "g.csv"
 
     result = _run_cli(["generate-genomic-input", "--input", vcf, "--metadata", meta, *labels,

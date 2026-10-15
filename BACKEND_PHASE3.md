@@ -582,6 +582,15 @@ tolerance) -- Mode 2 isn't a separate implementation that happens to
 agree approximately, it feeds the exact same numbers into the exact same
 underlying `estimate_hybrid_index` call.
 
+**Current interface.** Mode 2, `--ploidy` and `--loci` were later removed
+from `estimate-hybrid-index` as outside how the tool is used: the command
+takes a VCF or beagle file plus a metadata file labelling the parental
+reference individuals in it, genotypes are diploid, and every locus in
+the file is used (subset loci with `filter-aims`). The labels became
+`--pop1-label` (hybrid index 0) and `--pop2-label` (hybrid index 1), as
+in `filter-aims`; `--metadata` is required and `--population-col`
+defaults to `population`.
+
 ### 9.2 Real-data validation, not just "the command runs"
 
 Checked against known ground truth, not just confirmed to execute
