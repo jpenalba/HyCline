@@ -47,6 +47,75 @@ def _open_maybe_gzip(path: str, mode: str = "rt"):
     return open(path, mode)
 
 
+def _read_beagle_header(f, path: str) -> tuple:
+    """Read and validate a beagle file's header row from the open file `f`.
+    Returns (raw header line, sample names)."""
+    raw = f.readline()
+    header_line = raw.rstrip("\n")
+    if not header_line:
+        raise ValueError(f"'{path}' is empty or has no header row.")
+    header = header_line.split("\t")
+    if len(header) < 3 or header[0].lower() != "marker":
+        raise ValueError(
+            f"'{path}' doesn't look like an ANGSD beagle file -- expected a header "
+            f"starting with 'marker\\tallele1\\tallele2\\t...', got: "
+            f"{header[:3]}{'...' if len(header) > 3 else ''}"
+        )
+    sample_cols = header[3:]
+    if len(sample_cols) == 0 or len(sample_cols) % 3 != 0:
+        raise ValueError(
+            f"'{path}' has {len(sample_cols)} genotype-likelihood columns after "
+            f"marker/allele1/allele2 -- expected a multiple of 3 (one triple per "
+            f"individual). The file may be truncated or not a real beagle file."
+        )
+    n_ind = len(sample_cols) // 3
+    return raw, [sample_cols[3 * i] for i in range(n_ind)]
+
+
+def _iter_beagle_chunks(f, path: str, n_ind: int, chunk_size: int = 5000):
+    """Yield the data rows of an open beagle file (header already read) in
+    chunks of up to `chunk_size` markers, as (raw lines, marker names,
+    allele1, allele2, gl0, gl1, gl2) with each gl array (n_chunk, n_ind).
+    Only one chunk is held in memory at a time."""
+    n_cols = 3 + 3 * n_ind
+
+    def parse(raw_lines, rows, line_nos):
+        try:
+            vals = np.array([r[3:] for r in rows], dtype=float)
+        except ValueError:
+            for r, line_no in zip(rows, line_nos):
+                try:
+                    np.array(r[3:], dtype=float)
+                except ValueError:
+                    raise ValueError(
+                        f"'{path}' line {line_no}: genotype-likelihood columns must be "
+                        f"numeric."
+                    )
+            raise
+        return (raw_lines, [r[0] for r in rows], [r[1] for r in rows],
+                [r[2] for r in rows], vals[:, 0::3], vals[:, 1::3], vals[:, 2::3])
+
+    raw_lines, rows, line_nos = [], [], []
+    for line_no, raw in enumerate(f, start=2):
+        line = raw.rstrip("\n")
+        if not line:
+            continue
+        fields = line.split("\t")
+        if len(fields) != n_cols:
+            raise ValueError(
+                f"'{path}' line {line_no}: expected {n_cols} columns "
+                f"(matching the header), found {len(fields)}."
+            )
+        raw_lines.append(raw if raw.endswith("\n") else raw + "\n")
+        rows.append(fields)
+        line_nos.append(line_no)
+        if len(rows) >= chunk_size:
+            yield parse(raw_lines, rows, line_nos)
+            raw_lines, rows, line_nos = [], [], []
+    if rows:
+        yield parse(raw_lines, rows, line_nos)
+
+
 def read_beagle(path: str) -> BeagleData:
     """Parse an ANGSD beagle-format file (`.beagle` or `.beagle.gz`).
 
@@ -54,52 +123,17 @@ def read_beagle(path: str) -> BeagleData:
     have the expected `marker/allele1/allele2` header or a column count
     that's a clean multiple of 3 per individual.
     """
+    marker_names, allele1, allele2 = [], [], []
+    gl0_parts, gl1_parts, gl2_parts = [], [], []
     with _open_maybe_gzip(path) as f:
-        header_line = f.readline().rstrip("\n")
-        if not header_line:
-            raise ValueError(f"'{path}' is empty or has no header row.")
-        header = header_line.split("\t")
-        if len(header) < 3 or header[0].lower() != "marker":
-            raise ValueError(
-                f"'{path}' doesn't look like an ANGSD beagle file -- expected a header "
-                f"starting with 'marker\\tallele1\\tallele2\\t...', got: "
-                f"{header[:3]}{'...' if len(header) > 3 else ''}"
-            )
-        sample_cols = header[3:]
-        if len(sample_cols) == 0 or len(sample_cols) % 3 != 0:
-            raise ValueError(
-                f"'{path}' has {len(sample_cols)} genotype-likelihood columns after "
-                f"marker/allele1/allele2 -- expected a multiple of 3 (one triple per "
-                f"individual). The file may be truncated or not a real beagle file."
-            )
-        n_ind = len(sample_cols) // 3
-        sample_names = [sample_cols[3 * i] for i in range(n_ind)]
-
-        marker_names, allele1, allele2 = [], [], []
-        gl0_rows, gl1_rows, gl2_rows = [], [], []
-        for line_no, line in enumerate(f, start=2):
-            line = line.rstrip("\n")
-            if not line:
-                continue
-            fields = line.split("\t")
-            if len(fields) != 3 + 3 * n_ind:
-                raise ValueError(
-                    f"'{path}' line {line_no}: expected {3 + 3 * n_ind} columns "
-                    f"(matching the header), found {len(fields)}."
-                )
-            marker_names.append(fields[0])
-            allele1.append(fields[1])
-            allele2.append(fields[2])
-            try:
-                vals = np.array(fields[3:], dtype=float)
-            except ValueError:
-                raise ValueError(
-                    f"'{path}' line {line_no}: genotype-likelihood columns must be "
-                    f"numeric."
-                )
-            gl0_rows.append(vals[0::3])
-            gl1_rows.append(vals[1::3])
-            gl2_rows.append(vals[2::3])
+        _, sample_names = _read_beagle_header(f, path)
+        for _, names, a1, a2, g0, g1, g2 in _iter_beagle_chunks(f, path, len(sample_names)):
+            marker_names += names
+            allele1 += a1
+            allele2 += a2
+            gl0_parts.append(g0)
+            gl1_parts.append(g1)
+            gl2_parts.append(g2)
 
     if not marker_names:
         raise ValueError(f"'{path}' has a header but no data rows.")
@@ -107,7 +141,7 @@ def read_beagle(path: str) -> BeagleData:
     return BeagleData(
         marker_names=marker_names, sample_names=sample_names,
         allele1=allele1, allele2=allele2,
-        gl0=np.array(gl0_rows), gl1=np.array(gl1_rows), gl2=np.array(gl2_rows),
+        gl0=np.vstack(gl0_parts), gl1=np.vstack(gl1_parts), gl2=np.vstack(gl2_parts),
     )
 
 

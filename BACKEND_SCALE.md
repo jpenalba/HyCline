@@ -189,3 +189,45 @@ to rely on extrapolation.
   "Not yet implemented" Tier 1/2 framing for why that distinction
   matters); nothing here should be read as evidence about that much
   larger regime.
+
+---
+
+## 6. `filter-aims` at genome scale
+
+`benchmarking/time_filter_aims.py` simulates datasets with
+`benchmarking/simulate_vcf.py` and times `filter-aims` on them as separate
+processes (fastest of N runs, peak RSS from `os.wait4`). With 100
+individuals (20 + 20 parental, 60 hybrid), 20% AIMs, `--minor-allele-freq
+0.1`, on a 4-core container:
+
+| Loci | VCF time | VCF peak | Beagle time (before) | Beagle peak (before) | Beagle file |
+|---:|---:|---:|---:|---:|---:|
+| 1,000 | 1.5 s | 138 MB | 1.5 s (1.5 s) | 180 MB (158 MB) | 3 MB |
+| 10,000 | 3.2 s | 141 MB | 2.7 s (2.7 s) | 324 MB (220 MB) | 27 MB |
+| 30,000 | 5.5 s | 144 MB | 4.9 s (5.2 s) | 336 MB (387 MB) | 82 MB |
+| 100,000 | 15.6 s | 160 MB | 12.7 s (16.4 s) | 354 MB (895 MB) | 272 MB |
+| 300,000 | 44.8 s | 201 MB | 33.7 s (--) | 377 MB (--) | 816 MB |
+
+Start-up (`import hycline.cli`) is 1.2 s of every run. Beyond it, time is
+linear in loci: the log-log slope of (time - start-up) on loci is 0.92
+(VCF) and 0.91 (beagle) over 10,000-300,000 loci.
+
+The "before" beagle columns are the original implementation, which read
+the whole file into memory (`read_beagle`) and peaked at about 3.3x the
+file size -- about 9 GB projected for 1,000,000 markers x 100
+individuals. `filter_aims_beagle` now streams the file 5,000 markers at a
+time (`hycline.data.beagle._iter_beagle_chunks`), accumulating per-sample
+missing-data counts in `filter_aims._MissingTally` instead of keeping the
+full missing-data matrix; the VCF filter uses the same tally, which cut
+its peak at 300,000 loci from 337 MB to 201 MB. Streaming costs the
+beagle filter a roughly fixed ~200 MB for the chunk being parsed, which is why it
+uses more memory than before below about 30,000 markers. Only
+per-marker names, frequencies and called counts are kept across chunks,
+so memory now grows by tens of bytes per marker. Frequencies, the AIM
+mask and every missing-data count are identical to the previous
+implementation on the 10,000-marker file and across chunk sizes 1 to
+5,000 (`tests/test_filter_aims.py::
+test_filter_aims_beagle_streaming_is_chunk_size_independent`). Retained
+beagle lines are now copied verbatim from the input, as VCF lines
+already were, rather than re-formatted from parsed values.
+

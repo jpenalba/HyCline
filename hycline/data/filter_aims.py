@@ -216,44 +216,64 @@ def filter_aims_beagle(input_path: str, metadata_path: str, output_path: str,
                         sample_col: str = "individual", population_col: str = "population",
                         pop1_label: str = "parent1", pop2_label: str = "parent2",
                         low_threshold: float = 0.1, high_threshold: float = 0.9,
-                        min_freq_diff: float | None = None) -> dict:
+                        min_freq_diff: float | None = None,
+                        chunk_size: int = 5000) -> dict:
     """Filter an ANGSD beagle-format file down to ancestry-informative
-    markers, writing a beagle file with the same column structure and
-    unmodified per-individual genotype-likelihood values -- only rows
-    (markers) are removed, nothing is recomputed.
+    markers, writing a beagle file with the same header and unmodified
+    data lines -- only rows (markers) are removed, nothing is recomputed.
+
+    The input is read `chunk_size` markers at a time, so memory stays flat
+    however many markers the file has: only per-marker frequencies and
+    names, and per-sample missing-data counts, are kept across chunks.
 
     Returns a dict with `n_total`, `n_retained`, `freq_pop1`, `freq_pop2`
     (per-marker, for every marker -- not just the retained ones, so a
     caller can inspect what was filtered out and why), `marker_names`,
     and `mask`.
     """
-    from hycline.data.beagle import read_beagle, write_beagle
+    from hycline.data.beagle import (_open_maybe_gzip, _read_beagle_header,
+                                     _iter_beagle_chunks)
 
-    beagle_data = read_beagle(input_path)
     metadata_df = read_user_table(metadata_path, "metadata file")
-    pop1_mask, pop2_mask = match_samples_to_populations(
-        beagle_data.sample_names, metadata_df, sample_col, population_col,
-        pop1_label, pop2_label)
+    marker_names, freq_pop1_parts, freq_pop2_parts, mask_parts = [], [], [], []
 
-    # Missing genotypes (ANGSD's equal-likelihood "no data" rows) carry no
-    # information about the individual's alleles and are left out. A locus
-    # with no calls in a population gets NaN, which never passes the filter.
-    gl0, gl1, gl2 = beagle_data.gl0, beagle_data.gl1, beagle_data.gl2
-    missing = beagle_missing_mask(gl0, gl1, gl2)
-    freq_pop1 = em_allele_freq(gl0, gl1, gl2, ~missing & pop1_mask[None, :])
-    freq_pop2 = em_allele_freq(gl0, gl1, gl2, ~missing & pop2_mask[None, :])
+    with _open_maybe_gzip(input_path) as fin:
+        header_line, sample_names = _read_beagle_header(fin, input_path)
+        pop1_mask, pop2_mask = match_samples_to_populations(
+            sample_names, metadata_df, sample_col, population_col,
+            pop1_label, pop2_label)
+        tally = _MissingTally(sample_names, pop1_mask, pop2_mask)
+        with _open_write_maybe_gzip(output_path) as fout:
+            fout.write(header_line if header_line.endswith("\n") else header_line + "\n")
+            for raw_lines, names, _, _, gl0, gl1, gl2 in _iter_beagle_chunks(
+                    fin, input_path, len(sample_names), chunk_size):
+                # Missing genotypes (ANGSD's equal-likelihood "no data" rows)
+                # carry no information about the individual's alleles and are
+                # left out. A marker with no calls in a population gets NaN,
+                # which never passes the filter.
+                missing = beagle_missing_mask(gl0, gl1, gl2)
+                freq_pop1 = em_allele_freq(gl0, gl1, gl2, ~missing & pop1_mask[None, :])
+                freq_pop2 = em_allele_freq(gl0, gl1, gl2, ~missing & pop2_mask[None, :])
+                keep = compute_aim_mask(freq_pop1, freq_pop2, low_threshold,
+                                        high_threshold, min_freq_diff)
+                fout.writelines(line for line, k in zip(raw_lines, keep) if k)
+                tally.add(missing, keep)
+                marker_names += names
+                freq_pop1_parts.append(freq_pop1)
+                freq_pop2_parts.append(freq_pop2)
+                mask_parts.append(keep)
 
-    mask = compute_aim_mask(freq_pop1, freq_pop2, low_threshold, high_threshold,
-                            min_freq_diff)
-    write_beagle(beagle_data, output_path, mask)
+    if not marker_names:
+        raise ValueError(f"'{input_path}' has a header but no data rows.")
 
+    mask = np.concatenate(mask_parts)
     return {
-        "n_total": len(beagle_data), "n_retained": int(mask.sum()),
+        "n_total": len(marker_names), "n_retained": int(mask.sum()),
         "n_pop1_samples": int(pop1_mask.sum()), "n_pop2_samples": int(pop2_mask.sum()),
-        "freq_pop1": freq_pop1, "freq_pop2": freq_pop2,
-        "marker_names": beagle_data.marker_names, "mask": mask,
-        **_missingness_fields(missing, mask, beagle_data.sample_names,
-                              pop1_mask, pop2_mask),
+        "freq_pop1": np.concatenate(freq_pop1_parts),
+        "freq_pop2": np.concatenate(freq_pop2_parts),
+        "marker_names": marker_names, "mask": mask,
+        **tally.fields(),
     }
 
 
@@ -267,20 +287,45 @@ def beagle_missing_mask(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray) -> np
             | (np.isclose(gl0, gl1) & np.isclose(gl1, gl2)))
 
 
+class _MissingTally:
+    """Missing-data bookkeeping shared by the filters, accumulated chunk by
+    chunk from (n_loci, n_samples) boolean missing masks so the full mask
+    never has to be held in memory."""
+
+    def __init__(self, sample_names: list, pop1_mask: np.ndarray, pop2_mask: np.ndarray):
+        self.sample_names = list(sample_names)
+        self.pop1_mask, self.pop2_mask = pop1_mask, pop2_mask
+        self.missing_per_sample = np.zeros(len(sample_names), dtype=np.int64)
+        self.missing_per_sample_aims = np.zeros(len(sample_names), dtype=np.int64)
+        self.n_called_pop1, self.n_called_pop2 = [], []
+
+    def add(self, missing: np.ndarray, aim_mask: np.ndarray) -> None:
+        missing = np.asarray(missing, dtype=bool)
+        called = ~missing
+        self.missing_per_sample += missing.sum(axis=0)
+        self.missing_per_sample_aims += missing[aim_mask].sum(axis=0)
+        self.n_called_pop1.append(called[:, self.pop1_mask].sum(axis=1).astype(np.int64))
+        self.n_called_pop2.append(called[:, self.pop2_mask].sum(axis=1).astype(np.int64))
+
+    def fields(self) -> dict:
+        empty = np.zeros(0, dtype=np.int64)
+        return {
+            "sample_names": self.sample_names,
+            "pop1_mask": self.pop1_mask, "pop2_mask": self.pop2_mask,
+            "missing_per_sample": self.missing_per_sample,
+            "missing_per_sample_aims": self.missing_per_sample_aims,
+            "n_called_pop1": np.concatenate(self.n_called_pop1) if self.n_called_pop1 else empty,
+            "n_called_pop2": np.concatenate(self.n_called_pop2) if self.n_called_pop2 else empty,
+        }
+
+
 def _missingness_fields(missing: np.ndarray, aim_mask: np.ndarray, sample_names: list,
                          pop1_mask: np.ndarray, pop2_mask: np.ndarray) -> dict:
-    """Missing-data bookkeeping shared by the VCF and beagle filters, from an
-    (n_loci, n_samples) boolean missing mask."""
-    missing = np.asarray(missing, dtype=bool)
-    called = ~missing
-    return {
-        "sample_names": list(sample_names),
-        "pop1_mask": pop1_mask, "pop2_mask": pop2_mask,
-        "missing_per_sample": missing.sum(axis=0).astype(np.int64),
-        "missing_per_sample_aims": missing[aim_mask].sum(axis=0).astype(np.int64),
-        "n_called_pop1": called[:, pop1_mask].sum(axis=1).astype(np.int64),
-        "n_called_pop2": called[:, pop2_mask].sum(axis=1).astype(np.int64),
-    }
+    """`_MissingTally` fields for a single, complete (n_loci, n_samples)
+    boolean missing mask."""
+    tally = _MissingTally(sample_names, pop1_mask, pop2_mask)
+    tally.add(missing, aim_mask)
+    return tally.fields()
 
 
 def filter_aims_csv(input_path: str, metadata_path: str, output_path: str,
@@ -391,14 +436,14 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
     freq_pop1_list = []
     freq_pop2_list = []
     keep_flags = []
-    missing_rows = []
     n_skipped_multiallelic = 0
     n_skipped_indel = 0
     n_skipped_no_gt = 0
 
     header_samples = None
     pop1_mask = pop2_mask = None
-    header_lines = []
+    tally = None
+    pending_missing, pending_keep = [], []
 
     with _open_maybe_gzip(input_path) as fin, _open_write_maybe_gzip(output_path) as fout:
         for line in fin:
@@ -415,6 +460,7 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
                 pop1_mask, pop2_mask = match_samples_to_populations(
                     header_samples, metadata_df, sample_col, population_col,
                     pop1_label, pop2_label)
+                tally = _MissingTally(header_samples, pop1_mask, pop2_mask)
                 fout.write(raw_line)
                 continue
 
@@ -458,7 +504,11 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
             freq_pop1_list.append(freq_pop1)
             freq_pop2_list.append(freq_pop2)
             keep_flags.append(keep)
-            missing_rows.append(np.isnan(dosage_row))
+            pending_missing.append(np.isnan(dosage_row))
+            pending_keep.append(keep)
+            if len(pending_keep) >= 5000:
+                tally.add(np.vstack(pending_missing), np.array(pending_keep, dtype=bool))
+                pending_missing, pending_keep = [], []
 
             if keep:
                 fout.write(raw_line)
@@ -470,6 +520,8 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
             f"Check the file is a valid VCF with biallelic SNP records."
         )
 
+    if pending_keep:
+        tally.add(np.vstack(pending_missing), np.array(pending_keep, dtype=bool))
     mask = np.array(keep_flags, dtype=bool)
     return {
         "n_total": len(locus_names), "n_retained": int(mask.sum()),
@@ -479,8 +531,7 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
         "n_skipped_multiallelic": n_skipped_multiallelic,
         "n_skipped_indel": n_skipped_indel,
         "n_skipped_no_gt": n_skipped_no_gt,
-        **_missingness_fields(np.vstack(missing_rows), mask, header_samples,
-                              pop1_mask, pop2_mask),
+        **tally.fields(),
     }
 
 

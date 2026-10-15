@@ -602,3 +602,61 @@ def test_filter_aims_beagle_recovers_aims_at_low_depth(tmp_path):
     assert result["freq_pop1"][0] < 0.01
     assert result["freq_pop2"][0] > 0.99
     assert result["mask"].tolist() == [True]
+
+
+def test_filter_aims_beagle_streaming_is_chunk_size_independent(tmp_path):
+    """filter_aims_beagle reads the input chunk by chunk (it loaded the whole
+    file before, peaking at ~3.3x the file size: 895 MB for a 272 MB file
+    of 100,000 markers x 100 individuals). Every chunk size must give the
+    same frequencies, mask, missing-data counts and output, and the output
+    must be the retained input lines verbatim."""
+    rng = np.random.default_rng(5)
+    names = [f"s{i}" for i in range(12)]
+    pops = ["parent1"] * 4 + ["parent2"] * 4 + ["hybrid"] * 4
+    lines = ["marker\tallele1\tallele2\t" + "\t".join(f"{n}\t{n}\t{n}" for n in names)]
+    for m in range(23):
+        vals = []
+        for i in range(12):
+            if rng.random() < 0.15:
+                gl = ["0.333333"] * 3
+            else:
+                g = (0 if i < 4 else 2) if m % 3 else int(rng.integers(0, 3))
+                gl = ["0.000000"] * 3
+                gl[g] = "1"
+            vals += gl
+        lines.append("\t".join([f"chr1_{m}", "0", "1"] + vals))
+    beagle_path = tmp_path / "in.beagle"
+    beagle_path.write_text("\n".join(lines) + "\n")
+    meta_path = tmp_path / "meta.tsv"
+    pd.DataFrame({"individual": names, "population": pops}).to_csv(
+        meta_path, sep="\t", index=False)
+
+    results, outputs = [], []
+    for chunk_size in (1, 4, 23, 5000):
+        out = tmp_path / f"out_{chunk_size}.beagle"
+        results.append(filter_aims_beagle(str(beagle_path), str(meta_path), str(out),
+                                          chunk_size=chunk_size))
+        outputs.append(out.read_text())
+
+    ref = results[0]
+    assert 0 < ref["n_retained"] < ref["n_total"] == 23
+    for r in results[1:]:
+        np.testing.assert_array_equal(r["freq_pop1"], ref["freq_pop1"])
+        np.testing.assert_array_equal(r["freq_pop2"], ref["freq_pop2"])
+        np.testing.assert_array_equal(r["mask"], ref["mask"])
+        for key in ("missing_per_sample", "missing_per_sample_aims",
+                    "n_called_pop1", "n_called_pop2"):
+            np.testing.assert_array_equal(r[key], ref[key])
+        assert r["marker_names"] == ref["marker_names"]
+    assert all(o == outputs[0] for o in outputs)
+    kept = [lines[0]] + [l for l, k in zip(lines[1:], ref["mask"]) if k]
+    assert outputs[0] == "\n".join(kept) + "\n"
+
+
+def test_filter_aims_beagle_header_only_raises(tmp_path):
+    beagle_path = tmp_path / "in.beagle"
+    beagle_path.write_text("marker\tallele1\tallele2\ta\ta\ta\tb\tb\tb\n")
+    meta_path = tmp_path / "meta.tsv"
+    meta_path.write_text("individual\tpopulation\na\tparent1\nb\tparent2\n")
+    with pytest.raises(ValueError, match="no data rows"):
+        filter_aims_beagle(str(beagle_path), str(meta_path), str(tmp_path / "out.beagle"))

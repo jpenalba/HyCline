@@ -163,14 +163,22 @@ summary, for three situations:
 
 Warnings never stop the run or change which loci are retained.
 
-For VCF specifically: **every retained line is copied byte-for-byte from the
-input, not re-derived from parsed fields** -- filtering only removes whole
+**Every retained line is copied byte-for-byte from the input, VCF or
+beagle, not re-derived from parsed fields** -- filtering only removes whole
 lines (variants); it never rewrites one. Verified directly while building
 this: a test VCF carrying an extra `DP` (read-depth) FORMAT field alongside
 `GT` came through filtering with that field completely untouched. This means
 INFO annotations, QUAL/FILTER values, and any FORMAT field beyond `GT` you
 care about downstream survive filtering exactly as your variant caller wrote
 them.
+
+filter-aims reads both formats a piece at a time (VCF line by line, beagle
+5,000 markers at a time), so memory stays roughly flat as the number of
+loci grows, and run time grows linearly. With 100 individuals it takes
+about 1.2 s to start plus about 0.1-0.15 ms per locus: about 45 s for
+300,000 loci in either format, using under 400 MB of memory.
+`benchmarking/time_filter_aims.py` repeats the measurement for your own
+sample sizes.
 
 ### Key flags
 
