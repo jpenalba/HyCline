@@ -3161,8 +3161,9 @@ def cmd_estimate_hybrid_index(args) -> int:
         print(f"  Parental population 1 ('{args.pop1_label}'): {pop1_mask.sum()} reference individuals")
 
         if fmt == "vcf":
-            parental_freq_pop0 = np.nanmean(genotypes[pop0_mask], axis=0) / args.ploidy
-            parental_freq_pop1 = np.nanmean(genotypes[pop1_mask], axis=0) / args.ploidy
+            from hycline.data.filter_aims import nanmean_quiet
+            parental_freq_pop0 = nanmean_quiet(genotypes[pop0_mask], axis=0) / args.ploidy
+            parental_freq_pop1 = nanmean_quiet(genotypes[pop1_mask], axis=0) / args.ploidy
         else:
             # Pooled maximum-likelihood frequencies from the reference
             # individuals' genotype likelihoods, as filter-aims uses.
@@ -3436,9 +3437,9 @@ def _genomic_parental_freqs(args, fmt, data, metadata_df):
         print(f"  Parental frequencies from {pop0_mask.sum()} '{args.pop0_label}' and "
               f"{pop1_mask.sum()} '{args.pop1_label}' reference individuals.")
         if fmt == "vcf":
-            with np.errstate(invalid="ignore"):
-                p0 = np.nanmean(data.dosage[:, pop0_mask], axis=1) / args.ploidy
-                p1 = np.nanmean(data.dosage[:, pop1_mask], axis=1) / args.ploidy
+            from hycline.data.filter_aims import nanmean_quiet
+            p0 = nanmean_quiet(data.dosage[:, pop0_mask], axis=1) / args.ploidy
+            p1 = nanmean_quiet(data.dosage[:, pop1_mask], axis=1) / args.ploidy
         else:
             from hycline.data.filter_aims import beagle_missing_mask, em_allele_freq
             called = ~beagle_missing_mask(data.gl0, data.gl1, data.gl2)

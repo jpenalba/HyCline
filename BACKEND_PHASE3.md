@@ -331,6 +331,40 @@ population 6% of retained loci were not AIMs. Open: realistic outlier
 fractions, and a second pass that drops flagged outliers from the
 hybrid-index set.
 
+**Read depth and AIM retention.** `benchmarking/depth_aim_retention.py`
+simulates the same true genotypes at a range of mean depths (reads come
+from their own random stream) and scores `filter_aims_beagle`, and
+`filter_aims_vcf` on genotypes called from the same reads, against the
+simulator's `is_aim`. 20 + 20 parental and 20 hybrid individuals, 5,000
+SNPs, 1,000 AIMs simulated with `--aim-cutoff 0.05`, 3 seeds, Poisson depth:
+
+| Mean depth | 1 | 2 | 3 | 4 | 6 | 8 | 10+ |
+|---|---|---|---|---|---|---|---|
+| Recall, beagle, cutoff 0.10 | 0.936 | 0.964 | 0.982 | 0.993 | 0.999 | 1.000 | 1.000 |
+| Recall, called VCF, cutoff 0.10 | 0.950 | 0.955 | 0.964 | 0.972 | 0.984 | 0.994 | 0.999-1.000 |
+| Recall of AIMs fixed in both panels, beagle, cutoff 0.05 | 0.925 | 0.977 | 0.981 | 0.992 | 0.997 | 1.000 | 1.000 |
+
+With uneven depth (`--depth-dispersion 2 --individual-depth-sd 0.5`) the
+beagle numbers are within 0.01 of these. No non-AIM was retained in any
+run, but that says little about specificity: the simulator gives non-AIMs
+the same source frequency in both panels, so none is near the cutoff.
+Zero depths are redrawn rather than made missing, so low mean depths here
+have no missing data, unlike real data.
+
+At cutoff 0.05 -- equal to the simulator's AIM rule -- beagle recall of
+AIMs that are not fixed in both panels falls with depth (0.55 at depth 1,
+0.42 at depth 30) while called-VCF recall rises to 0.999. Those AIMs have
+panel frequencies exactly at the cutoff (2 minor alleles of 40). The EM
+estimate is the maximum-likelihood frequency, and homozygous individuals'
+genotype likelihoods carry small non-zero heterozygote values (sequencing
+error, 6-decimal rounding), which put it slightly past the cutoff (e.g.
+0.0500128 for a panel frequency of 0.05, confirmed by direct likelihood
+maximization; the EM had converged). Higher depth sharpens the estimate
+around that value, so about half such loci fail. A called-genotype
+frequency is exactly 0.05 and passes. Any locus whose panel frequency is
+exactly a `--minor-allele-freq` cutoff is therefore retained from a VCF but
+retained about half the time from a beagle file.
+
 **File formats.** User-created tables -- metadata, parental labels,
 parental frequencies (the flag is now `--parental-freq-file`, earlier
 `--parental-freq-csv`) and trait data -- are read as tab-delimited via

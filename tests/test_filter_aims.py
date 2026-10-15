@@ -660,3 +660,27 @@ def test_filter_aims_beagle_header_only_raises(tmp_path):
     meta_path.write_text("individual\tpopulation\na\tparent1\nb\tparent2\n")
     with pytest.raises(ValueError, match="no data rows"):
         filter_aims_beagle(str(beagle_path), str(meta_path), str(tmp_path / "out.beagle"))
+
+
+def test_filter_aims_vcf_population_all_missing_is_quiet(tmp_path):
+    """A locus where every individual of one parental population is missing
+    gets frequency NaN and is dropped -- without numpy's "Mean of empty
+    slice" RuntimeWarning, which filter-aims printed for every such locus."""
+    import warnings
+    lines = [
+        _VCF_HEADER,
+        _vcf_line(100, "snp1", ["0/0:10", "1/1:12", "0/1:8"]),
+        _vcf_line(200, "snp2", ["0/0:11", "./.:0", "0/1:9"]),
+    ]
+    vcf_path = tmp_path / "test.vcf"
+    vcf_path.write_text("".join(lines))
+    metadata_path = tmp_path / "metadata.tsv"
+    pd.DataFrame({"individual": ["ind0", "ind1", "ind2"],
+                  "population": ["parent1", "parent2", "hybrid"]}).to_csv(
+        metadata_path, sep="\t", index=False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = filter_aims_vcf(str(vcf_path), str(metadata_path),
+                                 str(tmp_path / "out.vcf"))
+    assert np.isnan(result["freq_pop2"][1])
+    assert result["mask"].tolist() == [True, False]

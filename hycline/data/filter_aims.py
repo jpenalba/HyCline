@@ -40,6 +40,17 @@ from hycline.data.io import read_user_table
 _FREQ_TOL = 1e-9
 
 
+def nanmean_quiet(a, axis=None):
+    """`np.nanmean` without its "Mean of empty slice" RuntimeWarning: NaN
+    where every value is NaN -- e.g. a locus at which every individual of a
+    parental population is missing, which then never passes the AIM filter.
+    """
+    a = np.asarray(a, dtype=float)
+    valid = ~np.isnan(a)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(valid, a, 0.0).sum(axis=axis) / valid.sum(axis=axis)
+
+
 def compute_aim_mask(freq_pop1: np.ndarray, freq_pop2: np.ndarray,
                       low_threshold: float = 0.1, high_threshold: float = 0.9,
                       min_freq_diff: float | None = None) -> np.ndarray:
@@ -372,8 +383,8 @@ def filter_aims_csv(input_path: str, metadata_path: str, output_path: str,
         sample_names, metadata_df, sample_col, population_col, pop1_label, pop2_label)
 
     dosage = geno_df[loci].to_numpy(dtype=float)
-    freq_pop1 = np.nanmean(dosage[pop1_mask], axis=0) / ploidy
-    freq_pop2 = np.nanmean(dosage[pop2_mask], axis=0) / ploidy
+    freq_pop1 = nanmean_quiet(dosage[pop1_mask], axis=0) / ploidy
+    freq_pop2 = nanmean_quiet(dosage[pop2_mask], axis=0) / ploidy
 
     mask = compute_aim_mask(freq_pop1, freq_pop2, low_threshold, high_threshold,
                             min_freq_diff)
@@ -493,8 +504,8 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
                 gt_str = sub_fields[gt_idx] if gt_idx < len(sub_fields) else "."
                 dosage_row[i] = _parse_gt(gt_str)
 
-            freq_pop1 = np.nanmean(dosage_row[pop1_mask]) / 2.0
-            freq_pop2 = np.nanmean(dosage_row[pop2_mask]) / 2.0
+            freq_pop1 = nanmean_quiet(dosage_row[pop1_mask]) / 2.0
+            freq_pop2 = nanmean_quiet(dosage_row[pop2_mask]) / 2.0
             keep = bool(compute_aim_mask(
                 np.array([freq_pop1]), np.array([freq_pop2]),
                 low_threshold, high_threshold, min_freq_diff)[0])
