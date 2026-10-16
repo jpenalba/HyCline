@@ -195,7 +195,7 @@ step("Step 3. Input conversion (generate-geographic-input, generate-genomic-inpu
        "compare p0/p1 with bcftools/PLINK per-population frequencies (VCF) or ANGSD -doMaf (beagle).",
        "Exact agreement for VCF; close agreement for beagle EM frequencies."],
       ["F. Robustness", "Samples missing from metadata, loci with no data, equal parental frequencies, "
-       "Mode 1 vs Mode 2 parental frequencies.", "Correct drops and counts, clear messages."]])
+       "parental reference labels given or omitted.", "Correct drops and counts, clear messages."]])
 
 step("Step 4. Geographic clines (fit-geographic, compare-tails)",
      "Fits sigmoid clines (centre, width, pmin/pmax), with optional HZAR tail models, by MLE or Bayesian "

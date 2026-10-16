@@ -68,7 +68,7 @@ to hold itself to throughout (see "Key principles" below).
   `mcmc_genomic_hierarchical.py`, `mcmc_pymc.py`).
 - `hycline/data/` -- readers/writers, VCF/beagle handling, AIM filtering.
 - `hycline/viz/` -- plotting.
-- `tests/` -- 476 tests. `test_cli.py` (every test runs the CLI as a
+- `tests/` -- 477 tests. `test_cli.py` (every test runs the CLI as a
   subprocess, paying ~1.2 s of start-up) and the MCMC test files are the
   slowest. Run them in parallel with pytest-xdist (`pytest tests/ -n 4`);
   if the environment has tight per-command timeouts, split large runs into

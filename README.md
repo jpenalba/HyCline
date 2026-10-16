@@ -77,7 +77,7 @@ memory -- they're the authoritative, up-to-date reference. `hycline
 flag list.
 
 **File formats.** Tables you create yourself -- `--metadata`,
-`--parental-metadata`, `--parental-freq-file`, and trait data for
+`--parental-metadata`, and trait data for
 `fit-trait`/`fit-trait-multi` -- are tab-delimited with one header row;
 a comma-separated file there is rejected with a message saying so.
 HyCline's own intermediate files (`generate-*-input` output, fit
@@ -439,8 +439,8 @@ full investigation.
   dependency) underlying the `generate-geographic-input`/`generate-genomic-input` CLI
   commands, converting a VCF + tab-delimited metadata file directly into any of this
   project's CSV formats. `generate-genomic-input` also writes each locus's
-  parental frequencies (`<locus>.p0`/`.p1`, from labelled reference
-  individuals or `--parental-freq-file`) and by default leaves the
+  parental frequencies (`<locus>.p0`/`.p1`, from the reference
+  individuals labelled `--pop1-label`/`--pop2-label`) and by default leaves the
   reference individuals out of the cline input, as gghybrid's `ggcline`
   does. Validated end to end against known ground truth,
   not just unit tests on hand-crafted fixtures: a synthetic geographic

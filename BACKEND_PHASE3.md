@@ -590,6 +590,12 @@ the file is used (subset loci with `filter-aims`). The labels became
 `--pop1-label` (hybrid index 0) and `--pop2-label` (hybrid index 1), as
 in `filter-aims`; `--metadata` is required and `--population-col`
 defaults to `population`.
+`generate-genomic-input` got the same treatment: `--parental-freq-file`
+(and its column options) and `--ploidy` are gone, and its reference
+labels are `--pop1-label` (written as `<locus>.p0`, hybrid index 0) and
+`--pop2-label` (`<locus>.p1`, hybrid index 1), given together;
+`--population-col` defaults to `population`. Without the labels it still
+writes fixed-marker input, with its warning.
 
 ### 9.2 Real-data validation, not just "the command runs"
 

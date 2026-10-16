@@ -14,8 +14,8 @@ while writing this guide -- flags, output messages, and file names are
 exact.
 
 **File formats.** Files you create yourself -- metadata (sample names,
-population labels, distances, hybrid indices), parental reference labels
-and precomputed parental frequencies -- are **tab-delimited** text with
+population labels, distances, hybrid indices) and parental reference
+labels -- are **tab-delimited** text with
 one header row (`.tsv`). HyCline rejects a comma-separated file there
 with a message saying so. The files HyCline writes for its own later
 steps (`generate-*-input` output, fit summaries and curves) are CSV;
@@ -323,7 +323,7 @@ hycline estimate-hybrid-index --input hi_aims.vcf \
 # parental reference individuals for each locus's parental frequencies
 hycline generate-genomic-input --input cline_aims.vcf \
     --metadata hybrid_index.tsv --parental-metadata parental_labels.tsv \
-    --population-col population --pop0-label parent0 --pop1-label parent1 \
+    --pop1-label parent0 --pop2-label parent1 \
     --output genomic_input.csv
 ```
 
@@ -334,7 +334,7 @@ is shown above):
   4000 loci checked, 395 retained (allele-frequency difference >= 0.5 between the parental populations)
   4000 loci checked, 1000 retained (allele-frequency difference >= 0.3 between the parental populations)
 
-  Parental frequencies from 15 'parent0' and 15 'parent1' reference individuals.
+  Parental frequencies from 15 'parent0' (hybrid index 0) and 15 'parent1' (hybrid index 1) reference individuals.
   30 parental reference individual(s) left out of the output (--include-parentals to keep them).
 
 Wrote /path/to/genomic_input.csv
@@ -375,7 +375,7 @@ hycline generate-genomic-input \
     --input cline_aims.vcf \
     --metadata hybrid_index.tsv \
     --parental-metadata parental_labels.tsv \
-    --population-col population --pop0-label parent0 --pop1-label parent1 \
+    --pop1-label parent0 --pop2-label parent1 \
     --output genomic_input.csv
 ```
 
@@ -386,7 +386,7 @@ shortened):
 Detected input format: vcf (from file extension; use --format to override)
 Parsing 'cline_aims.vcf' ...
   1000 biallelic SNPs parsed, 90 samples.
-  Parental frequencies from 15 'parent0' and 15 'parent1' reference individuals.
+  Parental frequencies from 15 'parent0' (hybrid index 0) and 15 'parent1' (hybrid index 1) reference individuals.
   30 parental reference individual(s) left out of the output (--include-parentals to keep them).
 
 Wrote /path/to/genomic_input.csv
@@ -396,8 +396,10 @@ Ready for: hycline fit-genomic --input genomic_input.csv --individual-col indivi
 ```
 
 Each locus gets its counted allele's frequency (VCF ALT, beagle allele2)
-in the two parental populations, written as `<locus>.p0`/`<locus>.p1`
-columns alongside the genotype data:
+in the two parental populations, written as `<locus>.p0` (the
+`--pop1-label` population, hybrid index 0) and `<locus>.p1` (the
+`--pop2-label` population, hybrid index 1) columns alongside the
+genotype data:
 
 ```
    individual  hybrid_index  snp9.n  snp9.freq  snp9.p0  snp9.p1
@@ -412,24 +414,24 @@ VCF's ALT.
 
 | Flag | Meaning |
 |---|---|
-| `--population-col`, `--pop0-label`, `--pop1-label` | Labels identifying the parental reference individuals. Frequencies are the references' sample frequencies for VCF input, and pooled maximum-likelihood estimates from their genotype likelihoods for beagle input |
+| `--pop1-label`, `--pop2-label` | Labels of the parental reference individuals at hybrid index 0 and 1, as in `filter-aims` and `estimate-hybrid-index`; give both. Frequencies are the references' sample frequencies for VCF input, and pooled maximum-likelihood estimates from their genotype likelihoods for beagle input |
+| `--population-col` | Column holding the labels (default `population`) |
 | `--parental-metadata` | Tab-delimited file holding `--sample-col` and `--population-col`, if the labels aren't in `--metadata` |
 | `--include-parentals` | Keep the reference individuals in the output. By default they are left out, as gghybrid's `ggcline` does: clines are fitted to the test individuals |
-| `--parental-freq-file` (+ `--freq-locus-col`, `--freq-pop0-col`, `--freq-pop1-col`) | Precomputed per-locus parental frequencies instead of reference individuals: a tab-delimited file, one row per locus |
 
 Parental frequencies are clipped to [0.001, 0.999], so an individual at
 hybrid index exactly 0 or 1 can't make a locus impossible, and loci
 whose two parental frequencies are equal (or unknown) are left out, with
-a count printed. **Without parental frequencies** every locus is treated
-as fixed for the counted allele in parental population 1, and the
-command prints a note saying so. That is right only for fixed markers
+a count printed. **Without `--pop1-label`/`--pop2-label`** every locus
+is treated as fixed for the counted allele in parental population 1, and
+the command prints a note saying so. That is right only for fixed markers
 whose ALT allele is parental population 1's: on the simulated data,
 every locus whose ALT allele belonged to parental population 0 then
 fitted at the lower bound of v.
 
 Individuals present in the VCF/beagle file but absent from `--metadata`
 are dropped, not an error. The reverse is an error: every sample the
-metadata labels with `--pop0-label` or `--pop1-label` must match a sample
+metadata labels with `--pop1-label` or `--pop2-label` must match a sample
 name in the VCF `#CHROM` line or beagle header exactly, and the error
 lists the ones that don't. `--hybrid-index-col` (default
 `hybrid_index`) names the hybrid-index column.

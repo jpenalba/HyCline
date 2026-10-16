@@ -1043,14 +1043,16 @@ def _build_parser() -> argparse.ArgumentParser:
                      "is auto-detected from the file extension unless --format is given. "
                      "Don't have hybrid index yet? Run 'hycline estimate-hybrid-index' "
                      "first and merge its output into your metadata by individual name. "
-                     "Give the parental populations' allele frequencies, either from "
-                     "labelled reference individuals (--population-col/--pop0-label/"
-                     "--pop1-label) or precomputed (--parental-freq-file): the genomic "
-                     "cline then models each locus's allele frequency as p0 + (p1 - p0) "
-                     "* phi(h) (Bailey 2023, gghybrid), so loci needn't be fixed or "
-                     "polarized. Without them every locus is treated as fixed for the "
-                     "counted allele in parental population 1, which is only right for "
-                     "fixed, polarized markers.",
+                     "Label the parental reference individuals (--pop1-label, hybrid "
+                     "index 0, and --pop2-label, hybrid index 1, as in filter-aims and "
+                     "estimate-hybrid-index) and each locus's parental allele "
+                     "frequencies are estimated from them: the genomic cline then models "
+                     "the locus's allele frequency as p0 + (p1 - p0) * phi(h) (Bailey "
+                     "2023, gghybrid), with p0 the --pop1-label frequency and p1 the "
+                     "--pop2-label frequency, so loci needn't be fixed or polarized. "
+                     "Without the labels every locus is treated as fixed for the counted "
+                     "allele in the hybrid-index-1 population, which is only right for "
+                     "fixed, polarized markers. Genotypes are diploid.",
     )
     ggni_p.add_argument("--input", required=True, metavar="FILE",
                          help="VCF file (.vcf or .vcf.gz) or ANGSD beagle-format file "
@@ -1071,48 +1073,33 @@ def _build_parser() -> argparse.ArgumentParser:
     ggni_p.add_argument("--hybrid-index-col", default="hybrid_index",
                          help="Column in the metadata file holding each individual's "
                               "genome-wide hybrid index (default: hybrid_index).")
-    ggni_p.add_argument("--ploidy", type=int, default=2,
-                         help="[VCF input only] Ploidy, used when writing hard-count "
-                              "output (default: 2).")
     ggni_p.add_argument("--max-variants", type=int, default=None,
                          help="[VCF input only] Optional cap on the number of biallelic "
                               "SNPs to parse. Ignored for beagle input.")
     ggni_par = ggni_p.add_argument_group(
         "parental allele frequencies",
         "Each locus's ALT (VCF) or allele2 (beagle) frequency in the two parental "
-        "populations, written as '<locus>.p0'/'<locus>.p1' columns and used by "
-        "fit-genomic/fit-hierarchical-genomic. Frequencies are clipped to "
-        "[0.001, 0.999]; loci with equal or unknown parental frequencies are left "
-        "out.")
-    ggni_par.add_argument("--population-col", default=None,
-                          help="[Mode 1] Column holding population labels, in "
-                               "--parental-metadata (default: --metadata).")
-    ggni_par.add_argument("--pop0-label", default=None,
-                          help="[Mode 1] Label of parental population 0's reference "
-                               "individuals.")
+        "populations, estimated from the reference individuals labeled --pop1-label "
+        "and --pop2-label and written as '<locus>.p0' (--pop1-label) and "
+        "'<locus>.p1' (--pop2-label) columns for fit-genomic/fit-hierarchical-genomic. "
+        "Frequencies are clipped to [0.001, 0.999]; loci with equal or unknown "
+        "parental frequencies are left out.")
+    ggni_par.add_argument("--population-col", default="population",
+                          help="Column holding population labels, in --parental-metadata "
+                               "if given, otherwise in --metadata (default: population).")
     ggni_par.add_argument("--pop1-label", default=None,
-                          help="[Mode 1] Label of parental population 1's reference "
-                               "individuals.")
+                          help="Label of the reference individuals of the parental "
+                               "population at hybrid index 0. Give with --pop2-label.")
+    ggni_par.add_argument("--pop2-label", default=None,
+                          help="Label of the reference individuals of the parental "
+                               "population at hybrid index 1. Give with --pop1-label.")
     ggni_par.add_argument("--parental-metadata", default=None, metavar="FILE.tsv",
-                          help="[Mode 1] Tab-delimited file with --sample-col and --population-col, if "
-                               "the population labels aren't in --metadata.")
+                          help="Tab-delimited file with --sample-col and --population-col, "
+                               "if the population labels aren't in --metadata.")
     ggni_par.add_argument("--include-parentals", action="store_true",
-                          help="[Mode 1] Keep the parental reference individuals in the "
-                               "output. By default they are left out, as gghybrid's "
-                               "ggcline does by default: the clines are fitted to the "
-                               "test individuals.")
-    ggni_par.add_argument("--parental-freq-file", default=None, metavar="FILE.tsv",
-                          help="[Mode 2] Tab-delimited file of precomputed per-locus parental "
-                               "frequencies (the same format estimate-hybrid-index "
-                               "takes).")
-    ggni_par.add_argument("--freq-locus-col", default="locus",
-                          help="[Mode 2] Locus-name column (default: locus).")
-    ggni_par.add_argument("--freq-pop0-col", default="freq_pop0",
-                          help="[Mode 2] Parental population 0 frequency column "
-                               "(default: freq_pop0).")
-    ggni_par.add_argument("--freq-pop1-col", default="freq_pop1",
-                          help="[Mode 2] Parental population 1 frequency column "
-                               "(default: freq_pop1).")
+                          help="Keep the parental reference individuals in the output. By "
+                               "default they are left out, as gghybrid's ggcline does by "
+                               "default: the clines are fitted to the test individuals.")
     ggni_p.add_argument("--output", required=True, metavar="FILE.csv",
                          help="Path to write the converted CSV to.")
 
@@ -3316,63 +3303,41 @@ _PARENTAL_FREQ_FLOOR = 1e-3
 
 
 def _genomic_parental_freqs(args, fmt, data, metadata_df):
-    """Parental frequencies for generate-genomic-input. Returns
-    (parental_freqs or None, reference sample names to exclude, error
-    message or None). Frequencies are of the VCF ALT / beagle allele2."""
-    mode1 = args.population_col is not None
-    mode2 = args.parental_freq_file is not None
-    if mode1 and mode2:
-        return None, [], ("--population-col and --parental-freq-file are mutually "
-                          "exclusive -- give at most one.")
-    if not (mode1 or mode2):
+    """Parental frequencies for generate-genomic-input, from the reference
+    individuals labeled --pop1-label (p0, hybrid index 0) and --pop2-label
+    (p1, hybrid index 1). Returns (parental_freqs or None, reference sample
+    names to exclude, error message or None). Frequencies are of the VCF
+    ALT / beagle allele2."""
+    if args.pop1_label is None and args.pop2_label is None:
         return None, [], None
-    locus_names = list(data.locus_names if fmt == "vcf" else data.marker_names)
-
-    if mode1:
-        if args.pop0_label is None or args.pop1_label is None:
-            return None, [], "--population-col requires --pop0-label and --pop1-label."
-        labels_df = metadata_df
-        if args.parental_metadata is not None:
-            if not Path(args.parental_metadata).exists():
-                return None, [], f"--parental-metadata file not found: '{args.parental_metadata}'"
-            labels_df = _read_user_table(args.parental_metadata, "--parental-metadata file")
-        from hycline.data.filter_aims import match_samples_to_populations
-        try:
-            pop0_mask, pop1_mask = match_samples_to_populations(
-                list(data.sample_names), labels_df, args.sample_col, args.population_col,
-                args.pop0_label, args.pop1_label,
-                label_flags=("--pop0-label", "--pop1-label"))
-        except ValueError as e:
-            return None, [], str(e)
-        print(f"  Parental frequencies from {pop0_mask.sum()} '{args.pop0_label}' and "
-              f"{pop1_mask.sum()} '{args.pop1_label}' reference individuals.")
-        if fmt == "vcf":
-            from hycline.data.filter_aims import nanmean_quiet
-            p0 = nanmean_quiet(data.dosage[:, pop0_mask], axis=1) / args.ploidy
-            p1 = nanmean_quiet(data.dosage[:, pop1_mask], axis=1) / args.ploidy
-        else:
-            from hycline.data.filter_aims import beagle_missing_mask, em_allele_freq
-            called = ~beagle_missing_mask(data.gl0, data.gl1, data.gl2)
-            p0 = em_allele_freq(data.gl0, data.gl1, data.gl2, called & pop0_mask[None, :])
-            p1 = em_allele_freq(data.gl0, data.gl1, data.gl2, called & pop1_mask[None, :])
-        refs = [] if args.include_parentals else [
-            s for s, r in zip(data.sample_names, pop0_mask | pop1_mask) if r]
+    if args.pop1_label is None or args.pop2_label is None:
+        return None, [], "--pop1-label and --pop2-label must be given together."
+    labels_df = metadata_df
+    if args.parental_metadata is not None:
+        if not Path(args.parental_metadata).exists():
+            return None, [], f"--parental-metadata file not found: '{args.parental_metadata}'"
+        labels_df = _read_user_table(args.parental_metadata, "--parental-metadata file")
+    from hycline.data.filter_aims import match_samples_to_populations
+    try:
+        pop1_mask, pop2_mask = match_samples_to_populations(
+            list(data.sample_names), labels_df, args.sample_col, args.population_col,
+            args.pop1_label, args.pop2_label)
+    except ValueError as e:
+        return None, [], str(e)
+    print(f"  Parental frequencies from {pop1_mask.sum()} '{args.pop1_label}' "
+          f"(hybrid index 0) and {pop2_mask.sum()} '{args.pop2_label}' (hybrid index 1) "
+          f"reference individuals.")
+    if fmt == "vcf":
+        from hycline.data.filter_aims import nanmean_quiet
+        p0 = nanmean_quiet(data.dosage[:, pop1_mask], axis=1) / 2
+        p1 = nanmean_quiet(data.dosage[:, pop2_mask], axis=1) / 2
     else:
-        if not Path(args.parental_freq_file).exists():
-            return None, [], f"--parental-freq-file file not found: '{args.parental_freq_file}'"
-        freq_df = _read_user_table(args.parental_freq_file, "--parental-freq-file")
-        for col in (args.freq_locus_col, args.freq_pop0_col, args.freq_pop1_col):
-            if col not in freq_df.columns:
-                return None, [], (f"column '{col}' not found in '{args.parental_freq_file}'. "
-                                  f"Columns present: {', '.join(freq_df.columns)}")
-        by_locus = freq_df.set_index(args.freq_locus_col)
-        missing = [l for l in locus_names if l not in by_locus.index]
-        if missing:
-            return None, [], (f"'{args.parental_freq_file}' has no row for locus(-i) "
-                              f"{_format_loci_list(missing)}.")
-        p0 = by_locus.loc[locus_names, args.freq_pop0_col].to_numpy(dtype=float)
-        p1 = by_locus.loc[locus_names, args.freq_pop1_col].to_numpy(dtype=float)
-        refs = []
+        from hycline.data.filter_aims import beagle_missing_mask, em_allele_freq
+        called = ~beagle_missing_mask(data.gl0, data.gl1, data.gl2)
+        p0 = em_allele_freq(data.gl0, data.gl1, data.gl2, called & pop1_mask[None, :])
+        p1 = em_allele_freq(data.gl0, data.gl1, data.gl2, called & pop2_mask[None, :])
+    refs = [] if args.include_parentals else [
+        s for s, r in zip(data.sample_names, pop1_mask | pop2_mask) if r]
 
     p0 = np.clip(p0, _PARENTAL_FREQ_FLOOR, 1 - _PARENTAL_FREQ_FLOOR)
     p1 = np.clip(p1, _PARENTAL_FREQ_FLOOR, 1 - _PARENTAL_FREQ_FLOOR)
@@ -3421,7 +3386,7 @@ def cmd_generate_genomic_input(args) -> int:
         try:
             info = write_genomic_hard_count_csv(vcf_data, metadata_df, args.sample_col,
                                                  args.hybrid_index_col, str(out_path),
-                                                 ploidy=args.ploidy,
+                                                 ploidy=2,
                                                  parental_freqs=parental_freqs,
                                                  exclude_samples=refs)
         except ValueError as e:
@@ -3463,11 +3428,11 @@ def cmd_generate_genomic_input(args) -> int:
         print(f"  {len(refs)} parental reference individual(s) left out of the output "
               f"(--include-parentals to keep them).")
     if parental_freqs is None:
-        print("NOTE: no parental frequencies given (--population-col or "
-              "--parental-freq-file), so every locus is treated as fixed for the counted "
-              "allele in parental population 1 (frequency 0 in population 0, 1 in "
-              "population 1). That is only right for fixed markers whose ALT allele "
-              "is population 1's; otherwise clines are distorted.", file=sys.stderr)
+        print("NOTE: no parental reference individuals given (--pop1-label/"
+              "--pop2-label), so every locus is treated as fixed for the counted allele "
+              "in the hybrid-index-1 population (frequency 0 at hybrid index 0, 1 at "
+              "hybrid index 1). That is only right for fixed markers whose ALT allele "
+              "is that population's; otherwise clines are distorted.", file=sys.stderr)
 
     print(f"\nWrote {out_path.resolve()}")
     print(f"  {info['n_individuals']} individuals, {info['n_loci']} loci")

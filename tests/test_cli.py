@@ -1502,8 +1502,8 @@ def test_cli_default_hybrid_index_gives_unflattened_genomic_clines(tmp_path):
     assert result.returncode == 0, result.stderr
     genomic = tmp_path / "genomic.csv"
     result = _run_cli(["generate-genomic-input", "--input", vcf, "--metadata", str(hi),
-                       "--parental-metadata", meta, "--population-col", "population",
-                       "--pop0-label", "pop1", "--pop1-label", "pop2",
+                       "--parental-metadata", meta, "--pop1-label", "pop1",
+                       "--pop2-label", "pop2",
                        "--output", str(genomic)])
     assert result.returncode == 0, result.stderr
 
@@ -2015,15 +2015,14 @@ def _neutral_zone_pipeline(tmp_path, with_parentals=True, extra_ggi=()):
                              "--n-snps", "600", "--aim-percent", "30",
                              "--aim-freq-diff", "0.3", "--seed", "12")
     vcf, meta = f"{prefix}.vcf", f"{prefix}_metadata.tsv"
-    labels = ["--population-col", "population", "--pop0-label", "pop1", "--pop1-label", "pop2"]
-    ehi_labels = ["--pop1-label", "pop1", "--pop2-label", "pop2"]
+    labels = ["--pop1-label", "pop1", "--pop2-label", "pop2"]
     aims = tmp_path / "aims.vcf"
     assert _run_cli(["filter-aims", "--input", vcf, "--metadata", meta, "--pop1-label", "pop1",
                      "--pop2-label", "pop2", "--allele-freq-diff", "0.3",
                      "--output", str(aims)]).returncode == 0
     hi = tmp_path / "hi.csv"
     result = _run_cli(["estimate-hybrid-index", "--input", str(aims), "--metadata", meta,
-                       *ehi_labels, "--method", "ml", "--output", str(hi)])
+                       *labels, "--method", "ml", "--output", str(hi)])
     assert result.returncode == 0, result.stderr
     genomic = tmp_path / "genomic.csv"
     ggi = ["generate-genomic-input", "--input", str(aims), "--metadata", str(hi),
@@ -2066,7 +2065,7 @@ def test_cli_genomic_pipeline_without_parental_frequencies_pins_reversed_loci(tm
     """The failure the parental frequencies fix, kept visible: without them
     generate-genomic-input warns, and reversed loci hit the v lower bound."""
     summary, truth, ggi, _ = _neutral_zone_pipeline(tmp_path, with_parentals=False)
-    assert "no parental frequencies given" in ggi.stderr
+    assert "no parental reference individuals given" in ggi.stderr
     reversed_ = summary["locus"].map(truth["low_pop"]) == "pop2"
     assert (summary.loc[reversed_, "v"] <= 0.0011).mean() > 0.9
 
@@ -2076,8 +2075,7 @@ def test_cli_generate_genomic_input_parental_options(tmp_path):
     prefix = _simulated_zone(tmp_path, "--n-pop1", "6", "--n-pop2", "6", "--n-popH", "10",
                              "--n-snps", "20", "--aim-percent", "100", "--seed", "3")
     vcf, meta = f"{prefix}.vcf", f"{prefix}_metadata.tsv"
-    labels = ["--population-col", "population", "--pop0-label", "pop1", "--pop1-label", "pop2"]
-    ehi_labels = ["--pop1-label", "pop1", "--pop2-label", "pop2"]
+    labels = ["--pop1-label", "pop1", "--pop2-label", "pop2"]
     out = tmp_path / "g.csv"
 
     result = _run_cli(["generate-genomic-input", "--input", vcf, "--metadata", meta, *labels,
@@ -2090,20 +2088,30 @@ def test_cli_generate_genomic_input_parental_options(tmp_path):
     np.testing.assert_allclose(g["snp1.p0"].iloc[0], np.clip(truth.loc["snp1", "freq_pop1"], 1e-3, 1 - 1e-3))
     np.testing.assert_allclose(g["snp1.p1"].iloc[0], np.clip(truth.loc["snp1", "freq_pop2"], 1e-3, 1 - 1e-3))
 
-    freq_csv = tmp_path / "freqs.tsv"
-    pd.DataFrame({"locus": [f"snp{i}" for i in range(1, 21)], "freq_pop0": 0.2,
-                  "freq_pop1": [0.2] + [0.9] * 19}).to_csv(freq_csv, sep="\t", index=False)
     result = _run_cli(["generate-genomic-input", "--input", vcf, "--metadata", meta,
-                       "--parental-freq-file", str(freq_csv), "--output", str(out)])
+                       "--pop1-label", "pop1", "--output", str(out)])
+    assert result.returncode == 2 and "must be given together" in result.stderr
+
+
+def test_cli_generate_genomic_input_drops_loci_with_equal_parental_frequencies(tmp_path):
+    import numpy as np
+    names = ["a0", "a1", "b0", "b1", "h0", "h1"]
+    vcf = tmp_path / "in.vcf"
+    _write_test_vcf(vcf, names, [np.array([0, 1, 0, 1, 1, 1]),   # 0.25 in both panels
+                                 np.array([0, 0, 2, 2, 1, 2])],  # 0 vs 1
+                    ["equal", "aim"])
+    meta = tmp_path / "meta.tsv"
+    pd.DataFrame({"individual": names, "population": ["p1", "p1", "p2", "p2", "h", "h"],
+                  "hybrid_index": [0, 0, 1, 1, 0.5, 0.7]}).to_csv(meta, sep="\t", index=False)
+    out = tmp_path / "g.csv"
+    result = _run_cli(["generate-genomic-input", "--input", str(vcf), "--metadata", str(meta),
+                       "--pop1-label", "p1", "--pop2-label", "p2", "--output", str(out)])
     assert result.returncode == 0, result.stderr
     assert "1 with equal parental frequencies" in result.stdout
     g = pd.read_csv(out)
-    assert "snp1.p0" not in g.columns and g["snp2.p1"].iloc[0] == 0.9
-    assert len(g) == 22  # no labels in Mode 2, so nobody is left out
-
-    result = _run_cli(["generate-genomic-input", "--input", vcf, "--metadata", meta, *labels,
-                       "--parental-freq-file", str(freq_csv), "--output", str(out)])
-    assert result.returncode == 2 and "mutually exclusive" in result.stderr
+    assert "equal.p0" not in g.columns
+    assert g["aim.p0"].iloc[0] == 0.001 and g["aim.p1"].iloc[0] == 0.999
+    assert list(g["individual"]) == ["h0", "h1"]
 
 
 def test_cli_generate_genomic_input_no_genotype_likelihoods_flag_exists(tmp_path):
@@ -2115,6 +2123,8 @@ def test_cli_generate_genomic_input_no_genotype_likelihoods_flag_exists(tmp_path
     result = _run_cli(["generate-genomic-input", "--help"])
     assert result.returncode == 0
     assert "--genotype-likelihoods" not in result.stdout
+    for removed in ("--pop0-label", "--parental-freq-file", "--ploidy"):
+        assert removed not in result.stdout
 
 
 def test_cli_generate_geographic_input_vcf_site_aggregation_matches_hand_computation(tmp_path):
