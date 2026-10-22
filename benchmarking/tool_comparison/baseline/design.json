@@ -1,0 +1,31 @@
+{
+ "design": "baseline",
+ "reps": 3,
+ "seed": 1,
+ "scenarios": [
+  "genotypes",
+  "lowdepth"
+ ],
+ "n_parental": 20,
+ "n_hybrids": 100,
+ "n_loci": 100,
+ "aim_freq_diff": 0.6,
+ "class_percent": 10,
+ "barrier_v": 3.0,
+ "permeable_v": 0.33,
+ "biased_u": 1.5,
+ "mean_depth": 3.0,
+ "hybrid_index": "uniform",
+ "hi_alpha": 2.0,
+ "hi_beta": 2.0,
+ "missing_global": 0.0,
+ "gghybrid_hi_iters": [
+  3000,
+  1000
+ ],
+ "gghybrid_cline_iters": [
+  5000,
+  2000
+ ],
+ "bgchm_iters": 2000
+}
