@@ -138,7 +138,10 @@ set.seed(1)
 if (model == "glik") {{
     gl <- function(set) lapply(0:2, function(k) rd(sprintf("GL%d_%s.tsv", k, set)))
     GL0 <- gl("G0"); GL1 <- gl("G1"); GLx <- gl("Gx")
-    p <- est_p(G0 = GL0, G1 = GL1, model = "glik", ploidy = "diploid", HMC = FALSE)
+    # HMC = TRUE is bgchm's default for genotype likelihoods; its analytical
+    # shortcut (HMC = FALSE) shrinks parental frequencies toward 0.5 at low depth.
+    p <- est_p(G0 = GL0, G1 = GL1, model = "glik", ploidy = "diploid", HMC = TRUE,
+               n_iters = {n_iters}, full = FALSE)
     h <- est_hi(Gx = GLx, p0 = p$p0[, 1], p1 = p$p1[, 1], model = "glik",
                 ploidy = "diploid", n_iters = {n_iters}, full = FALSE)
     cl <- est_genocl(Gx = GLx, p0 = p$p0[, 1], p1 = p$p1[, 1], H = h$hi[, 1],
