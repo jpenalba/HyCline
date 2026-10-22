@@ -84,7 +84,7 @@ def simulate(stem: Path, args, seed: int, reads: bool) -> None:
            "--permeable-percent", str(args.class_percent),
            "--permeable-v", str(args.permeable_v),
            "--biased-percent", str(args.class_percent), "--biased-u", str(args.biased_u),
-           "--hybrid-index", args.hybrid_index, "--hi-alpha", str(args.hi_alpha),
+           "--hybrid-freqs", args.hybrid_freqs, "--hybrid-index", args.hybrid_index, "--hi-alpha", str(args.hi_alpha),
            "--hi-beta", str(args.hi_beta), "--missing-global", str(args.missing_global),
            "--seed", str(seed), "-o", f"{stem}.vcf"]
     if reads:
@@ -207,6 +207,12 @@ def main(argv=None) -> int:
     ap.add_argument("--permeable-v", type=float, default=0.33)
     ap.add_argument("--biased-u", type=float, default=1.5)
     ap.add_argument("--mean-depth", type=float, default=3.0)
+    ap.add_argument("--hybrid-freqs", choices=["panel", "population"], default="panel",
+                    help="simulate_vcf.py --hybrid-freqs: 'panel' draws hybrids from the "
+                         "reference panels' realized frequencies (the tools see the exact "
+                         "frequencies the hybrids came from); 'population' draws panels and "
+                         "hybrids from population frequencies, so a small panel gives noisy "
+                         "estimates, as in real data.")
     ap.add_argument("--hybrid-index", choices=["uniform", "beta"], default="uniform",
                     help="Distribution of the hybrids' hybrid indices (simulate_vcf.py).")
     ap.add_argument("--hi-alpha", type=float, default=2.0, help="Beta alpha (--hybrid-index beta).")

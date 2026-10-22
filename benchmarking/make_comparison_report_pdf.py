@@ -47,7 +47,11 @@ DESIGNS = [  # (folder, scenario, label, what changes)
      "on genotype likelihoods, gghybrid on called genotypes)"),
     ("weak_differentiation", "genotypes", "Weak differentiation",
      "parental frequencies differ by >= 0.3"),
-    ("small_panels", "genotypes", "Small panels", "5 + 5 parental individuals"),
+    ("population_panels", "genotypes", "Sampled panels",
+     "as baseline, but panels and hybrids are drawn from population frequencies, so the "
+     "20 + 20 reference panels only estimate them (reference for Small panels)"),
+    ("small_panels", "genotypes", "Small panels",
+     "as Sampled panels, with 5 + 5 parental individuals"),
     ("missing_data", "genotypes", "Missing data", "20% of genotypes missing at random"),
     ("bimodal_hybrids", "genotypes", "Bimodal hybrids",
      "hybrid indices ~ Beta(0.5, 0.5): mostly near the parentals"),
