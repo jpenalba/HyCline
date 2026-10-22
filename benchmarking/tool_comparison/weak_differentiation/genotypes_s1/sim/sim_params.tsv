@@ -1,0 +1,56 @@
+parameter	value
+command	simulate_vcf.py --n-pop1 20 --n-pop2 20 --n-popH 100 --n-snps 100 --aim-percent 100 --aim-freq-diff 0.3 --barrier-percent 10 --barrier-v 3.0 --permeable-percent 10 --permeable-v 0.33 --biased-percent 10 --biased-u 1.5 --hybrid-index uniform --hi-alpha 2.0 --hi-beta 2.0 --missing-global 0.0 --seed 1 -o /tmp/claude-0/-home-user-HyCline/1603dc5f-80e9-58f0-9f6c-fd521d3c908e/scratchpad/designs/weak_differentiation/genotypes_s1/sim/sim.vcf
+script	benchmarking/simulate_vcf.py
+git_commit	0a219b4a98c38f0350063c47e221f044f4c4a9a1
+date_utc	2026-10-22T20:48:30+00:00
+python_version	3.13.16
+numpy_version	2.5.3
+option.aim_cutoff	
+option.aim_freq_diff	0.3
+option.aim_percent	100.0
+option.barrier_percent	10.0
+option.barrier_v	3.0
+option.beagle_output	
+option.biased_percent	10.0
+option.biased_u	1.5
+option.cline_log_v_sd	0.0
+option.cline_u_sd	0.0
+option.depth_dispersion	0.0
+option.format_beagle	False
+option.hi_alpha	2.0
+option.hi_beta	2.0
+option.hi_value	0.5
+option.hybrid_freqs	panel
+option.hybrid_index	uniform
+option.individual_depth_sd	0.0
+option.mean_depth	10.0
+option.metadata	
+option.missing_global	0.0
+option.missing_individual	
+option.n_chrom	1
+option.n_pop1	20
+option.n_pop2	20
+option.n_popH	100
+option.n_snps	100
+option.output	/tmp/claude-0/-home-user-HyCline/1603dc5f-80e9-58f0-9f6c-fd521d3c908e/scratchpad/designs/weak_differentiation/genotypes_s1/sim/sim.vcf
+option.params	
+option.permeable_percent	10.0
+option.permeable_v	0.33
+option.seed	1
+option.seq_error	0.01
+option.snp_spacing	1000
+option.truth	
+option.vcf_genotypes	true
+output.output_vcf	/tmp/claude-0/-home-user-HyCline/1603dc5f-80e9-58f0-9f6c-fd521d3c908e/scratchpad/designs/weak_differentiation/genotypes_s1/sim/sim.vcf
+output.output_beagle	
+output.output_metadata	/tmp/claude-0/-home-user-HyCline/1603dc5f-80e9-58f0-9f6c-fd521d3c908e/scratchpad/designs/weak_differentiation/genotypes_s1/sim/sim_metadata.tsv
+output.output_truth	/tmp/claude-0/-home-user-HyCline/1603dc5f-80e9-58f0-9f6c-fd521d3c908e/scratchpad/designs/weak_differentiation/genotypes_s1/sim/sim_truth.tsv
+realized.n_samples	140
+realized.n_aims	100
+realized.n_missing_genotypes	0
+realized.missing_fraction	0.000000
+realized.n_cline_neutral	70
+realized.n_cline_barrier	10
+realized.n_cline_permeable	10
+realized.n_cline_biased	10
+realized.n_cline_random	0
