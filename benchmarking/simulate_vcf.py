@@ -508,7 +508,8 @@ def draw_depths(rng, lam: np.ndarray, dispersion: float) -> np.ndarray:
 
 def genotype_likelihoods(rng, geno: np.ndarray, depth: np.ndarray, err: float):
     """Simulate ALT read counts for true dosages `geno` at depths `depth` and
-    return (n_samples, 3) normalized likelihoods for dosage 0/1/2."""
+    return ((n_samples, 3) normalized likelihoods for dosage 0/1/2, ALT read
+    counts)."""
     q = np.array([err, 0.5, 1.0 - err])  # P(read shows ALT | dosage 0/1/2)
     alt_reads = rng.binomial(depth, q[geno])
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -519,7 +520,7 @@ def genotype_likelihoods(rng, geno: np.ndarray, depth: np.ndarray, err: float):
     loglik = np.where(np.isnan(loglik), 0.0, loglik)
     loglik -= loglik.max(axis=1, keepdims=True)
     lik = np.exp(loglik)
-    return lik / lik.sum(axis=1, keepdims=True)
+    return lik / lik.sum(axis=1, keepdims=True), alt_reads
 
 
 BASE_CODE = {"A": "0", "C": "1", "G": "2", "T": "3"}
@@ -643,7 +644,7 @@ def main(argv=None) -> int:
 
     snps_per_chrom = int(np.ceil(args.n_snps / args.n_chrom))
     write_dp = args.vcf_genotypes == "called"
-    fmt = "GT:DP" if write_dp else "GT"
+    fmt = "GT:DP:AD" if write_dp else "GT"
     bases = np.array(list("ACGT"))
 
     def _open(path):
@@ -669,6 +670,8 @@ def main(argv=None) -> int:
         if write_dp:
             vcf.write('##FORMAT=<ID=DP,Number=1,Type=Integer,'
                       'Description="Simulated read depth">\n')
+            vcf.write('##FORMAT=<ID=AD,Number=R,Type=Integer,'
+                      'Description="Simulated REF and ALT read counts">\n')
         vcf.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"
                   + "\t".join(samples) + "\n")
 
@@ -722,7 +725,8 @@ def main(argv=None) -> int:
                                             args.depth_dispersion)
                 depth_sum += depth
                 lik = np.full((n_samples, 3), 1.0 / 3.0)
-                lik[called] = genotype_likelihoods(
+                alt_reads = np.zeros(n_samples, dtype=np.int64)
+                lik[called], alt_reads[called] = genotype_likelihoods(
                     read_rng, geno[called], depth[called], args.seq_error)
                 if beagle:
                     cells = [missing_gl if m else
@@ -733,8 +737,8 @@ def main(argv=None) -> int:
 
             if args.vcf_genotypes == "called":
                 vcf_geno = lik.argmax(axis=1)
-                fields = ["./.:0" if m else f"{GT_STR[int(g)]}:{d}"
-                          for g, m, d in zip(vcf_geno, missing, depth)]
+                fields = ["./.:0:0,0" if m else f"{GT_STR[int(g)]}:{d}:{d - a},{a}"
+                          for g, m, d, a in zip(vcf_geno, missing, depth, alt_reads)]
             else:
                 fields = ["./." if m else GT_STR[int(g)]
                           for g, m in zip(geno, missing)]
