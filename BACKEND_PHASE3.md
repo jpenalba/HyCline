@@ -691,3 +691,58 @@ BGC's for 99.8%. BGC's posterior means sit about 0.02 above both
 maximum-likelihood/mode estimates, as a posterior mean does when the
 posterior is bounded at 0. Reference individuals: house mean h = 0.004
 (max 0.056), Spanish mean 0.999 (min 0.981).
+
+### 9.5 Simulated comparison with gghybrid and bgchm
+
+`benchmarking/compare_tools.py` simulates hybrid zones with known hybrid
+indices and clines (20 + 20 parentals, 100 hybrids, 100 loci with parental
+frequencies differing by >= 0.6; 10 barrier loci with v = 3, 10 permeable
+with v = 0.33, 10 biased with u = +/-1.5, 70 neutral), writes each tool's
+inputs with `benchmarking/make_tool_inputs.py`, runs HyCline
+(`estimate-hybrid-index`, `generate-genomic-input`, `fit-genomic`,
+`fit-hierarchical-genomic`), gghybrid (`esth` 3000/1000, `ggcline`
+5000/2000) and bgchm (`est_p`, `est_hi`, hierarchical `est_genocl`, 2000
+HMC iterations), and scores them against the truth. Two scenarios share each
+seed's truth: true genotypes, and reads at mean depth 3 (HyCline and bgchm
+on genotype likelihoods; gghybrid, which takes genotypes only, on genotypes
+called from the same reads). Three seeds. The original bgc 1.03 is only
+distributed from its authors' site, which this environment could not
+reach; bgchm (Gompert, DeRaad & Buerkle 2024) is its successor from the
+same authors, and `make_tool_inputs.py` also writes bgc 1.03 input files.
+bgchm was built from github.com/zgompert/bgc-hm against Ubuntu's R
+packages (rstan 2.32), compiling two models at a time without debug symbols
+(four at a time ran out of memory).
+
+Hybrid index (test individuals): with true genotypes the three tools are
+indistinguishable (mean absolute error 0.038, r = 0.986, 95% coverage
+0.92). At depth 3, HyCline 0.041 (coverage 0.94), bgchm 0.042 (0.95),
+gghybrid 0.043 (0.87 -- called genotypes are treated as certain).
+
+Genomic clines: HyCline's hierarchical model and bgchm (also hierarchical)
+are the most accurate and agree closely (median |logit c| error 0.128 vs
+0.132 with genotypes, 0.168 vs 0.167 at depth 3; |log v| 0.177 vs 0.190 and
+0.203 vs 0.209), with similar outlier power and false-positive rates (v:
+0.78/0.019 vs 0.82/0.024; centre: 0.97/0.019 vs 0.97/0.029 with genotypes).
+HyCline's per-locus MLE is less accurate (0.182/0.199) and has more v false
+positives (0.052, Wald intervals); gghybrid's per-locus model is the least
+accurate (0.215/0.235), with low v power (0.58) and, at depth 3 on called
+genotypes, the highest centre false-positive rate (0.114). Run times
+(whole pipeline): HyCline 91 s (genotypes) / 136 s (depth 3), bgchm 279 /
+862 s, gghybrid 552 / 534 s; the depth-3 runs shared the machine with a
+test-suite run, so their times are rough. Full tables:
+`benchmarking/tool_comparison_example/README.md`.
+
+A wrong first result, corrected: the first bgchm run script estimated
+genotype-likelihood parental frequencies with `est_p(..., HMC = FALSE)`,
+bgchm's analytical shortcut. On the depth-3 data that shrank the
+frequencies toward 0.5 (mean |p - 0.5| 0.29 against 0.36 in the panels;
+error 0.06, against 0.024 with HMC), which spread bgchm's hybrid indices
+outward (mean absolute error 0.064). The script now uses HMC, bgchm's
+default for genotype likelihoods, and the numbers above are from that run.
+
+Caveats: HyCline's hierarchical per-locus output is a posterior mean and
+SD, so its outlier intervals here are normal approximations (u, log v);
+bgchm and gghybrid intervals are posterior quantiles. Parental panels of 20
+and 100 loci of moderate-to-strong differentiation is one design; weaker
+differentiation, smaller panels, missing data and non-uniform hybrid-index
+distributions are not covered yet.

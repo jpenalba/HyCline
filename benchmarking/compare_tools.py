@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -65,9 +66,12 @@ def invlogit(x):
 
 
 def run(cmd: list, cwd: Path, log: str) -> tuple[bool, float]:
+    env = {**os.environ,
+           "HYCLINE": f"{sys.executable} {HERE.parent / 'run_hycline.py'}"}
     t = time.perf_counter()
     with open(cwd / log, "w") as fh:
-        ok = subprocess.run(cmd, cwd=cwd, stdout=fh, stderr=subprocess.STDOUT).returncode == 0
+        ok = subprocess.run(cmd, cwd=cwd, stdout=fh, stderr=subprocess.STDOUT,
+                            env=env).returncode == 0
     return ok, time.perf_counter() - t
 
 
@@ -257,13 +261,18 @@ def main(argv=None) -> int:
                 flush=True)
 
     hi_df, cl_df = pd.DataFrame(hi_rows), pd.DataFrame(cl_rows)
+    if hi_df.empty and cl_df.empty:
+        print(f"No tool output to score under {out} -- run the tools' scripts first.")
+        return 1
     hi_df.to_csv(out / "hybrid_index_scores.tsv", sep="\t", index=False)
     cl_df.to_csv(out / "cline_scores.tsv", sep="\t", index=False)
     with pd.option_context("display.width", 200, "display.max_columns", None):
         print("\nHybrid index (test individuals; mean over seeds)")
-        print(hi_df.drop(columns="seed").groupby(["scenario", "tool"]).mean().round(3))
+        if not hi_df.empty:
+            print(hi_df.drop(columns="seed").groupby(["scenario", "tool"]).mean().round(3))
         print("\nGenomic clines (mean over seeds)")
-        print(cl_df.drop(columns="seed").groupby(["scenario", "tool"]).mean().round(3))
+        if not cl_df.empty:
+            print(cl_df.drop(columns="seed").groupby(["scenario", "tool"]).mean().round(3))
     print(f"\nWrote {out / 'hybrid_index_scores.tsv'} and {out / 'cline_scores.tsv'}")
     return 0
 

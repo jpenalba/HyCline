@@ -269,6 +269,13 @@ BGC's for 99.8% of birds. House references came out at a mean of 0.004
 and Spanish references at 0.999. `benchmarking/italy_sparrow_hybrid_index.py`
 reproduces the comparison from a gghybrid checkout.
 
+On simulated hybrid zones (100 loci, 100 hybrids; true genotypes and
+depth-3 reads) its hybrid indices were as accurate as gghybrid's and
+bgchm's (mean absolute error 0.038-0.043 for all three), with 95%
+intervals covering the truth for 92-94% of hybrids.
+`benchmarking/tool_comparison_example/` has matched inputs for HyCline,
+gghybrid, bgchm and bgc and the full comparison, clines included.
+
 A simpler average of each individual's allele dosage across loci treats
 every locus as diagnostic, so partially differentiated loci and low
 depth pull it toward 0.5 (pure parentals at 0.16-0.23 and 0.93-0.95 on

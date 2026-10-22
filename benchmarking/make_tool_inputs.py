@@ -94,10 +94,10 @@ def read_vcf_gt_ad(path: Path) -> tuple[list, list, np.ndarray, np.ndarray | Non
 
 RUN_HYCLINE = """#!/usr/bin/env bash
 # HyCline: hybrid index, genomic-cline input, then genomic clines (MLE and
-# hierarchical Bayesian). Run from this folder; HYCLINE defaults to the
-# repository's run_hycline.py.
+# hierarchical Bayesian). Run from this folder. HYCLINE defaults to the
+# installed `hycline` command; e.g. HYCLINE="python /path/to/run_hycline.py".
 set -euo pipefail
-HYCLINE=${{HYCLINE:-"python {run_hycline}"}}
+HYCLINE=${{HYCLINE:-hycline}}
 INPUT={input}
 $HYCLINE estimate-hybrid-index --input $INPUT --metadata metadata.tsv \\
     --pop1-label {pop1} --pop2-label {pop2} --output hybrid_index.tsv
@@ -242,7 +242,7 @@ def write_inputs(vcf: Path, metadata: Path, outdir: Path, pop1: str, pop2: str,
                   "population": [p if p in (pop1, pop2) else "test" for p in pops]}).to_csv(
         outdir / "hycline" / "metadata.tsv", sep="\t", index=False)
     (outdir / "hycline" / "run_hycline.sh").write_text(RUN_HYCLINE.format(
-        run_hycline=REPO / "run_hycline.py", pop1=pop1, pop2=pop2,
+        pop1=pop1, pop2=pop2,
         input="input.beagle" if beagle else "input.vcf"))
 
     # gghybrid: two rows per individual, allele 1 = ALT
