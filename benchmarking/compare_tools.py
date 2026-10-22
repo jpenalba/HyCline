@@ -38,6 +38,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
@@ -170,6 +171,18 @@ def score_clines(est: pd.DataFrame, truth: pd.DataFrame) -> dict:
             "c_power": c_out[biased].mean(), "c_false_pos": c_out[neutral].mean()}
 
 
+def score_run(run_dir, stem, inputs, reads, scen, seed, times, hi_rows, cl_rows) -> None:
+    truth = pd.read_csv(f"{stem}_truth.tsv", sep="\t")
+    meta = pd.read_csv(f"{stem}_metadata.tsv", sep="\t")
+    his, cls = collect(inputs, truth, reads)
+    for tool, est in his.items():
+        hi_rows.append({"scenario": scen, "seed": seed, "tool": tool,
+                        **score_hi(est, meta), "seconds": times.get(tool)})
+    for tool, est in cls.items():
+        cl_rows.append({"scenario": scen, "seed": seed, "tool": tool,
+                        **score_clines(est, truth), "seconds": times.get(tool.split()[0])})
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--reps", type=int, default=2)
@@ -194,6 +207,9 @@ def main(argv=None) -> int:
                     metavar=("NITT", "BURNIN"))
     ap.add_argument("--bgchm-iters", type=int, default=2000)
     ap.add_argument("--outdir", default="tool_comparison")
+    ap.add_argument("--score-only", action="store_true",
+                    help="Re-score the runs already in --outdir without simulating or "
+                         "running any tool (e.g. after an interrupted benchmark).")
     args = ap.parse_args(argv)
 
     out = Path(args.outdir).resolve()
@@ -203,21 +219,26 @@ def main(argv=None) -> int:
         seed = args.seed + rep
         for scen in args.scenarios:
             run_dir = out / f"{scen}_s{seed}"
+            reads = scen == "lowdepth"
+            stem = run_dir / "sim" / "sim"
+            inputs = run_dir / "inputs"
+            if args.score_only:
+                if not run_dir.exists():
+                    continue
+                times_file = run_dir / "times.json"
+                times = json.loads(times_file.read_text()) if times_file.exists() else {}
+                score_run(run_dir, stem, inputs, reads, scen, seed, times, hi_rows, cl_rows)
+                continue
             if run_dir.exists():
                 shutil.rmtree(run_dir)
             (run_dir / "sim").mkdir(parents=True)
-            stem = run_dir / "sim" / "sim"
-            reads = scen == "lowdepth"
             simulate(stem, args, seed, reads)
-            inputs = run_dir / "inputs"
             write_inputs(Path(f"{stem}.vcf"), Path(f"{stem}_metadata.tsv"), inputs,
                          "pop1", "pop2", Path(f"{stem}.beagle") if reads else None,
                          hi_nitt=args.gghybrid_hi_iters[0], hi_burnin=args.gghybrid_hi_iters[1],
                          gc_nitt=args.gghybrid_cline_iters[0],
                          gc_burnin=args.gghybrid_cline_iters[1],
                          bgchm_iters=args.bgchm_iters)
-            truth = pd.read_csv(f"{stem}_truth.tsv", sep="\t")
-            meta = pd.read_csv(f"{stem}_metadata.tsv", sep="\t")
             times = {}
             if "hycline" in args.tools:
                 ok, t = run(["bash", "run_hycline.sh"], inputs / "hycline", "log.txt")
@@ -229,14 +250,8 @@ def main(argv=None) -> int:
                 ok, t = run(["Rscript", "run_bgchm.R", "glik" if reads else "genotype"],
                             inputs / "bgchm", "log.txt")
                 times["bgchm"] = t if ok else np.nan
-            his, cls = collect(inputs, truth, reads)
-            for tool, est in his.items():
-                hi_rows.append({"scenario": scen, "seed": seed, "tool": tool,
-                                **score_hi(est, meta), "seconds": times.get(tool)})
-            for tool, est in cls.items():
-                cl_rows.append({"scenario": scen, "seed": seed, "tool": tool,
-                                **score_clines(est, truth),
-                                "seconds": times.get(tool.split()[0])})
+            (run_dir / "times.json").write_text(json.dumps(times))
+            score_run(run_dir, stem, inputs, reads, scen, seed, times, hi_rows, cl_rows)
             print(f"{scen} seed {seed}: " + ", ".join(
                 f"{k} {v:.0f} s" if v == v else f"{k} FAILED" for k, v in times.items()),
                 flush=True)
