@@ -126,7 +126,7 @@ Parsing 'hi_aims.vcf' ...
   --pop1-label 'parent0' (hybrid index 0): 15 reference individuals
   --pop2-label 'parent1' (hybrid index 1): 15 reference individuals
 
-Hybrid index estimated for 90 individuals (--method ml).
+Hybrid index estimated for 90 individuals.
   Range: [0.000, 1.000]  (parental reference individuals should land near 0 or 1 -- a useful sanity check on the result)
 
 Wrote /path/to/hybrid_index.tsv
@@ -152,7 +152,7 @@ them out of the cline-fitting input by default.
 
 ### How the estimate is made
 
-The default, `--method ml`, is a maximum-likelihood hybrid index. In an
+`estimate-hybrid-index` computes a maximum-likelihood hybrid index. In an
 individual with hybrid index h, each locus's allele frequency is
 `(1 - h) * p0 + h * p1`, where p0 and p1 are the two parental
 populations' frequencies; genotypes follow Hardy-Weinberg proportions
@@ -248,19 +248,19 @@ Measured against the simulator's true hybrid indices (15 + 15 reference
 individuals, 40 hybrids, 2000 SNPs, 10% missing data), mean absolute
 error of the hybrids' estimates:
 
-| Input | `--method ml` | `--method mean` (weighted) |
-|---|---|---|
-| beagle, depth 1, 100% AIMs | 0.007 | 0.075 |
-| beagle, depth 2, 30% AIMs | 0.016 | 0.093 |
-| beagle, depth 5, 30% AIMs | 0.011 | 0.064 |
-| true genotypes, 30% AIMs | 0.012 | 0.044 |
+| Input | Mean absolute error |
+|---|---|
+| beagle, depth 1, 100% AIMs | 0.007 |
+| beagle, depth 2, 30% AIMs | 0.016 |
+| beagle, depth 5, 30% AIMs | 0.011 |
+| true genotypes, 30% AIMs | 0.012 |
 
 and the 95% intervals contained the true value for 90-97% of hybrids.
 
 On empirical data -- the Italian sparrow hybrid zone (Hermansen et al.
 2014; 77 loci; 84 house and 52 Spanish sparrow references; 433 Italian
-sparrows), set up as in Bailey (2023, section 2.3.1) --
-`--method ml` agreed with gghybrid's `esth` posterior modes at Pearson
+sparrows), set up as in Bailey (2023, section 2.3.1) -- the estimates
+agreed with gghybrid's `esth` posterior modes at Pearson
 r = 0.9998 (mean absolute difference 0.005; 99% of birds within 0.025)
 and with the published BGC posterior means at r = 0.992, the same
 agreement gghybrid itself has with BGC (r = 0.991). Its 95% intervals
@@ -269,18 +269,14 @@ BGC's for 99.8% of birds. House references came out at a mean of 0.004
 and Spanish references at 0.999. `benchmarking/italy_sparrow_hybrid_index.py`
 reproduces the comparison from a gghybrid checkout.
 
-`--method mean` is the simpler estimator: the mean, across loci, of each
-individual's parental-population-1 allele dosage (each locus oriented by
-the parental frequencies first), optionally weighted by
-`--weight-by-differentiation`. It treats every locus as diagnostic, so
-partially differentiated loci and, for beagle input, low depth pull its
-estimates toward 0.5. That compression carries into Step 4: on the
-simulated example below (where every locus is neutral, true v = 1), a
-`mean` hybrid index made the fitted clines come out at a median v of
-about 2, against about 1.05 with `ml`. Use `ml` for cline fitting.
-`--weight-by-differentiation` applies to `--method mean` only.
+A simpler average of each individual's allele dosage across loci treats
+every locus as diagnostic, so partially differentiated loci and low
+depth pull it toward 0.5 (pure parentals at 0.16-0.23 and 0.93-0.95 on
+the sparrow data), and the compression carries into the clines: on the
+neutral simulated example in Step 4 it gave a median v of about 2 rather
+than 1. That is why only the maximum-likelihood estimate is offered.
 
-Neither method carries the uncertainty in h into the genomic-cline fit
+The estimate does not carry the uncertainty in h into the genomic-cline fit
 (Step 4 treats h as known, unlike the Bayesian hybrid-index models in
 gghybrid and bgchm); the interval columns are there so you can see how
 precise each individual's estimate is.

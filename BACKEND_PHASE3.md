@@ -597,6 +597,17 @@ labels are `--pop1-label` (written as `<locus>.p0`, hybrid index 0) and
 `--pop2-label` (`<locus>.p1`, hybrid index 1), given together;
 `--population-col` defaults to `population`. Without the labels it still
 writes fixed-marker input, with its warning.
+`estimate-hybrid-index` then lost `--method mean` and
+`--weight-by-differentiation`, leaving the maximum-likelihood estimate as
+the only method (`hycline.data.hybrid_index.estimate_hybrid_index`, the
+mean-dosage estimator, was removed). Besides its simulation errors
+(0.044-0.093 against 0.007-0.016), on the Italian sparrow data (section
+9.4) it put the house references at a mean of 0.225 and the Spanish at
+0.925 (0.162/0.952 weighted), against 0.004/0.999 for the
+maximum-likelihood estimate, and agreed less with gghybrid (mean absolute
+difference 0.136, weighted 0.098, against 0.005); it gives the
+maximum-likelihood answer exactly only for fixed markers without missing
+data.
 
 ### 9.2 Real-data validation, not just "the command runs"
 

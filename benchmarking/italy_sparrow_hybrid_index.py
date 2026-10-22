@@ -155,7 +155,7 @@ def main(argv=None) -> int:
 
     table = pd.DataFrame(rows)
     with pd.option_context("display.width", 160, "display.max_columns", None):
-        print(f"\nItalian sparrows (n = {len(both)}): HyCline --method ml against references")
+        print(f"\nItalian sparrows (n = {len(both)}): HyCline against references")
         print(table.round(4).to_string(index=False))
     print(f"\nHyCline estimate inside BGC's 95% CI: {inside:.3f}")
     print(f"HyCline 95% interval overlaps BGC's 95% CI: {overlap:.3f}")

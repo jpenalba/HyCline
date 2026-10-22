@@ -115,7 +115,7 @@ p("The pipeline, and the parts that sit beside it:")
 table([
     ["Step / function", "Commands", "Main output"],
     ["1. AIM filtering", "filter-aims", "Filtered VCF/beagle + summary (AIM count, missing data, warnings)"],
-    ["2. Hybrid index", "estimate-hybrid-index (--method ml / mean)", "Per-individual h with 95% interval"],
+    ["2. Hybrid index", "estimate-hybrid-index", "Per-individual h with 95% interval"],
     ["3. Input conversion", "generate-geographic-input, generate-genomic-input",
      "Site-level counts or per-individual genotypes/likelihoods (+ parental frequencies for genomic)"],
     ["4. Geographic clines", "fit-geographic (MLE and Bayesian), compare-tails",
@@ -157,9 +157,9 @@ step("Step 1. AIM filtering (filter-aims)",
        "100k-1M SNPs.", "Correct skips and counts; runtime and memory recorded."]])
 
 step("Step 2. Hybrid index (estimate-hybrid-index)",
-     "Default --method ml maximizes, per individual, the likelihood of its genotypes given "
+     "Maximizes, per individual, the likelihood of its genotypes given "
      "p(h) = (1 - h) p0 + h p1 and Hardy-Weinberg proportions (the gghybrid likelihood without its prior), "
-     "with a 95% likelihood-profile interval. --method mean averages oriented dosages.",
+     "with a 95% likelihood-profile interval.",
      [["A. Exact", "Brute-force likelihood grid on small inputs; the worked three-locus example in the "
        "Genomic guide (h = 0.576, interval [0.089, 0.964]).", "Estimate and interval ends within 1e-4 of "
        "the grid (already in tests/test_hybrid_index.py)."],
@@ -168,8 +168,8 @@ step("Step 2. Hybrid index (estimate-hybrid-index)",
       ["C. Simulation", "simulate_vcf.py across depth (1-30x), AIM fraction (5-100%), AIM strength, "
        "missing data, panel size, and hybrid-index distributions (uniform, beta, fixed). Use the true h "
        "in the metadata file (_metadata.tsv).", "Mean absolute error and bias by setting; 95% interval coverage 93-97% "
-       "over enough replicates; no compression toward 0.5. Current: error 0.005-0.016 (ml) vs 0.010-0.106 "
-       "(mean); coverage 0.90-0.97 on 40 hybrids per setting."],
+       "over enough replicates; no compression toward 0.5. Current: error 0.005-0.016; coverage "
+       "0.90-0.97 on 40 hybrids per setting."],
       ["C. Simulation (structure)", "Pedigree-based hybrids: F1, F2 and backcrosses built from parental "
        "genotypes (not independent draws per locus).", "F1s at h ~ 0.5, backcrosses at ~0.25/0.75; checks "
        "the independence assumption the simulator currently shares with the model."],

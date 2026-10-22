@@ -5,9 +5,8 @@ input formats.
 
 A genome-wide SNP dataset is mostly uninformative for cline analysis:
 most loci don't differ much between the two parental populations, and
-including them dilutes real signal without adding power (this is exactly
-the same reason `hycline.data.hybrid_index.estimate_hybrid_index`
-supports `weight_by_differentiation` -- see BACKEND_PHASE3.md section 5).
+including them dilutes real signal without adding power (see the Genomic
+user guide's "Which loci to use" for the effect on hybrid index).
 Pre-filtering to loci that are strongly differentiated (by default, one
 population's frequency in `[0.9, 1.0]` and the other's in `[0.0, 0.1]`,
 direction-agnostic) is standard practice in this field before any

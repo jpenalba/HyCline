@@ -860,8 +860,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "estimate-hybrid-index",
         help="Estimate genome-wide hybrid index from a VCF or ANGSD beagle file.",
         description="Estimate each individual's genome-wide hybrid index (the x-axis "
-                     "variable genomic cline fitting needs). The default --method ml is "
-                     "the maximum-likelihood hybrid index: each locus's allele frequency "
+                     "variable genomic cline fitting needs) as the maximum-likelihood "
+                     "hybrid index: each locus's allele frequency "
                      "in an individual with hybrid index h is (1 - h) * p1 + h * p2 from "
                      "the two parental frequencies, genotypes follow Hardy-Weinberg "
                      "proportions given that frequency, and h maximizes the likelihood "
@@ -870,10 +870,7 @@ def _build_parser() -> argparse.ArgumentParser:
                      "out). It needs no allele polarization, models partially "
                      "differentiated loci instead of treating every locus as "
                      "diagnostic, and reports a 95% likelihood-profile interval per "
-                     "individual. --method mean is the simpler mean-dosage estimator "
-                     "(loci oriented by the parental frequencies), which is pulled "
-                     "toward 0.5 by partially differentiated loci and, for beagle input, "
-                     "by low depth. Neither propagates uncertainty in h into later "
+                     "individual. The uncertainty in h is not propagated into later "
                      "cline fits (see BACKEND_PHASE3.md section 5). Format is "
                      "auto-detected from the --input file extension unless --format is "
                      "given. Parental allele frequencies are estimated from the reference "
@@ -883,7 +880,7 @@ def _build_parser() -> argparse.ArgumentParser:
                      "is the proportion of ancestry from --pop2-label: 0 = pure "
                      "--pop1-label, 1 = pure --pop2-label. Genotypes are diploid. "
                      "Output is a tab-delimited table with individual and hybrid_index columns (plus "
-                     "the interval and number of loci used, for --method ml) that "
+                     "the interval and number of loci used) that "
                      "merges directly into the metadata any genomic-cline command needs.",
     )
     ehi_g = ehi_p.add_argument_group("input data")
@@ -922,20 +919,6 @@ def _build_parser() -> argparse.ArgumentParser:
     ehi_g.add_argument("--max-variants", type=int, default=None,
                         help="[VCF input only] Optional cap on the number of biallelic "
                              "SNPs to parse. Ignored for beagle input.")
-    ehi_p.add_argument("--method", choices=["ml", "mean"], default="ml",
-                        help="ml (default): maximum-likelihood hybrid index with a 95%% "
-                             "likelihood-profile interval. mean: mean oriented dosage "
-                             "across loci, which is pulled toward 0.5 by partially "
-                             "differentiated loci and low depth.")
-    ehi_g.add_argument("--weight-by-differentiation", action="store_true",
-                        help="[--method mean only] Weight each locus's contribution by how differentiated "
-                             "it is between the two parental populations (a locus with "
-                             "similar frequencies in both parental populations carries "
-                             "little ancestry information and is down-weighted, rather "
-                             "than treated as equally informative as a fixed-difference "
-                             "locus). Default: every locus weighted equally -- "
-                             "appropriate if you've already pre-filtered to strongly "
-                             "differentiated (ancestry-informative) markers.")
     ehi_p.add_argument("--output", required=True, metavar="FILE.tsv",
                         help="Path to write the hybrid-index table to (tab-delimited, "
                              "ready to use as generate-genomic-input's --metadata).")
@@ -3022,14 +3005,9 @@ def _fit_genomic_gl(args, out_dir, prefix) -> int:
 
 def cmd_estimate_hybrid_index(args) -> int:
     import pandas as pd
-    from hycline.data.hybrid_index import estimate_hybrid_index
     from hycline.data.filter_aims import match_samples_to_populations
+    from hycline.data.hybrid_index import estimate_hybrid_index_ml
 
-    if args.method == "ml" and args.weight_by_differentiation:
-        print("\nERROR: --weight-by-differentiation applies to --method mean only; "
-              "--method ml already weighs each locus by how informative it is.\n",
-              file=sys.stderr)
-        return 2
     for path, what in ((args.input, "input file"), (args.metadata, "metadata file")):
         if not Path(path).exists():
             print(f"\nERROR: {what} not found: '{path}'\n", file=sys.stderr)
@@ -3053,7 +3031,7 @@ def cmd_estimate_hybrid_index(args) -> int:
         sample_names = list(data.sample_names)
         genotypes = data.dosage.T  # (n_samples, n_loci)
     else:
-        from hycline.data.beagle import read_beagle, _beagle_expected_dosage
+        from hycline.data.beagle import read_beagle
         from hycline.data.filter_aims import beagle_missing_mask
         try:
             data = read_beagle(args.input)
@@ -3063,12 +3041,9 @@ def cmd_estimate_hybrid_index(args) -> int:
         print(f"  {len(data)} markers parsed, {len(data.sample_names)} samples.")
         loci = list(data.marker_names)
         sample_names = list(data.sample_names)
-        dosage = _beagle_expected_dosage(data.gl0, data.gl1, data.gl2)
-        # ANGSD's equal-likelihood "no data" rows would otherwise count as a
-        # heterozygote (expected dosage 1) and pull hybrid indices toward 0.5.
+        # Missing genotypes, including ANGSD's equal-likelihood "no data" rows,
+        # are left out of the parental frequencies and the hybrid index.
         missing = beagle_missing_mask(data.gl0, data.gl1, data.gl2)
-        dosage[missing] = np.nan
-        genotypes = dosage.T  # (n_samples, n_loci)
     print(f"  {len(loci)} loci detected: {_format_loci_list(loci)}")
 
     metadata_df = _read_user_table(args.metadata, "metadata file")
@@ -3095,42 +3070,29 @@ def cmd_estimate_hybrid_index(args) -> int:
         freq_pop1 = em_allele_freq(data.gl0, data.gl1, data.gl2, ~missing & pop1_mask[None, :])
         freq_pop2 = em_allele_freq(data.gl0, data.gl1, data.gl2, ~missing & pop2_mask[None, :])
 
-    if args.method == "ml":
-        from hycline.data.hybrid_index import estimate_hybrid_index_ml
-        if fmt == "vcf":
-            # Hard calls as one-hot likelihoods; NaN (./.) is left out.
-            gl = [(genotypes == k).astype(float) for k in range(3)]
-            include = ~np.isnan(genotypes)
-        else:
-            gl = [g.T for g in (data.gl0, data.gl1, data.gl2)]
-            include = ~missing.T
-        try:
-            ml = estimate_hybrid_index_ml(*gl, freq_pop1, freq_pop2, include=include)
-        except ValueError as e:
-            print(f"\nERROR: {e}\n", file=sys.stderr)
-            return 2
-        h = ml["hybrid_index"]
-        out_df = pd.DataFrame({"individual": sample_names, "hybrid_index": h,
-                               "hybrid_index_lower": ml["lower"],
-                               "hybrid_index_upper": ml["upper"],
-                               "n_loci": ml["n_loci_used"]})
+    if fmt == "vcf":
+        # Hard calls as one-hot likelihoods; NaN (./.) is left out.
+        gl = [(genotypes == k).astype(float) for k in range(3)]
+        include = ~np.isnan(genotypes)
     else:
-        try:
-            h = estimate_hybrid_index(
-                genotypes, ploidy=2,
-                parental_freq_pop0=freq_pop1, parental_freq_pop1=freq_pop2,
-                weight_by_differentiation=args.weight_by_differentiation,
-            )
-        except ValueError as e:
-            print(f"\nERROR: {e}\n", file=sys.stderr)
-            return 2
-        out_df = pd.DataFrame({"individual": sample_names, "hybrid_index": h})
+        gl = [g.T for g in (data.gl0, data.gl1, data.gl2)]
+        include = ~missing.T
+    try:
+        ml = estimate_hybrid_index_ml(*gl, freq_pop1, freq_pop2, include=include)
+    except ValueError as e:
+        print(f"\nERROR: {e}\n", file=sys.stderr)
+        return 2
+    h = ml["hybrid_index"]
+    out_df = pd.DataFrame({"individual": sample_names, "hybrid_index": h,
+                           "hybrid_index_lower": ml["lower"],
+                           "hybrid_index_upper": ml["upper"],
+                           "n_loci": ml["n_loci_used"]})
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_csv(out_path, sep="\t", index=False)
 
-    print(f"\nHybrid index estimated for {len(out_df)} individuals (--method {args.method}).")
+    print(f"\nHybrid index estimated for {len(out_df)} individuals.")
     print(f"  Range: [{h.min():.3f}, {h.max():.3f}]  (parental reference individuals should "
           f"land near 0 or 1 -- a useful sanity check on the result)")
     print(f"\nWrote {out_path.resolve()}")
