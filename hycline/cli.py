@@ -1499,6 +1499,32 @@ def _try_stack_dense(data_dict, covariate_attr, count_attrs):
     return True, locus_names, reference, stacked
 
 
+def _stack_genomic_by_individual(data_dict):
+    """Stack per-locus genomic hard-count data that are missing at different
+    individuals, aligning loci by individual name. A missing genotype gets
+    n_alleles = n_focal = 0: a binomial with no trials contributes nothing
+    to the likelihood, so this is exactly leaving it out. Returns
+    (locus_names, hybrid_index, n_alleles, n_focal, n_missing)."""
+    locus_names = list(data_dict.keys())
+    order, h_of = [], {}
+    for d in data_dict.values():
+        for name, h in zip(d.individual_names, d.hybrid_index):
+            if name not in h_of:
+                order.append(name)
+                h_of[name] = h
+    col = {name: i for i, name in enumerate(order)}
+    n_alleles = np.zeros((len(locus_names), len(order)))
+    n_focal = np.zeros((len(locus_names), len(order)))
+    for i, name in enumerate(locus_names):
+        d = data_dict[name]
+        idx = [col[n] for n in d.individual_names]
+        n_alleles[i, idx] = d.n_alleles
+        n_focal[i, idx] = d.n_focal
+    hybrid_index = np.array([h_of[n] for n in order], dtype=float)
+    n_missing = int((n_alleles == 0).sum())
+    return locus_names, hybrid_index, n_alleles, n_focal, n_missing
+
+
 def _stack_for_hierarchical(data_dict, covariate_attr, count_attrs, kind_label):
     """Convert a dict of per-locus data containers (as returned by
     `read_multi_locus_wide_csv`/`read_genomic_cline_multi_locus_wide_csv`)
@@ -2596,12 +2622,22 @@ def _fit_hierarchical_genomic_hard_count(args, out_dir, prefix) -> int:
     all_data = _load_genomic_multi_locus_data(args)
     print(f"  {len(all_data)} loci detected: {_format_loci_list(all_data.keys())}")
 
-    locus_names, hybrid_index, stacked = _stack_for_hierarchical(
-        all_data, covariate_attr="hybrid_index", count_attrs=["n_alleles", "n_focal"],
-        kind_label="genomic")
-    n_alleles, n_focal = stacked["n_alleles"], stacked["n_focal"]
-    print(f"  All {len(locus_names)} loci share {len(hybrid_index)} individuals -- ready "
-          f"for hierarchical fitting.")
+    is_dense, locus_names, hybrid_index, stacked = _try_stack_dense(
+        all_data, covariate_attr="hybrid_index", count_attrs=["n_alleles", "n_focal"])
+    if is_dense:
+        n_alleles, n_focal = stacked["n_alleles"], stacked["n_focal"]
+        print(f"  All {len(locus_names)} loci share {len(hybrid_index)} individuals -- "
+              f"ready for hierarchical fitting.")
+    elif all(d.individual_names is not None for d in all_data.values()):
+        locus_names, hybrid_index, n_alleles, n_focal, n_missing = \
+            _stack_genomic_by_individual(all_data)
+        print(f"  {len(locus_names)} loci, {len(hybrid_index)} individuals; {n_missing} "
+              f"missing genotype(s) enter with 0 sampled alleles, which leaves them out "
+              f"of the likelihood.")
+    else:
+        # Missing data without individual names: no way to line loci up.
+        _stack_for_hierarchical(all_data, covariate_attr="hybrid_index",
+                                count_attrs=["n_alleles", "n_focal"], kind_label="genomic")
 
     print(f"\nFitting hierarchically ({args.num_chains} chains, {args.num_warmup} warmup, "
           f"{args.num_samples} samples) -- this can take a while for many loci ...")

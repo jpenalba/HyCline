@@ -3102,3 +3102,58 @@ def test_cli_fit_hzar_tail_with_fixed_scaling_gives_actionable_error(tmp_path):
     assert "--hzar-tail is not supported together with --scaling fixed" in result.stdout
     assert "no loci fit successfully" in result.stderr
     assert "Traceback" not in result.stdout and "Traceback" not in result.stderr  # handled, not a crash
+
+
+def test_cli_fit_hierarchical_genomic_handles_missing_genotypes(tmp_path):
+    """Regression test from the tool-comparison benchmark
+    (benchmarking/compare_tools.py --missing-global 0.2): with genotypes
+    missing at different individuals per locus, fit-hierarchical-genomic
+    refused the data ("requires every locus to have data at exactly the
+    same individuals"), although gghybrid and bgchm fit it. Loci are now
+    aligned by individual and a missing genotype enters with 0 sampled
+    alleles."""
+    import numpy as np
+
+    prefix = _simulated_zone(tmp_path, "--n-pop1", "8", "--n-pop2", "8", "--n-popH", "30",
+                             "--n-snps", "12", "--aim-percent", "100",
+                             "--aim-freq-diff", "0.6", "--missing-global", "0.2",
+                             "--seed", "1")
+    vcf, meta = f"{prefix}.vcf", f"{prefix}_metadata.tsv"
+    hi, genomic = tmp_path / "hi.tsv", tmp_path / "g.csv"
+    assert _run_cli(["estimate-hybrid-index", "--input", vcf, "--metadata", meta,
+                     "--pop1-label", "pop1", "--pop2-label", "pop2",
+                     "--output", str(hi)]).returncode == 0
+    assert _run_cli(["generate-genomic-input", "--input", vcf, "--metadata", str(hi),
+                     "--parental-metadata", meta, "--pop1-label", "pop1",
+                     "--pop2-label", "pop2", "--output", str(genomic)]).returncode == 0
+    g = pd.read_csv(genomic)
+    n_cols = [c for c in g.columns if c.endswith(".n")]
+    n_missing = int((g[n_cols] == 0).sum().sum())  # missing: n = 0, freq empty
+    assert n_missing > 0
+    result = _run_cli(["fit-hierarchical-genomic", "--input", str(genomic),
+                       "--individual-col", "individual", "--num-warmup", "150",
+                       "--num-samples", "150", "--num-chains", "1", "--no-plot",
+                       "--output-dir", str(tmp_path / "fit")])
+    assert result.returncode == 0, result.stderr
+    assert f"{n_missing} missing genotype(s) enter with 0 sampled alleles" in result.stdout
+    loci = pd.read_csv(tmp_path / "fit" / "hycline_hierarchical_locus_summary.csv")
+    assert len(loci) == 12 and np.isfinite(loci[["u_mean", "v_mean"]]).all().all()
+
+
+def test_stack_genomic_by_individual_aligns_loci_and_zeroes_missing():
+    import numpy as np
+    from hycline.cli import _stack_genomic_by_individual
+    from hycline.data.schema import HybridIndexLocusData
+
+    data = {
+        "A": HybridIndexLocusData(hybrid_index=np.array([0.1, 0.5, 0.9]),
+                                  n_alleles=np.array([2, 2, 2]), n_focal=np.array([0, 1, 2]),
+                                  individual_names=["x", "y", "z"]),
+        "B": HybridIndexLocusData(hybrid_index=np.array([0.1, 0.9]),
+                                  n_alleles=np.array([2, 2]), n_focal=np.array([1, 2]),
+                                  individual_names=["x", "z"]),
+    }
+    names, h, n, k, n_missing = _stack_genomic_by_individual(data)
+    assert names == ["A", "B"] and list(h) == [0.1, 0.5, 0.9] and n_missing == 1
+    np.testing.assert_array_equal(n, [[2, 2, 2], [2, 0, 2]])
+    np.testing.assert_array_equal(k, [[0, 1, 2], [1, 0, 2]])

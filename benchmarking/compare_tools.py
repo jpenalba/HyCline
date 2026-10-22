@@ -84,6 +84,8 @@ def simulate(stem: Path, args, seed: int, reads: bool) -> None:
            "--permeable-percent", str(args.class_percent),
            "--permeable-v", str(args.permeable_v),
            "--biased-percent", str(args.class_percent), "--biased-u", str(args.biased_u),
+           "--hybrid-index", args.hybrid_index, "--hi-alpha", str(args.hi_alpha),
+           "--hi-beta", str(args.hi_beta), "--missing-global", str(args.missing_global),
            "--seed", str(seed), "-o", f"{stem}.vcf"]
     if reads:
         cmd += ["--format-beagle", "--vcf-genotypes", "called",
@@ -205,6 +207,14 @@ def main(argv=None) -> int:
     ap.add_argument("--permeable-v", type=float, default=0.33)
     ap.add_argument("--biased-u", type=float, default=1.5)
     ap.add_argument("--mean-depth", type=float, default=3.0)
+    ap.add_argument("--hybrid-index", choices=["uniform", "beta"], default="uniform",
+                    help="Distribution of the hybrids' hybrid indices (simulate_vcf.py).")
+    ap.add_argument("--hi-alpha", type=float, default=2.0, help="Beta alpha (--hybrid-index beta).")
+    ap.add_argument("--hi-beta", type=float, default=2.0, help="Beta beta (--hybrid-index beta).")
+    ap.add_argument("--missing-global", type=float, default=0.0,
+                    help="Fraction of genotypes set missing at random (simulate_vcf.py).")
+    ap.add_argument("--design", default=None,
+                    help="Name recorded in the score tables (default: the --outdir name).")
     ap.add_argument("--gghybrid-hi-iters", type=int, nargs=2, default=[3000, 1000],
                     metavar=("NITT", "BURNIN"))
     ap.add_argument("--gghybrid-cline-iters", type=int, nargs=2, default=[5000, 2000],
@@ -218,6 +228,11 @@ def main(argv=None) -> int:
 
     out = Path(args.outdir).resolve()
     out.mkdir(parents=True, exist_ok=True)
+    design = args.design or out.name
+    if not args.score_only:
+        settings = {k: v for k, v in vars(args).items()
+                    if k not in ("outdir", "score_only", "tools", "design")}
+        (out / "design.json").write_text(json.dumps({"design": design, **settings}, indent=1))
     hi_rows, cl_rows = [], []
     for rep in range(args.reps):
         seed = args.seed + rep
@@ -261,6 +276,9 @@ def main(argv=None) -> int:
                 flush=True)
 
     hi_df, cl_df = pd.DataFrame(hi_rows), pd.DataFrame(cl_rows)
+    for df in (hi_df, cl_df):
+        if not df.empty:
+            df.insert(0, "design", design)
     if hi_df.empty and cl_df.empty:
         print(f"No tool output to score under {out} -- run the tools' scripts first.")
         return 1
@@ -269,10 +287,10 @@ def main(argv=None) -> int:
     with pd.option_context("display.width", 200, "display.max_columns", None):
         print("\nHybrid index (test individuals; mean over seeds)")
         if not hi_df.empty:
-            print(hi_df.drop(columns="seed").groupby(["scenario", "tool"]).mean().round(3))
+            print(hi_df.drop(columns=["seed", "design"]).groupby(["scenario", "tool"]).mean().round(3))
         print("\nGenomic clines (mean over seeds)")
         if not cl_df.empty:
-            print(cl_df.drop(columns="seed").groupby(["scenario", "tool"]).mean().round(3))
+            print(cl_df.drop(columns=["seed", "design"]).groupby(["scenario", "tool"]).mean().round(3))
     print(f"\nWrote {out / 'hybrid_index_scores.tsv'} and {out / 'cline_scores.tsv'}")
     return 0
 
