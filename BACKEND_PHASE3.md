@@ -378,6 +378,7 @@ drawn and recorded when none is given).
 
 ---
 
+
 ## 6. CLI: `fit-genomic` and `fit-genomic-multi`
 
 Following the same `fit-geographic`/`fit-geographic-multi` split established for geographic
@@ -637,3 +638,45 @@ it) works end to end, not just each piece separately.
   matching or case-insensitivity, so a naming mismatch (e.g. `Locus1` vs
   `locus1`) produces the same "no row for locus" error as a genuinely
   missing locus, rather than a more specific "did you mean" suggestion.
+
+### 9.4 Empirical benchmark: Italian sparrows (Hermansen et al. 2014)
+
+`benchmarking/italy_sparrow_hybrid_index.py` converts gghybrid's
+`RB_Italy_ggcline_precol_headers_diploidND2.csv` (two rows per individual,
+allele codes 0/1, NA missing; 569 individuals, 77 loci with mitochondrial
+ND2 coded as a diploid homozygote) to a VCF (ALT = allele 1; a genotype is
+missing if either allele is) and a metadata file, and runs
+`estimate-hybrid-index --method ml` with house sparrows (Kralove, Oslo;
+84 unique individuals) as `--pop1-label` and Spanish sparrows
+(LesinaSPANISH, Lauro_Lesina, MasseriaFontanarosa, MasseriaMustazzo; 52) as
+`--pop2-label` -- the reference sets of Bailey (2023) section 2.3.1
+(`RBailey_231_232a_bgc_introgress_comparison.R`), which match BGC's
+orientation. It compares the 433 Italian sparrows with BGC's published
+posterior means and 95% credible intervals (`hi.out_italy.txt`, matched
+through `id_italy.csv`) and, optionally, with gghybrid's `esth` output.
+
+gghybrid was run in this container from R 4 (Ubuntu packages for
+data.table, corpcor, RColorBrewer and truncnorm; CRAN was not reachable,
+so `tester`, used only for `tester::is_multiple` in the progress printout,
+was replaced by a one-function local package) with the script's settings:
+`data.prep(S0 = c("Kralove","Oslo"), S1 = <the four Spanish sites>)`,
+`esth(include.Source = TRUE, nitt = 3000, burnin = 1000)`, seed 98765.
+That run reproduced the published gghybrid-BGC agreement (r = 0.9913
+against the paper's 0.991).
+
+| HyCline `--method ml` vs | r | mean abs. diff. | mean diff. | max abs. diff. |
+|---|---|---|---|---|
+| gghybrid posterior mode | 0.9998 | 0.0053 | +0.0039 | 0.050 |
+| BGC posterior mean | 0.9916 | 0.0287 | -0.0209 | 0.171 |
+| (gghybrid vs BGC) | 0.9913 | 0.0316 | -0.0248 | 0.168 |
+
+Differences from gghybrid have median 0.004 and 99th percentile 0.025;
+gghybrid reports its posterior mode at 0.01 resolution from 2,000 MCMC
+draws, and the largest differences are at low h, where the posterior is
+skewed against the boundary. Interval widths match (mean 0.180 for both);
+interval ends differ by 0.005 on average. HyCline's estimate fell inside
+BGC's 95% credible interval for 92.8% of birds and its interval overlapped
+BGC's for 99.8%. BGC's posterior means sit about 0.02 above both
+maximum-likelihood/mode estimates, as a posterior mean does when the
+posterior is bounded at 0. Reference individuals: house mean h = 0.004
+(max 0.056), Spanish mean 0.999 (min 0.981).

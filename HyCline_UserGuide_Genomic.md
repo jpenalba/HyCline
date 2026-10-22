@@ -257,6 +257,18 @@ error of the hybrids' estimates:
 
 and the 95% intervals contained the true value for 90-97% of hybrids.
 
+On empirical data -- the Italian sparrow hybrid zone (Hermansen et al.
+2014; 77 loci; 84 house and 52 Spanish sparrow references; 433 Italian
+sparrows), set up as in Bailey (2023, section 2.3.1) --
+`--method ml` agreed with gghybrid's `esth` posterior modes at Pearson
+r = 0.9998 (mean absolute difference 0.005; 99% of birds within 0.025)
+and with the published BGC posterior means at r = 0.992, the same
+agreement gghybrid itself has with BGC (r = 0.991). Its 95% intervals
+were as wide as gghybrid's credible intervals (mean 0.18) and overlapped
+BGC's for 99.8% of birds. House references came out at a mean of 0.004
+and Spanish references at 0.999. `benchmarking/italy_sparrow_hybrid_index.py`
+reproduces the comparison from a gghybrid checkout.
+
 `--method mean` is the simpler estimator: the mean, across loci, of each
 individual's parental-population-1 allele dosage (each locus oriented by
 the parental frequencies first), optionally weighted by
