@@ -545,6 +545,14 @@ name in the VCF `#CHROM` line or beagle header exactly, and the error
 lists the ones that don't. `--hybrid-index-col` (default
 `hybrid_index`) names the hybrid-index column.
 
+What the converter accepts (VCF and beagle variations, what it skips and
+what it refuses) and how its time, memory and output size grow are in the
+Geographic guide's Step 2, "What the converters accept" -- the two
+`generate-*` commands read their input the same way. Genomic outputs are
+the larger of the two (one row per individual, four or five columns per
+locus): at 100,000 loci they were too wide for the fitting commands to
+load on a 15 GB machine, so filter genome-wide data to AIMs first.
+
 **The input format determines the output, with no flag to choose
 otherwise.** VCF input produces hard counts from `GT` calls; beagle input
 produces per-individual genotype likelihoods. For genotype-likelihood-

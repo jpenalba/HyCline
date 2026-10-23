@@ -290,3 +290,73 @@ def test_all_four_writer_outputs_are_directly_readable(test_vcf_path, test_metad
     write_genomic_gl_csv(vcf_data, test_metadata_df, "individual", "hybrid_index", str(p4))
     result4 = read_genomic_gl_multi_locus_wide_csv(str(p4), individual_col="individual")
     assert len(result4) == 2
+
+
+# ---------------------------------------------------------------------------
+# Real-world input variations (benchmarking/conversion_input_variants.py)
+# ---------------------------------------------------------------------------
+
+VARIANT_HEADER = ("##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\t"
+                  "FORMAT\ts1\ts2\ts3\n")
+
+
+def _write(tmp_path, body, name="v.vcf", header=VARIANT_HEADER):
+    path = tmp_path / name
+    path.write_text(header + body)
+    return str(path)
+
+
+def test_read_vcf_skips_monomorphic_and_spanning_deletion_records(tmp_path):
+    # ALT '.' (all-sites VCFs) and ALT '*' were read as SNPs and written out
+    # as loci by generate-geographic-input / generate-genomic-input.
+    path = _write(tmp_path, "c\t1\tsnp1\tA\tG\t.\t.\t.\tGT\t0/0\t0/1\t1/1\n"
+                            "c\t2\tmono\tA\t.\t.\t.\t.\tGT\t0/0\t0/0\t./.\n"
+                            "c\t3\tstar\tA\t*\t.\t.\t.\tGT\t0/1\t0/0\t0/0\n")
+    d = read_vcf(path)
+    assert d.locus_names == ["snp1"]
+    assert d.n_skipped_monomorphic == 1 and d.n_skipped_indel == 1
+
+
+def test_read_vcf_skips_records_with_non_diploid_genotypes(tmp_path):
+    # Haploid and tetraploid records were read as all-missing loci, which the
+    # fitting commands then refused ("no complete (non-missing) rows").
+    path = _write(tmp_path, "c\t1\tsnp1\tA\tG\t.\t.\t.\tGT\t0/0\t0|1\t./.\n"
+                            "c\t2\thap\tA\tG\t.\t.\t.\tGT\t0\t1\t.\n"
+                            "c\t3\ttetra\tA\tG\t.\t.\t.\tGT\t0/0/1/1\t0/0/0/0\t./././.\n")
+    d = read_vcf(path)
+    assert d.locus_names == ["snp1"]
+    assert d.n_skipped_non_diploid == 2
+
+
+def test_read_vcf_refuses_duplicate_sample_names(tmp_path):
+    # The second of two same-named columns silently replaced the first.
+    header = VARIANT_HEADER.replace("s1\ts2", "s1\ts1")
+    path = _write(tmp_path, "c\t1\tsnp1\tA\tG\t.\t.\t.\tGT\t0/0\t0/1\t1/1\n", header=header)
+    with pytest.raises(ValueError, match="duplicate sample names.*s1"):
+        read_vcf(path)
+
+
+def test_writers_refuse_duplicate_locus_names(tmp_path):
+    # Two records with one ID became two same-named output columns.
+    import pandas as pd
+    from hycline.data.vcf import write_genomic_hard_count_csv, write_geographic_hard_count_csv
+    path = _write(tmp_path, "c\t1\tsnp1\tA\tG\t.\t.\t.\tGT\t0/0\t0/1\t1/1\n"
+                            "c\t2\tsnp1\tA\tG\t.\t.\t.\tGT\t0/1\t0/1\t1/1\n")
+    d = read_vcf(path)
+    meta = pd.DataFrame({"individual": ["s1", "s2", "s3"], "site": ["a", "a", "b"],
+                         "distance": [0.0, 0.0, 5.0], "hybrid_index": [0.1, 0.5, 0.9]})
+    with pytest.raises(ValueError, match="duplicate locus names: snp1"):
+        write_geographic_hard_count_csv(d, meta, "individual", "site", "distance",
+                                        str(tmp_path / "g.csv"))
+    with pytest.raises(ValueError, match="duplicate locus names: snp1"):
+        write_genomic_hard_count_csv(d, meta, "individual", "hybrid_index",
+                                     str(tmp_path / "h.csv"))
+
+
+def test_read_vcf_recognises_gzip_by_content(tmp_path):
+    # A BGZF file named .vcf.bgz failed with "'utf-8' codec can't decode".
+    text = VARIANT_HEADER + "c\t1\tsnp1\tA\tG\t.\t.\t.\tGT\t0/0\t0/1\t1/1\n"
+    path = tmp_path / "v.vcf.bgz"
+    data = text.encode()
+    path.write_bytes(gzip.compress(data[:40]) + gzip.compress(data[40:]))  # two members
+    assert read_vcf(str(path)).dosage.tolist() == [[0.0, 1.0, 2.0]]

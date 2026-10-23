@@ -316,3 +316,18 @@ def test_beagle_hard_count_writers_treat_equal_likelihoods_as_missing(beagle_met
     assert out.loc["ind1", "chr1_100.n"] == 0
     assert np.isnan(out.loc["ind1", "chr1_100.freq"])
     assert out.loc["ind2", "chr1_100.freq"] == 1.0
+
+
+def test_read_beagle_refuses_duplicate_individual_names(tmp_path):
+    path = tmp_path / "dup.beagle"
+    path.write_text("marker\tallele1\tallele2\tInd0\tInd0\tInd0\tInd0\tInd0\tInd0\n"
+                    "m1\t0\t1\t1\t0\t0\t0\t1\t0\n")
+    with pytest.raises(ValueError, match="duplicate individual names.*Ind0"):
+        read_beagle(str(path))
+
+
+def test_read_beagle_recognises_gzip_by_content(tmp_path, beagle_path):
+    path = tmp_path / "x.beagle.bgz"
+    path.write_bytes(gzip.compress(open(beagle_path, "rb").read()))
+    a, b = read_beagle(str(path)), read_beagle(beagle_path)
+    assert a.marker_names == b.marker_names and np.array_equal(a.gl1, b.gl1)

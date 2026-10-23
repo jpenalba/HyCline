@@ -1046,3 +1046,14 @@ def test_read_user_table_reads_tab_delimited_and_rejects_commas(tmp_path):
     trait.write_text("distance,trait_mean,n\n0,10.2,8\n50,15.5,10\n")
     with pytest.raises(TransectCSVError, match="looks comma-separated"):
         read_trait_csv(str(trait))
+
+
+def test_read_user_table_strips_stray_spaces(tmp_path):
+    # A trailing space after a metadata sample name kept that individual
+    # from matching its genotype data (benchmarking/conversion_input_variants.py).
+    from hycline.data.io import read_user_table
+    path = tmp_path / "meta.tsv"
+    path.write_text("individual \tpopulation\ns1 \tpop1\n s2\tpop2\n")
+    df = read_user_table(str(path))
+    assert list(df.columns) == ["individual", "population"]
+    assert df["individual"].tolist() == ["s1", "s2"]

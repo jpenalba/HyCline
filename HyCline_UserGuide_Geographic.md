@@ -109,7 +109,7 @@ AIMs
 ----
 Loci checked:   5000
 AIMs retained:  250 (5.00% of loci checked)
-Sites skipped:  0 multiallelic, 0 indel, 0 with no GT field
+Sites skipped:  0 multiallelic, 0 indel, 0 monomorphic, 0 non-diploid, 0 with no GT field
 
 Missing data (over loci checked)
 --------------------------------
@@ -210,12 +210,16 @@ depth of about 4x up. If loci at a particular frequency matter to you,
 set the cutoff a little above that step (e.g. 0.055 rather than 0.05 with
 20 individuals).
 
-For VCF input, sites are also silently checked against a biallelic-SNP-with-
-GT scope (multiallelic sites, indels, and sites with no `GT` field are
-skipped, not guessed at). When any are skipped, you'll see an extra line:
+For VCF input, sites are also checked against a biallelic-SNP-with-GT
+scope: multiallelic sites, indels (including symbolic alleles such as
+`<NON_REF>` and the `*` spanning-deletion allele), sites with no ALT
+allele (ALT `.`, as in all-sites VCFs), sites with any genotype that
+isn't diploid (haploid sex-chromosome or mitochondrial calls), and sites
+with no `GT` field are skipped, not guessed at. When any are skipped,
+you'll see an extra line:
 
 ```
-  (3 additional sites skipped: 1 multiallelic, 1 indel, 1 with no GT field -- not counted toward loci checked above)
+  (3 additional sites skipped: 1 multiallelic, 1 indel, 0 monomorphic (ALT '.'), 0 non-diploid, 1 with no GT field -- not counted toward loci checked above)
 ```
 
 If you already have a curated, pre-known diagnostic-marker panel, skip this
@@ -325,11 +329,61 @@ the metadata (0.0 vs 5.26...) -- every individual at the same site must
 share the same distance value.
 ```
 
-### `--site-col` and `--ploidy` are VCF-only
+### `--site-col` is VCF-only
 
-Both flags matter only for VCF's site-aggregation step; both are simply
-ignored (not an error) if given with beagle input, since beagle output
-always stays one row per individual with no aggregation at all.
+It matters only for VCF's site-aggregation step and is simply ignored
+(not an error) with beagle input, since beagle output always stays one
+row per individual with no aggregation at all. Genotypes are diploid:
+records with haploid or polyploid genotypes (sex chromosomes,
+mitochondrial DNA) are skipped and counted.
+
+### What the converters accept
+
+`generate-geographic-input` and `generate-genomic-input` read the same
+inputs the same way, checked value by value against an independent
+recomputation (`benchmarking/conversion_exactness.py`) and against 31
+real-world variations of VCF and beagle files
+(`benchmarking/conversion_input_variants.py`):
+
+- **Converted as written:** phased (`0|1`) or unphased genotypes; `GT`
+  anywhere in FORMAT, with any other fields (GATK's `GT:AD:DP:GQ:PL`, for
+  instance) and with trailing fields dropped for missing samples; missing
+  genotypes as `./.` or `.`, and half-missing ones (`./1`) as missing;
+  lowercase alleles; records whose FILTER isn't PASS (FILTER isn't
+  applied -- filter beforehand if it should be); gzip or BGZF compression,
+  recognised by content whatever the extension (`.vcf.gz`, `.vcf.bgz`);
+  Windows line endings, in the data and in the metadata; locus IDs `.`
+  (named `CHROM:POS`) or containing dots; beagle likelihoods in scientific
+  notation. Spaces around metadata names and labels are ignored.
+- **Skipped and counted:** multiallelic sites, indels (including
+  symbolic and `*` alleles), sites with ALT `.`, sites with any
+  non-diploid genotype, and sites with no `GT` field.
+- **Refused, with a message saying what to fix:** duplicate sample names
+  in the VCF header or beagle header, and duplicate locus IDs (they would
+  become duplicate output columns). A beagle file straight from ANGSD
+  names its individuals `Ind0`, `Ind1`, ... in the order of its BAM list;
+  the metadata's sample names must use those labels.
+
+**Size and speed.** Conversion time and memory grow with loci x
+individuals. Measured on simulated files (`benchmarking/conversion_scaling.py`),
+200 individuals:
+
+| Loci | Input | Geographic: time / memory / output | Genomic: time / memory / output |
+|---|---|---|---|
+| 10,000 | VCF, 8 MB | 7 s / 0.2 GB / 3 MB | 16 s / 0.4 GB / 49 MB |
+| 10,000 | beagle, 54 MB | 17 s / 0.5 GB / 117 MB | 23 s / 0.5 GB / 149 MB |
+| 100,000 | VCF, 84 MB | 70 s / 0.9 GB / 34 MB | 183 s / 2.4 GB / 486 MB |
+| 100,000 | beagle, 542 MB | 193 s / 2.1 GB / 1.2 GB | 298 s / 2.6 GB / 1.5 GB |
+
+Per-individual outputs (beagle input, and every genomic output) are
+several times the size of their input, since each locus gets two to
+five columns per individual. The fitting commands read the whole CSV at
+once, and very wide files are the limit: at 100,000 loci the genomic
+outputs (390,000-500,000 columns) could not be loaded on a 15 GB machine,
+and the geographic beagle output needed 9 GB. Up to about 10,000 loci
+(0.2-0.4 GB to load at 200 individuals, up to 1.4 GB at 1000) this is not an
+issue. For genome-wide data, filter to AIMs first (`filter-aims`), which
+is also what the hybrid index and the clines need.
 
 ---
 

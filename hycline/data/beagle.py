@@ -26,6 +26,11 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from hycline.data.vcf import check_unique_names
+
+MARKER_NAME_HINT = ("Marker names become the output's column names, so each must be "
+                    "unique: rename the duplicated markers.")
+
 
 @dataclass
 class BeagleData:
@@ -42,9 +47,14 @@ class BeagleData:
 
 
 def _open_maybe_gzip(path: str, mode: str = "rt"):
-    if path.endswith(".gz"):
-        return gzip.open(path, mode)
-    return open(path, mode)
+    """Open for reading, gzip- or BGZF-compressed or not, recognised by the
+    file's first two bytes; for writing, compressed if the name ends in .gz."""
+    if "r" in mode:
+        with open(path, "rb") as fh:
+            compressed = fh.read(2) == b"\x1f\x8b"
+    else:
+        compressed = path.endswith(".gz")
+    return gzip.open(path, mode) if compressed else open(path, mode)
 
 
 def _read_beagle_header(f, path: str) -> tuple:
@@ -69,7 +79,10 @@ def _read_beagle_header(f, path: str) -> tuple:
             f"individual). The file may be truncated or not a real beagle file."
         )
     n_ind = len(sample_cols) // 3
-    return raw, [sample_cols[3 * i] for i in range(n_ind)]
+    names = [sample_cols[3 * i] for i in range(n_ind)]
+    check_unique_names(names, "individual names in the header", f"'{path}'",
+                       "Each triple of columns must be a different individual.")
+    return raw, names
 
 
 def _iter_beagle_chunks(f, path: str, n_ind: int, chunk_size: int = 5000):
@@ -275,6 +288,8 @@ def write_beagle_geographic_gl_csv(beagle_data: BeagleData, metadata_df, sample_
     """Write a per-individual genotype-likelihood CSV for geographic
     clines from beagle data -- the format `read_gl_multi_locus_wide_csv`
     (Phase 4 Component D's own reader) expects by default."""
+    check_unique_names(beagle_data.marker_names, "marker names", "The beagle file",
+                       MARKER_NAME_HINT)
     common_samples, idx, meta, n_dropped = _join_beagle_metadata(
         beagle_data, metadata_df, sample_col, [distance_col])
 
@@ -305,6 +320,8 @@ def write_beagle_genomic_gl_csv(beagle_data: BeagleData, metadata_df, sample_col
     `hycline.data.vcf.write_genomic_hard_count_csv` (frequencies of
     allele2)."""
     from hycline.data.vcf import _drop_samples
+    check_unique_names(beagle_data.marker_names, "marker names", "The beagle file",
+                       MARKER_NAME_HINT)
     common_samples, idx, meta, n_dropped = _join_beagle_metadata(
         beagle_data, metadata_df, sample_col, [hybrid_index_col])
     common_samples, idx, meta = _drop_samples(common_samples, idx, meta, exclude_samples)
@@ -351,6 +368,8 @@ def write_beagle_geographic_hard_count_csv(beagle_data: BeagleData, metadata_df,
     per individual would. Every individual at a site must share the
     same distance value, the same requirement
     `hycline.data.vcf.write_geographic_hard_count_csv` has."""
+    check_unique_names(beagle_data.marker_names, "marker names", "The beagle file",
+                       MARKER_NAME_HINT)
     common_samples, idx, meta, n_dropped = _join_beagle_metadata(
         beagle_data, metadata_df, sample_col, [site_col, distance_col])
 
@@ -404,6 +423,8 @@ def write_beagle_genomic_hard_count_csv(beagle_data: BeagleData, metadata_df, sa
     expects by default (`.n`/`.freq` suffixes). Uses each individual's
     most-likely genotype; see `write_beagle_geographic_hard_count_csv`'s
     docstring for the same caveat."""
+    check_unique_names(beagle_data.marker_names, "marker names", "The beagle file",
+                       MARKER_NAME_HINT)
     common_samples, idx, meta, n_dropped = _join_beagle_metadata(
         beagle_data, metadata_df, sample_col, [hybrid_index_col])
 

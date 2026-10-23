@@ -695,3 +695,72 @@ once already in `hycline/data/vcf.py`**: a missing `import pandas as pd`
 in `hycline/data/beagle.py`, caught immediately by the first test run
 (a `NameError`, not a silent wrong answer) and fixed before any of the
 validation above was actually meaningful.
+
+### 9.9 Benchmarking the converters
+
+Three benchmarks of `generate-geographic-input` and
+`generate-genomic-input`, scripts and results in `benchmarking/`.
+
+**Exactness** (`conversion_exactness.py`, results in
+`conversion_exactness/`). Three simulated zones (3000 SNPs, 20 + 20
+references, 120 hybrids, 10% missing plus one individual 90% missing,
+depth-4 beagle), metadata shuffled, missing 5 input individuals and
+carrying 5 that aren't in the input. All four outputs (geographic/genomic
+x VCF/beagle) were compared value by value with a separately written
+parser: same rows in the same order, same columns, values equal to
+floating-point rounding (<= 2e-15; beagle parental frequencies within
+1.4e-8 of a grid-plus-bounded-search maximum likelihood, against
+HyCline's EM), on every seed, before and after the fixes below.
+
+**Real-world input variations** (`conversion_input_variants.py`, results
+in `conversion_input_variants/`). 26 VCF and 5 beagle variations, each
+paired with a reference file stating its intended meaning, both commands,
+outputs also read back by the fitting commands' readers. Phased
+genotypes, GT not first, GATK FORMAT fields, truncated fields, '.' and
+half-missing genotypes, multiallelic sites, indels, symbolic ALT, gzip,
+multi-member (BGZF-style) gzip, CRLF, ID '.', IDs with dots, lowercase
+alleles, non-PASS FILTER, metadata CRLF, and the beagle variations were
+already handled. Bugs found and fixed (regression tests in
+`tests/test_vcf.py`, `tests/test_beagle.py`, `tests/test_data_io.py`):
+
+- ALT '.' (monomorphic sites of all-sites VCFs) and ALT '*' passed the
+  single-base check and were written as loci. Both readers (`read_vcf`,
+  `filter_aims_vcf`) now share `_skip_reason`: '.' is counted as
+  monomorphic, '*' and symbolic alleles as indels.
+- Haploid and polyploid genotypes parsed as missing, so such records
+  became all-missing loci that `fit-geographic` then refused ("no
+  complete (non-missing) rows"). Records with any non-diploid called
+  genotype are now skipped and counted (`n_skipped_non_diploid`), with a
+  note naming sex chromosomes and mtDNA as the usual cause.
+- `generate-geographic-input --ploidy` could never work: GT parsing
+  reads two alleles, so `--ploidy 1` on a diploid VCF wrote allele
+  frequencies up to 2.0 and haploid VCFs were all missing. The flag is
+  gone (the converters are diploid, like `estimate-hybrid-index` and
+  `generate-genomic-input`), as is the writers' `ploidy` parameter.
+- Gzip was recognised by a `.gz` extension, so BGZF files named `.bgz`
+  failed with "'utf-8' codec can't decode byte 0x8b". Both readers now
+  check the first two bytes.
+- Duplicate locus IDs became duplicate output columns, silently; the
+  writers now refuse them, suggesting `bcftools annotate --set-id`.
+- Duplicate sample names in a VCF or beagle header: the last column won
+  silently. Both readers refuse them.
+- A trailing space after a metadata sample name kept that individual from
+  matching. `read_user_table` strips spaces around names and text cells.
+
+After the fixes all 62 conversions were either identical to their
+reference (54) or refused as intended (8), and every output read back.
+
+**Time, memory, output size** (`conversion_scaling.py`, results in
+`conversion_scaling/`). 1,000-100,000 loci x 200 individuals and 10,000 x
+1,000. Conversion scales roughly with loci x individuals: at 100,000 x
+200, 70-298 s and 0.9-2.6 GB peak. Per-individual outputs are several
+times their input (100,000-locus genomic: 486 MB from an 84 MB VCF, 1.5 GB
+from a 542 MB beagle file). The limit is reading them back: at 100,000
+loci both genomic outputs failed to load in the fitting commands' readers
+on a 15 GB machine, and the geographic beagle output needed 9.1 GB. The
+cause is `pd.read_csv` itself on very wide files -- killed (out of memory)
+on the 389,114-column x 160-row genomic CSV, which a line-by-line parse
+into one float array reads in 21 s at 1.6 GB peak. At 20,000 loci the
+reader peaks at 0.85 GB, so the cost grows faster than the file. Not yet
+fixed; the guides advise filtering genome-wide data to AIMs first.
+

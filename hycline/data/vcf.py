@@ -16,12 +16,14 @@ ALT) with a `GT` FORMAT field, and optionally a `PL` FORMAT field
 convention -- converted via `hycline.data.genotype_likelihood.
 phred_to_log_likelihood`, the same converter every other GL-consuming
 part of this project already uses). Handles both phased (`|`) and
-unphased (`/`) genotype separators, and gzip-compressed (`.vcf.gz`)
-files transparently.
+unphased (`/`) genotype separators, and gzip- or BGZF-compressed files
+transparently (recognised by content, so `.vcf.gz` and `.vcf.bgz` alike).
 
-WHAT'S NOT SUPPORTED, on purpose rather than by oversight: indels,
-multiallelic sites (more than one ALT allele), and the older `GL`
-(log10-scaled, not Phred-scaled) genotype-likelihood FORMAT field.
+WHAT'S NOT SUPPORTED, on purpose rather than by oversight: indels
+(including symbolic and '*' alleles), multiallelic sites (more than one
+ALT allele), sites with no ALT allele ('.'), genotypes that aren't
+diploid, and the older `GL` (log10-scaled, not Phred-scaled)
+genotype-likelihood FORMAT field.
 Multiallelic sites and indels are common in real VCFs and would need a
 real modeling decision (which ALT is "focal"? how does a 3+-genotype-
 class site fit this project's inherently biallelic HWE marginalization?)
@@ -51,6 +53,8 @@ class VCFData:
     n_skipped_multiallelic: int = 0
     n_skipped_indel: int = 0
     n_skipped_no_gt: int = 0
+    n_skipped_monomorphic: int = 0  # ALT '.': no alternate allele
+    n_skipped_non_diploid: int = 0  # a called genotype with other than 2 alleles
     n_loci_without_pl: int = 0  # loci where PL was requested but missing for every sample
 
     def __len__(self) -> int:
@@ -58,9 +62,43 @@ class VCFData:
 
 
 def _open_maybe_gzip(path: str):
-    if path.endswith(".gz"):
-        return gzip.open(path, "rt")
-    return open(path, "r")
+    """Open a text file, gzip- or BGZF-compressed or not, recognised by its
+    first two bytes rather than its extension (.vcf.gz, .vcf.bgz, ...)."""
+    with open(path, "rb") as fh:
+        compressed = fh.read(2) == b"\x1f\x8b"
+    return gzip.open(path, "rt") if compressed else open(path, "r")
+
+
+def _skip_reason(ref: str, alt: str) -> str | None:
+    """Why a record isn't a usable biallelic SNP, or None if it is:
+    'multiallelic' (several ALT alleles), 'monomorphic' (ALT '.', as in
+    all-sites VCFs) or 'indel' (REF or ALT longer than one base, a symbolic
+    allele such as <NON_REF>, or the '*' spanning-deletion allele)."""
+    if "," in alt:
+        return "multiallelic"
+    if alt == ".":
+        return "monomorphic"
+    if len(ref) != 1 or len(alt) != 1 or alt == "*":
+        return "indel"
+    return None
+
+
+def _is_diploid_or_missing(gt_str: str) -> bool:
+    """True for a two-allele genotype or a missing one ('.', './.')."""
+    alleles = gt_str.replace("|", "/").split("/")
+    return len(alleles) == 2 or all(a == "." for a in alleles)
+
+
+def check_unique_names(names: list, what: str, source: str, hint: str = "") -> None:
+    """Raise ValueError naming the duplicates if `names` repeats any."""
+    seen, dups = set(), []
+    for n in names:
+        if n in seen and n not in dups:
+            dups.append(n)
+        seen.add(n)
+    if dups:
+        shown = ", ".join(dups[:5]) + (f" and {len(dups) - 5} more" if len(dups) > 5 else "")
+        raise ValueError(f"{source} has duplicate {what}: {shown}.{(' ' + hint) if hint else ''}")
 
 
 def _parse_gt(gt_str: str) -> float:
@@ -115,6 +153,8 @@ def read_vcf(path: str, samples: list | None = None, extract_pl: bool = False,
     n_skipped_multiallelic = 0
     n_skipped_indel = 0
     n_skipped_no_gt = 0
+    n_skipped_monomorphic = 0
+    n_skipped_non_diploid = 0
     n_loci_without_pl = 0
 
     header_samples = None
@@ -130,6 +170,8 @@ def read_vcf(path: str, samples: list | None = None, extract_pl: bool = False,
             if line.startswith("#CHROM"):
                 fields = line.split("\t")
                 header_samples = fields[9:]
+                check_unique_names(header_samples, "sample names in the #CHROM line",
+                                   f"'{path}'", "Each column must be a different individual.")
                 if samples is not None:
                     missing = [s for s in samples if s not in header_samples]
                     if missing:
@@ -152,11 +194,14 @@ def read_vcf(path: str, samples: list | None = None, extract_pl: bool = False,
             fields = line.split("\t")
             chrom, pos, variant_id, ref, alt = fields[0], fields[1], fields[2], fields[3], fields[4]
 
-            alt_alleles = alt.split(",")
-            if len(alt_alleles) != 1:
+            reason = _skip_reason(ref, alt)
+            if reason == "multiallelic":
                 n_skipped_multiallelic += 1
                 continue
-            if len(ref) != 1 or len(alt_alleles[0]) != 1:
+            if reason == "monomorphic":
+                n_skipped_monomorphic += 1
+                continue
+            if reason == "indel":
                 n_skipped_indel += 1
                 continue
 
@@ -169,9 +214,14 @@ def read_vcf(path: str, samples: list | None = None, extract_pl: bool = False,
             pl_idx = format_keys.index("PL") if (extract_pl and "PL" in format_keys) else None
 
             locus_name = variant_id if variant_id != "." else f"{chrom}:{pos}"
+            sample_fields = fields[9:]
+            gt_strs = [(cell.split(":")[gt_idx] if gt_idx < cell.count(":") + 1 else ".")
+                       for cell in (sample_fields[i] for i in sample_indices)]
+            if not all(_is_diploid_or_missing(g) for g in gt_strs):
+                n_skipped_non_diploid += 1
+                continue
             locus_names.append(locus_name)
 
-            sample_fields = fields[9:]
             dosage_row = np.full(len(sample_indices), np.nan)
             if extract_pl:
                 gl0_row = np.full(len(sample_indices), np.nan)
@@ -208,8 +258,10 @@ def read_vcf(path: str, samples: list | None = None, extract_pl: bool = False,
     if not locus_names:
         raise ValueError(
             f"No biallelic SNPs found in '{path}' (after skipping "
-            f"{n_skipped_multiallelic} multiallelic and {n_skipped_indel} indel sites). "
-            f"Check the file is a valid VCF with biallelic SNP records."
+            f"{n_skipped_multiallelic} multiallelic, {n_skipped_indel} indel, "
+            f"{n_skipped_monomorphic} monomorphic and {n_skipped_non_diploid} non-diploid "
+            f"sites, and {n_skipped_no_gt} without a GT field). Check the file is a valid "
+            f"VCF with biallelic SNP records."
         )
 
     return VCFData(
@@ -221,6 +273,8 @@ def read_vcf(path: str, samples: list | None = None, extract_pl: bool = False,
         n_skipped_multiallelic=n_skipped_multiallelic,
         n_skipped_indel=n_skipped_indel,
         n_skipped_no_gt=n_skipped_no_gt,
+        n_skipped_monomorphic=n_skipped_monomorphic,
+        n_skipped_non_diploid=n_skipped_non_diploid,
         n_loci_without_pl=n_loci_without_pl,
     )
 
@@ -237,6 +291,11 @@ def read_vcf(path: str, samples: list | None = None, extract_pl: bool = False,
 # remaining gap, and the module docstring above for what VCF features are
 # (and aren't) supported going in.
 # ---------------------------------------------------------------------------
+
+LOCUS_NAME_HINT = ("Locus names become the output's column names, so each must be unique: "
+                   "give the records unique IDs (e.g. bcftools annotate --set-id "
+                   "'%CHROM:%POS') or set them to '.' (named CHROM:POS).")
+
 
 def _join_metadata(vcf_data: VCFData, metadata_df, sample_col: str,
                     covariate_cols: list) -> tuple:
@@ -287,6 +346,7 @@ def write_geographic_gl_csv(vcf_data: VCFData, metadata_df, sample_col: str,
             "vcf_data has no genotype likelihoods -- re-read the VCF with extract_pl=True "
             "(--genotype-likelihoods on the CLI) to use this output format."
         )
+    check_unique_names(vcf_data.locus_names, "locus names", "The VCF", LOCUS_NAME_HINT)
     common_samples, vcf_idx, meta, n_dropped = _join_metadata(
         vcf_data, metadata_df, sample_col, [distance_col])
 
@@ -326,6 +386,7 @@ def write_genomic_gl_csv(vcf_data: VCFData, metadata_df, sample_col: str,
             "vcf_data has no genotype likelihoods -- re-read the VCF with extract_pl=True "
             "(--genotype-likelihoods on the CLI) to use this output format."
         )
+    check_unique_names(vcf_data.locus_names, "locus names", "The VCF", LOCUS_NAME_HINT)
     common_samples, vcf_idx, meta, n_dropped = _join_metadata(
         vcf_data, metadata_df, sample_col, [hybrid_index_col])
 
@@ -355,7 +416,6 @@ def write_genomic_gl_csv(vcf_data: VCFData, metadata_df, sample_col: str,
 
 def write_genomic_hard_count_csv(vcf_data: VCFData, metadata_df, sample_col: str,
                                   hybrid_index_col: str, output_path: str,
-                                  ploidy: int = 2,
                                   parental_freqs: tuple | None = None,
                                   exclude_samples=None) -> dict:
     """Write a per-individual hard-count CSV for genomic clines -- the
@@ -367,6 +427,7 @@ def write_genomic_hard_count_csv(vcf_data: VCFData, metadata_df, sample_col: str
     as constant '{locus}.p0'/'{locus}.p1' columns; loci where either is NaN
     are left out. `exclude_samples` names individuals to leave out (e.g.
     the parental reference individuals)."""
+    check_unique_names(vcf_data.locus_names, "locus names", "The VCF", LOCUS_NAME_HINT)
     common_samples, vcf_idx, meta, n_dropped = _join_metadata(
         vcf_data, metadata_df, sample_col, [hybrid_index_col])
     common_samples, vcf_idx, meta = _drop_samples(common_samples, vcf_idx, meta,
@@ -385,8 +446,8 @@ def write_genomic_hard_count_csv(vcf_data: VCFData, metadata_df, sample_col: str
             continue
         dosage = vcf_data.dosage[j, vcf_idx]
         valid = ~np.isnan(dosage)
-        new_columns[f"{locus}.n"] = np.where(valid, ploidy, 0)
-        new_columns[f"{locus}.freq"] = np.where(valid, dosage / ploidy, np.nan)
+        new_columns[f"{locus}.n"] = np.where(valid, 2, 0)  # diploid genotypes
+        new_columns[f"{locus}.freq"] = np.where(valid, dosage / 2, np.nan)
         if parental_freqs is not None:
             new_columns[f"{locus}.p0"] = np.full(len(common_samples), parental_freqs[0][j])
             new_columns[f"{locus}.p1"] = np.full(len(common_samples), parental_freqs[1][j])
@@ -416,8 +477,7 @@ def _drop_samples(common_samples: list, indices, meta, exclude_samples) -> tuple
 
 
 def write_geographic_hard_count_csv(vcf_data: VCFData, metadata_df, sample_col: str,
-                                     site_col: str, distance_col: str, output_path: str,
-                                     ploidy: int = 2) -> dict:
+                                     site_col: str, distance_col: str, output_path: str) -> dict:
     """Write a site-aggregated hard-count CSV for geographic clines --
     the format `read_multi_locus_wide_csv` expects by default
     (`.nSamples`/`.A` suffixes, matching HZAR's own bundled dataset
@@ -429,6 +489,7 @@ def write_geographic_hard_count_csv(vcf_data: VCFData, metadata_df, sample_col: 
     distance value in the metadata -- raises a clear error naming the
     site otherwise, rather than silently picking one.
     """
+    check_unique_names(vcf_data.locus_names, "locus names", "The VCF", LOCUS_NAME_HINT)
     common_samples, vcf_idx, meta, n_dropped = _join_metadata(
         vcf_data, metadata_df, sample_col, [site_col, distance_col])
 
@@ -462,7 +523,7 @@ def write_geographic_hard_count_csv(vcf_data: VCFData, metadata_df, sample_col: 
             idxs = vcf_idx_arr[positions]
             dosage = vcf_data.dosage[j, idxs]
             valid = ~np.isnan(dosage)
-            n_alleles = int(valid.sum()) * ploidy
+            n_alleles = 2 * int(valid.sum())  # diploid genotypes
             n_focal = float(np.nansum(dosage))
             n_alleles_col.append(n_alleles)
             freq_col.append(n_focal / n_alleles if n_alleles > 0 else np.nan)

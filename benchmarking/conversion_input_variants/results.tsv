@@ -1,0 +1,63 @@
+input	variant	command	description	outcome	details	read_back
+vcf	phased	geographic	phased genotypes (0|1)	same		200
+vcf	phased	genomic	phased genotypes (0|1)	same		190
+vcf	gt_not_first	geographic	FORMAT DP:GT	same		200
+vcf	gt_not_first	genomic	FORMAT DP:GT	same		190
+vcf	gatk_format	geographic	GATK-style FORMAT GT:AD:DP:GQ:PL	same		200
+vcf	gatk_format	genomic	GATK-style FORMAT GT:AD:DP:GQ:PL	same		190
+vcf	truncated_fields	geographic	missing samples' trailing FORMAT fields dropped (./. only)	same		200
+vcf	truncated_fields	genomic	missing samples' trailing FORMAT fields dropped (./. only)	same		190
+vcf	dot_missing	geographic	missing written as '.'	same		200
+vcf	dot_missing	genomic	missing written as '.'	same		190
+vcf	half_missing	geographic	5% of genotypes half-missing (./1, 0/.) -> treated as missing	same		200
+vcf	half_missing	genomic	5% of genotypes half-missing (./1, 0/.) -> treated as missing	same		197
+vcf	multiallelic	geographic	multiallelic records added -> skipped	same	Skipped: 20 multiallelic, 0 indel, 0 monomorphic (ALT '.'), 0 non-diploid, 0 without a GT field. / NOTE: 20 sites (9% of all variant records) were multiallelic or indels, which this converter delibera	200
+vcf	multiallelic	genomic	multiallelic records added -> skipped	same	Skipped: 20 multiallelic, 0 indel, 0 monomorphic (ALT '.'), 0 non-diploid, 0 without a GT field. / NOTE: 20 sites (9% of all variant records) were multiallelic or indels, which this converter delibera	190
+vcf	indels	geographic	indel records added -> skipped	same	Skipped: 0 multiallelic, 20 indel, 0 monomorphic (ALT '.'), 0 non-diploid, 0 without a GT field. / NOTE: 20 sites (9% of all variant records) were multiallelic or indels, which this converter delibera	200
+vcf	indels	genomic	indel records added -> skipped	same	Skipped: 0 multiallelic, 20 indel, 0 monomorphic (ALT '.'), 0 non-diploid, 0 without a GT field. / NOTE: 20 sites (9% of all variant records) were multiallelic or indels, which this converter delibera	190
+vcf	monomorphic_alt_dot	geographic	monomorphic records (ALT '.', all-sites VCF) added -> should be skipped	same	Skipped: 0 multiallelic, 0 indel, 20 monomorphic (ALT '.'), 0 non-diploid, 0 without a GT field.	200
+vcf	monomorphic_alt_dot	genomic	monomorphic records (ALT '.', all-sites VCF) added -> should be skipped	same	Skipped: 0 multiallelic, 0 indel, 20 monomorphic (ALT '.'), 0 non-diploid, 0 without a GT field.	190
+vcf	symbolic_alt	geographic	symbolic ALT <NON_REF> records (gVCF) added -> skipped	same	Skipped: 0 multiallelic, 20 indel, 0 monomorphic (ALT '.'), 0 non-diploid, 0 without a GT field. / NOTE: 20 sites (9% of all variant records) were multiallelic or indels, which this converter delibera	200
+vcf	symbolic_alt	genomic	symbolic ALT <NON_REF> records (gVCF) added -> skipped	same	Skipped: 0 multiallelic, 20 indel, 0 monomorphic (ALT '.'), 0 non-diploid, 0 without a GT field. / NOTE: 20 sites (9% of all variant records) were multiallelic or indels, which this converter delibera	190
+vcf	star_alt	geographic	spanning-deletion ALT '*' records added -> should be skipped	same	Skipped: 0 multiallelic, 20 indel, 0 monomorphic (ALT '.'), 0 non-diploid, 0 without a GT field. / NOTE: 20 sites (9% of all variant records) were multiallelic or indels, which this converter delibera	200
+vcf	star_alt	genomic	spanning-deletion ALT '*' records added -> should be skipped	same	Skipped: 0 multiallelic, 20 indel, 0 monomorphic (ALT '.'), 0 non-diploid, 0 without a GT field. / NOTE: 20 sites (9% of all variant records) were multiallelic or indels, which this converter delibera	190
+vcf	gzip	geographic	gzip, .vcf.gz	same		200
+vcf	gzip	genomic	gzip, .vcf.gz	same		190
+vcf	bgzf	geographic	BGZF-style multi-member gzip, .vcf.gz	same		200
+vcf	bgzf	genomic	BGZF-style multi-member gzip, .vcf.gz	same		190
+vcf	bgz_extension	geographic	BGZF-style gzip named .vcf.bgz	same		200
+vcf	bgz_extension	genomic	BGZF-style gzip named .vcf.bgz	same		190
+vcf	crlf	geographic	Windows line endings (CRLF)	same		200
+vcf	crlf	genomic	Windows line endings (CRLF)	same		190
+vcf	id_dot	geographic	ID '.' -> loci named CHROM:POS	same		200
+vcf	id_dot	genomic	ID '.' -> loci named CHROM:POS	same		190
+vcf	ids_with_dots	geographic	IDs containing dots (scaffold_3.1_1000); checked by reading back	same		200
+vcf	ids_with_dots	genomic	IDs containing dots (scaffold_3.1_1000); checked by reading back	same		190
+vcf	duplicate_ids	geographic	two records share an ID -> should refuse (IDs become column names)	error (intended)	ERROR: The VCF has duplicate locus names: snp1. Locus names become the output's column names, so each must be unique: give the records unique IDs (e.g. bcftools annotate --set-id '%CHROM:%POS') or set	
+vcf	duplicate_ids	genomic	two records share an ID -> should refuse (IDs become column names)	error (intended)	ERROR: The VCF has duplicate locus names: snp1. Locus names become the output's column names, so each must be unique: give the records unique IDs (e.g. bcftools annotate --set-id '%CHROM:%POS') or set	
+vcf	haploid	geographic	haploid genotypes (0, 1) at 20% of records -> should skip or refuse, not write all-missing loci	same	Skipped: 0 multiallelic, 0 indel, 0 monomorphic (ALT '.'), 40 non-diploid, 0 without a GT field. / NOTE: 40 sites had genotypes that aren't diploid (e.g. haploid calls on sex chromosomes or mitochondr	160
+vcf	haploid	genomic	haploid genotypes (0, 1) at 20% of records -> should skip or refuse, not write all-missing loci	same	Skipped: 0 multiallelic, 0 indel, 0 monomorphic (ALT '.'), 40 non-diploid, 0 without a GT field. / NOTE: 40 sites had genotypes that aren't diploid (e.g. haploid calls on sex chromosomes or mitochondr	154
+vcf	polyploid	geographic	tetraploid genotypes (0/0/1/1) at 20% of records -> should skip or refuse	same	Skipped: 0 multiallelic, 0 indel, 0 monomorphic (ALT '.'), 40 non-diploid, 0 without a GT field. / NOTE: 40 sites had genotypes that aren't diploid (e.g. haploid calls on sex chromosomes or mitochondr	160
+vcf	polyploid	genomic	tetraploid genotypes (0/0/1/1) at 20% of records -> should skip or refuse	same	Skipped: 0 multiallelic, 0 indel, 0 monomorphic (ALT '.'), 40 non-diploid, 0 without a GT field. / NOTE: 40 sites had genotypes that aren't diploid (e.g. haploid calls on sex chromosomes or mitochondr	154
+vcf	lowercase_alleles	geographic	lowercase REF/ALT	same		200
+vcf	lowercase_alleles	genomic	lowercase REF/ALT	same		190
+vcf	filter_lowqual	geographic	FILTER LowQual on 10% of records (FILTER is not applied: same as reference)	same		200
+vcf	filter_lowqual	genomic	FILTER LowQual on 10% of records (FILTER is not applied: same as reference)	same		190
+vcf	duplicate_sample	geographic	two VCF columns with the same sample name -> should refuse	error (intended)	ERROR: '/tmp/claude-0/-home-user-HyCline/1603dc5f-80e9-58f0-9f6c-fd521d3c908e/scratchpad/conv_var3/vcf_duplicate_sample/input.vcf' has duplicate sample names in the #CHROM line: sample1_pop1. Each col	
+vcf	duplicate_sample	genomic	two VCF columns with the same sample name -> should refuse	error (intended)	ERROR: '/tmp/claude-0/-home-user-HyCline/1603dc5f-80e9-58f0-9f6c-fd521d3c908e/scratchpad/conv_var3/vcf_duplicate_sample/input.vcf' has duplicate sample names in the #CHROM line: sample1_pop1. Each col	
+vcf	no_gt	geographic	no GT field (FORMAT AD only) -> should refuse	error (intended)	ERROR: No biallelic SNPs found in '/tmp/claude-0/-home-user-HyCline/1603dc5f-80e9-58f0-9f6c-fd521d3c908e/scratchpad/conv_var3/vcf_no_gt/input.vcf' (after skipping 0 multiallelic, 0 indel, 0 monomorphi	
+vcf	no_gt	genomic	no GT field (FORMAT AD only) -> should refuse	error (intended)	ERROR: No biallelic SNPs found in '/tmp/claude-0/-home-user-HyCline/1603dc5f-80e9-58f0-9f6c-fd521d3c908e/scratchpad/conv_var3/vcf_no_gt/input.vcf' (after skipping 0 multiallelic, 0 indel, 0 monomorphi	
+vcf	metadata_crlf	geographic	metadata with Windows line endings	same		200
+vcf	metadata_crlf	genomic	metadata with Windows line endings	same		190
+vcf	metadata_trailing_space	geographic	a trailing space after one metadata sample name	same		200
+vcf	metadata_trailing_space	genomic	a trailing space after one metadata sample name	same		190
+beagle	gzip	geographic	gzip, .beagle.gz	same		200
+beagle	gzip	genomic	gzip, .beagle.gz	same		200
+beagle	crlf	geographic	Windows line endings (CRLF)	same		200
+beagle	crlf	genomic	Windows line endings (CRLF)	same		200
+beagle	scientific_notation	geographic	likelihoods in scientific notation (1.000000e-05); checked by reading back	same		200
+beagle	scientific_notation	genomic	likelihoods in scientific notation (1.000000e-05); checked by reading back	same		200
+beagle	marker_names_with_dots	geographic	marker names with dots; checked by reading back	same		200
+beagle	marker_names_with_dots	genomic	marker names with dots; checked by reading back	same		200
+beagle	angsd_ind_header	geographic	ANGSD's own header (Ind0, Ind1, ...) with metadata using real sample names -> should refuse clearly	error (intended)	ERROR: No sample names in common between the beagle file and the metadata file -- check --sample-col matches the metadata column holding the beagle file's own sample labels exactly (as ANGSD wrote the	
+beagle	angsd_ind_header	genomic	ANGSD's own header (Ind0, Ind1, ...) with metadata using real sample names -> should refuse clearly	error (intended)	ERROR: 10 of the 10 samples labeled 'pop1' (--pop1-label) in the metadata file are not in the input file: sample1_pop1, sample2_pop1, sample3_pop1, sample4_pop1, sample5_pop1 and 5 more. Every parenta	

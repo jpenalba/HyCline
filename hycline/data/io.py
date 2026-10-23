@@ -62,7 +62,8 @@ def _check_not_comma_separated(df: pd.DataFrame, path: str, what: str = "") -> N
 
 def read_user_table(path: str, what: str = "file") -> pd.DataFrame:
     """Read a user-created tab-delimited table (metadata, parental labels,
-    parental frequencies): one header row, tab-separated columns. Raises
+    parental frequencies): one header row, tab-separated columns, with
+    leading/trailing spaces removed from column names and text cells. Raises
     `TransectCSVError` (a ValueError) with a readable message if the file is
     missing, unreadable, or comma-separated."""
     try:
@@ -72,6 +73,12 @@ def read_user_table(path: str, what: str = "file") -> pd.DataFrame:
     except Exception as e:
         raise TransectCSVError(f"Could not read {what} '{path}' as a tab-delimited file: {e}")
     _check_not_comma_separated(df, path, what)
+    # Stray spaces around names and labels (common in hand-edited tables)
+    # would otherwise keep a sample from matching its genotype data.
+    df.columns = [c.strip() if isinstance(c, str) else c for c in df.columns]
+    for col in df.columns:
+        if df[col].dtype == object or pd.api.types.is_string_dtype(df[col].dtype):
+            df[col] = df[col].map(lambda v: v.strip() if isinstance(v, str) else v)
     return df
 
 

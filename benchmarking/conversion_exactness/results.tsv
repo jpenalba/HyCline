@@ -1,0 +1,13 @@
+seed	output	rows	loci	row_order_matches	columns_match	max_abs_diff	max_abs_diff_parental_freq	exact
+1	geographic, VCF	12	3000	True	True	1.1102230246251565e-16	0.0	True
+1	geographic, beagle	155	3000	True	True	1.7763568394002505e-15	0.0	True
+1	genomic, VCF	116	2949	True	True	0.0	1.1102230246251565e-16	True
+1	genomic, beagle	116	2993	True	True	1.7763568394002505e-15	1.3636969997676829e-08	True
+2	geographic, VCF	12	3000	True	True	1.1102230246251565e-16	0.0	True
+2	geographic, beagle	155	3000	True	True	1.7763568394002505e-15	0.0	True
+2	genomic, VCF	117	2956	True	True	0.0	1.1102230246251565e-16	True
+2	genomic, beagle	117	2993	True	True	1.7763568394002505e-15	1.1501801178148696e-08	True
+3	geographic, VCF	12	3000	True	True	1.1102230246251565e-16	0.0	True
+3	geographic, beagle	155	3000	True	True	1.7763568394002505e-15	0.0	True
+3	genomic, VCF	118	2953	True	True	0.0	1.1102230246251565e-16	True
+3	genomic, beagle	118	2994	True	True	1.7763568394002505e-15	1.2139504568242643e-08	True

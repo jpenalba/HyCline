@@ -997,9 +997,6 @@ def _build_parser() -> argparse.ArgumentParser:
                              "individuals sharing a site are aggregated into one row. "
                              "Not used for beagle input, which always stays one row "
                              "per individual.")
-    ggi_p.add_argument("--ploidy", type=int, default=2,
-                        help="[VCF input only] Ploidy, used when aggregating "
-                             "individuals into site-level allele counts (default: 2).")
     ggi_p.add_argument("--max-variants", type=int, default=None,
                         help="[VCF input only] Optional cap on the number of biallelic "
                              "SNPs to parse (a safety valve for a quick look at a large "
@@ -3183,10 +3180,16 @@ def cmd_estimate_hybrid_index(args) -> int:
 def _report_vcf_parse_summary(vcf_data, extract_pl):
     print(f"  {len(vcf_data)} biallelic SNPs parsed, {len(vcf_data.sample_names)} samples.")
     n_skipped = vcf_data.n_skipped_multiallelic + vcf_data.n_skipped_indel
-    if n_skipped or vcf_data.n_skipped_no_gt:
+    if (n_skipped or vcf_data.n_skipped_no_gt or vcf_data.n_skipped_monomorphic
+            or vcf_data.n_skipped_non_diploid):
         print(f"  Skipped: {vcf_data.n_skipped_multiallelic} multiallelic, "
-              f"{vcf_data.n_skipped_indel} indel, {vcf_data.n_skipped_no_gt} without a "
-              f"GT field.")
+              f"{vcf_data.n_skipped_indel} indel, {vcf_data.n_skipped_monomorphic} "
+              f"monomorphic (ALT '.'), {vcf_data.n_skipped_non_diploid} non-diploid, "
+              f"{vcf_data.n_skipped_no_gt} without a GT field.")
+    if vcf_data.n_skipped_non_diploid:
+        print(f"  NOTE: {vcf_data.n_skipped_non_diploid} sites had genotypes that aren't "
+              f"diploid (e.g. haploid calls on sex chromosomes or mitochondrial DNA) and "
+              f"were left out: HyCline's genotype models are diploid.")
     if n_skipped:
         total = len(vcf_data) + n_skipped
         pct = 100 * n_skipped / total if total > 0 else 0
@@ -3295,7 +3298,7 @@ def cmd_generate_geographic_input(args) -> int:
         try:
             info = write_geographic_hard_count_csv(vcf_data, metadata_df, args.sample_col,
                                                      args.site_col, distance_col,
-                                                     str(out_path), ploidy=args.ploidy)
+                                                     str(out_path))
         except ValueError as e:
             print(f"\nERROR: {e}\n", file=sys.stderr)
             return 2
@@ -3427,7 +3430,6 @@ def cmd_generate_genomic_input(args) -> int:
         try:
             info = write_genomic_hard_count_csv(vcf_data, metadata_df, args.sample_col,
                                                  args.hybrid_index_col, str(out_path),
-                                                 ploidy=2,
                                                  parental_freqs=parental_freqs,
                                                  exclude_samples=refs)
         except ValueError as e:
@@ -3555,11 +3557,14 @@ def cmd_filter_aims(args) -> int:
           f"({describe_aim_criterion(**aim_rule)})")
     if fmt == "vcf":
         skipped = (result["n_skipped_multiallelic"] + result["n_skipped_indel"]
-                   + result["n_skipped_no_gt"])
+                   + result["n_skipped_no_gt"] + result["n_skipped_monomorphic"]
+                   + result["n_skipped_non_diploid"])
         if skipped:
             print(f"  ({skipped} additional sites skipped: "
                   f"{result['n_skipped_multiallelic']} multiallelic, "
                   f"{result['n_skipped_indel']} indel, "
+                  f"{result['n_skipped_monomorphic']} monomorphic (ALT '.'), "
+                  f"{result['n_skipped_non_diploid']} non-diploid, "
                   f"{result['n_skipped_no_gt']} with no GT field -- not counted "
                   f"toward loci checked above)")
     if result['n_retained'] == 0:

@@ -438,7 +438,8 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
     familiar reporting story alongside `generate-geographic-input`/
     `generate-genomic-input`).
     """
-    from hycline.data.vcf import _open_maybe_gzip, _parse_gt
+    from hycline.data.vcf import (_is_diploid_or_missing, _open_maybe_gzip, _parse_gt,
+                                  _skip_reason, check_unique_names)
 
     metadata_df = read_user_table(metadata_path, "metadata file")
 
@@ -449,6 +450,8 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
     n_skipped_multiallelic = 0
     n_skipped_indel = 0
     n_skipped_no_gt = 0
+    n_skipped_monomorphic = 0
+    n_skipped_non_diploid = 0
 
     header_samples = None
     pop1_mask = pop2_mask = None
@@ -467,6 +470,9 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
             if line.startswith("#CHROM"):
                 fields = line.split("\t")
                 header_samples = fields[9:]
+                check_unique_names(header_samples, "sample names in the #CHROM line",
+                                   f"'{input_path}'",
+                                   "Each column must be a different individual.")
                 pop1_mask, pop2_mask = match_samples_to_populations(
                     header_samples, metadata_df, sample_col, population_col,
                     pop1_label, pop2_label)
@@ -481,11 +487,14 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
             chrom, pos, variant_id, ref, alt = (fields[0], fields[1], fields[2],
                                                  fields[3], fields[4])
 
-            alt_alleles = alt.split(",")
-            if len(alt_alleles) != 1:
+            reason = _skip_reason(ref, alt)
+            if reason == "multiallelic":
                 n_skipped_multiallelic += 1
                 continue
-            if len(ref) != 1 or len(alt_alleles[0]) != 1:
+            if reason == "monomorphic":
+                n_skipped_monomorphic += 1
+                continue
+            if reason == "indel":
                 n_skipped_indel += 1
                 continue
 
@@ -497,11 +506,12 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
                 continue
 
             sample_fields = fields[9:]
-            dosage_row = np.full(len(header_samples), np.nan)
-            for i, sample_str in enumerate(sample_fields):
-                sub_fields = sample_str.split(":")
-                gt_str = sub_fields[gt_idx] if gt_idx < len(sub_fields) else "."
-                dosage_row[i] = _parse_gt(gt_str)
+            gt_strs = [(cell.split(":")[gt_idx] if gt_idx < cell.count(":") + 1 else ".")
+                       for cell in sample_fields]
+            if not all(_is_diploid_or_missing(g) for g in gt_strs):
+                n_skipped_non_diploid += 1
+                continue
+            dosage_row = np.array([_parse_gt(g) for g in gt_strs], dtype=float)
 
             freq_pop1 = nanmean_quiet(dosage_row[pop1_mask]) / 2.0
             freq_pop2 = nanmean_quiet(dosage_row[pop2_mask]) / 2.0
@@ -526,8 +536,10 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
     if not locus_names:
         raise ValueError(
             f"No biallelic SNPs found in '{input_path}' (after skipping "
-            f"{n_skipped_multiallelic} multiallelic and {n_skipped_indel} indel sites). "
-            f"Check the file is a valid VCF with biallelic SNP records."
+            f"{n_skipped_multiallelic} multiallelic, {n_skipped_indel} indel, "
+            f"{n_skipped_monomorphic} monomorphic and {n_skipped_non_diploid} non-diploid "
+            f"sites, and {n_skipped_no_gt} without a GT field). Check the file is a valid "
+            f"VCF with biallelic SNP records."
         )
 
     if pending_keep:
@@ -541,6 +553,8 @@ def filter_aims_vcf(input_path: str, metadata_path: str, output_path: str,
         "n_skipped_multiallelic": n_skipped_multiallelic,
         "n_skipped_indel": n_skipped_indel,
         "n_skipped_no_gt": n_skipped_no_gt,
+        "n_skipped_monomorphic": n_skipped_monomorphic,
+        "n_skipped_non_diploid": n_skipped_non_diploid,
         **tally.fields(),
     }
 
@@ -624,6 +638,8 @@ def build_filter_summary(result: dict, *, input_path: str, output_path: str, fmt
     if fmt == "vcf":
         lines.append(f"Sites skipped:  {result['n_skipped_multiallelic']} multiallelic, "
                      f"{result['n_skipped_indel']} indel, "
+                     f"{result.get('n_skipped_monomorphic', 0)} monomorphic, "
+                     f"{result.get('n_skipped_non_diploid', 0)} non-diploid, "
                      f"{result['n_skipped_no_gt']} with no GT field")
     lines += [
         "",
