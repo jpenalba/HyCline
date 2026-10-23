@@ -832,23 +832,36 @@ def test_cli_fit_hierarchical_gives_actionable_error_on_missing_data(tmp_path):
     assert "fit-geographic" in result.stderr
 
 
-def test_cli_fit_hierarchical_genomic_gives_actionable_error_on_missing_data(tmp_path):
+def test_cli_fit_hierarchical_genomic_missing_data_needs_individual_names(tmp_path):
+    """Loci missing at different individuals are lined up by individual
+    name; without an individual column there is nothing to line them up by,
+    so the command stops with an actionable error."""
     import pandas as pd
     import numpy as np
 
     df = pd.read_csv(SYNTHETIC_GENOMIC_CSV)
     df.loc[0, "barrier1.freq"] = np.nan
-    csv_path = tmp_path / "synth_missing.csv"
-    df.to_csv(csv_path, index=False)
+    df.loc[0, "barrier1.n"] = 0
+    with_names = tmp_path / "synth_missing.csv"
+    df.to_csv(with_names, index=False)
+    without_names = tmp_path / "synth_missing_no_names.csv"
+    df.drop(columns="individual").to_csv(without_names, index=False)
 
-    out_dir = tmp_path / "out"
     result = _run_cli([
-        "fit-hierarchical-genomic", "--input", str(csv_path),
-        "--individual-col", "individual", "--output-dir", str(out_dir),
+        "fit-hierarchical-genomic", "--input", str(without_names),
+        "--output-dir", str(tmp_path / "out1"),
     ])
     assert result.returncode != 0
     assert "hierarchical batch fitting requires every locus" in result.stderr
-    assert "fit-genomic" in result.stderr
+    assert "--individual-col" in result.stderr and "fit-genomic" in result.stderr
+
+    result = _run_cli([
+        "fit-hierarchical-genomic", "--input", str(with_names),
+        "--individual-col", "individual", "--num-warmup", "150", "--num-samples", "150",
+        "--num-chains", "1", "--no-plot", "--output-dir", str(tmp_path / "out2"),
+    ])
+    assert result.returncode == 0, result.stderr
+    assert "1 missing genotype(s) enter with 0 sampled alleles" in result.stdout
 
 
 # ---------------------------------------------------------------------------

@@ -1562,7 +1562,10 @@ def _stack_for_hierarchical(data_dict, covariate_attr, count_attrs, kind_label):
             f"(no per-locus missing-data masking) -- locus '{bad_name}' has a different "
             f"{covariate_attr} pattern than locus '{all_names[0]}'. This usually "
             f"means your input CSV has missing values for some loci but not others.\n"
-            f"Either provide complete data for every locus, or use "
+            f"Either provide complete data for every locus, "
+            + ("" if kind_label == "geographic" else
+               "pass --individual-col so loci can be lined up by individual, ")
+            + f"or use "
             f"'hycline fit-{'geographic' if kind_label == 'geographic' else 'genomic'}' "
             f"instead, which fits each locus independently and handles per-locus "
             f"missing data by dropping only the affected rows for that locus.\n",

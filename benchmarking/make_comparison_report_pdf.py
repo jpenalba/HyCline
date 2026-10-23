@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import textwrap
 from pathlib import Path
 
 import matplotlib
@@ -47,6 +48,9 @@ DESIGNS = [  # (folder, scenario, label, what changes)
      "on genotype likelihoods, gghybrid on called genotypes)"),
     ("weak_differentiation", "genotypes", "Weak differentiation",
      "parental frequencies differ by >= 0.3"),
+    ("small_panels_exact_freqs", "genotypes", "Small panels, exact p",
+     "5 + 5 parental individuals, hybrids drawn from the panels' own frequencies (the tools see "
+     "exactly the frequencies the hybrids came from)"),
     ("population_panels", "genotypes", "Sampled panels",
      "as baseline, but panels and hybrids are drawn from population frequencies, so the "
      "20 + 20 reference panels only estimate them (reference for Small panels)"),
@@ -127,7 +131,7 @@ def grouped_bars(df, metric, tools, ylabel, path, ref=None, ylim=None):
     labels = [lab for _, _, lab, _ in DESIGNS if lab in df.index.get_level_values(0)]
     n = len(tools)
     width = 0.8 / n
-    fig, ax = plt.subplots(figsize=(8.6, 3.0), dpi=200)
+    fig, ax = plt.subplots(figsize=(8.6, 3.3), dpi=200)
     x = np.arange(len(labels))
     for i, tool in enumerate(tools):
         vals = [df.loc[(lab, tool), metric] if (lab, tool) in df.index else np.nan
@@ -137,7 +141,7 @@ def grouped_bars(df, metric, tools, ylabel, path, ref=None, ylim=None):
     if ref is not None:
         ax.axhline(ref, color=MUTED, linewidth=0.8, linestyle=(0, (3, 2)))
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, fontsize=8, color=INK)
+    ax.set_xticklabels([textwrap.fill(lab, 11, break_long_words=False) for lab in labels], fontsize=7.5, color=INK)
     if ylim:
         ax.set_ylim(*ylim)
     style_axes(ax, ylabel)
@@ -197,22 +201,29 @@ story.append(Paragraph(
 story.append(Spacer(1, 8))
 
 h1("Summary")
-base_hi = hi_m.loc["Baseline"]
 bullets([
-    "<b>Hybrid index.</b> All three tools give practically the same estimates when they see the "
-    "same information. On the Italian sparrows they agree with each other at r &ge; 0.9998 and with "
-    "BGC at r = 0.992. In the simulations their errors are within a few thousandths of each other "
-    "in every design. Where they differ is uncertainty: with low-depth reads gghybrid, which can only "
-    "use called genotypes, gives intervals that are too narrow.",
-    "<b>Genomic clines.</b> HyCline's hierarchical model and bgchm (also hierarchical) agree closely "
-    "with each other (r = 0.99 on the sparrows) and are the most accurate in the simulations, with "
-    "few false outliers. HyCline's per-locus maximum-likelihood fit is less accurate and flags more "
-    "neutral loci; gghybrid's per-locus Bayesian fit has the largest errors and the lowest power to "
-    "detect cline-rate outliers.",
-    "<b>Speed.</b> HyCline's whole pipeline ran 3-6 times faster than bgchm and gghybrid.",
-    "<b>Found and fixed along the way.</b> HyCline's hierarchical genomic cline fit refused genotype "
-    "data missing at different individuals per locus; it now handles it (Section 4). One bgchm run "
-    "setting was wrong in the first attempt and was corrected (Section 5).",
+    "<b>Hybrid index: the three tools are interchangeable.</b> On the Italian sparrows they agree "
+    "with each other at r &ge; 0.9998 and with BGC at r = 0.992; in every simulated design their "
+    "errors are within 0.004 of each other. The differences are in the intervals: with low-depth "
+    "reads gghybrid, which can only use called genotypes, is overconfident (87% coverage), and with "
+    "5-bird reference panels all three are (80-90%), bgchm least.",
+    "<b>Genomic clines: HyCline's hierarchical model and bgchm lead, and agree with each other.</b> "
+    "They have the smallest errors in every design (r = 0.99 between them on the sparrows), and few "
+    "false outliers when the reference frequencies are well estimated. HyCline's per-locus MLE is less "
+    "accurate and flags more neutral loci; gghybrid's per-locus fit has the largest errors, the "
+    "lowest power for rate (v) outliers, and breaks down on centres when hybrids are skewed toward "
+    "one parent.",
+    "<b>The main weakness is shared: reference-panel frequencies are treated as exact.</b> When the "
+    "panels are samples from the parental populations, as in real data, every tool flags 6-14% of "
+    "neutral loci as cline outliers with 20 + 20 references, and 13-35% with 5 + 5, against 0-6% "
+    "when the frequencies are exact. Hybrid indices are hardly affected.",
+    "<b>Weak differentiation</b> leaves hybrid indices fine but makes rate outliers hard to detect; "
+    "the hierarchical models then shrink toward neutral (15-18% power, almost no false positives).",
+    "<b>Speed.</b> HyCline's whole pipeline (hybrid index, MLE and hierarchical clines) ran 3-10 times "
+    "faster than bgchm or gghybrid.",
+    "<b>Found and fixed along the way.</b> HyCline's hierarchical genomic cline fit refused genotypes "
+    "missing at different individuals per locus; it now handles them (Section 5). Two benchmark "
+    "settings were wrong in first attempts and were corrected (Section 6).",
 ])
 
 h1("1. Tools and settings")
@@ -306,20 +317,48 @@ for fo, sc, lab, _ in present:
                          f(r["c_false_pos"])])
 table(rows, [2.7, 3.0, 1.7, 1.6, 1.4, 1.5, 1.7, 1.5, 1.7])
 
-h1("4. HyCline limitation found and fixed")
+h2("3.3 What each design shows")
+bullets([
+    "<b>Low depth (3x).</b> Hybrid index barely changes for HyCline and bgchm, which use genotype "
+    "likelihoods (error 0.041-0.042, coverage 0.94-0.95); gghybrid on called genotypes has similar "
+    "error but 87% coverage. Cline power drops for every tool (v outliers 52-65%).",
+    "<b>Weak differentiation (&ge; 0.3).</b> Hybrid-index error rises to about 0.052 for all three. "
+    "Rate outliers become hard to detect: the hierarchical models shrink toward neutral (power "
+    "0.15-0.18, false positives &le; 0.01); HyCline's MLE finds more (0.33) with 5% false positives; "
+    "gghybrid's errors roughly double.",
+    "<b>Sampled panels (20 + 20) and small panels (5 + 5).</b> With panels drawn from the parental "
+    "populations, cline false-positive rates rise for every tool (6-14% with 20 per panel, 13-35% with "
+    "5), and hybrid-index coverage falls with 5 per panel (HyCline 0.82, gghybrid 0.80, bgchm 0.90). "
+    "With exact panel frequencies, 5 per panel costs nothing (Small panels, exact p), so the loss comes "
+    "entirely from estimating the parental frequencies.",
+    "<b>Missing data (20%).</b> Little effect on any tool; all handle it (HyCline's hierarchical model "
+    "after the fix in Section 5).",
+    "<b>Bimodal hybrids.</b> Hybrid indices are slightly more accurate (most birds are near 0 or 1); "
+    "clines are similar to the baseline.",
+    "<b>Skewed hybrids.</b> Hybrid indices stay accurate. With few birds above h = 0.5, centres are "
+    "poorly informed: the hierarchical models stay accurate (logit-centre error 0.155-0.159) while "
+    "HyCline's MLE (0.36) and especially gghybrid (1.37) do not; bgchm detects more rate outliers "
+    "(0.65) than HyCline's hierarchical model (0.47).",
+])
+
+h1("5. HyCline limitation found and fixed")
 p("With 20% of genotypes missing, <i>fit-hierarchical-genomic</i> stopped with an error: it required "
   "every locus to be observed at the same individuals, while bgchm and gghybrid fit the data. "
   "Loci are now aligned by individual and a missing genotype enters the likelihood with zero sampled "
   "alleles, which leaves it out exactly. A regression test built from the simulated data covers it; "
   "the missing-data results in this report use the fixed version.")
 
-h1("5. Corrections and caveats")
+h1("6. Corrections and caveats")
 bullets([
     "<b>bgchm setting, corrected.</b> The first low-depth run estimated bgchm's parental allele "
     "frequencies from genotype likelihoods with its analytical shortcut (est_p, HMC = FALSE). That "
     "shrank them toward 0.5 (mean |p - 0.5| 0.29 against 0.36 in the panels) and inflated bgchm's "
     "hybrid-index error to 0.064. The runs reported here use HMC, bgchm's default for genotype "
     "likelihoods.",
+    "<b>Simulator setting, corrected.</b> The first small-panel run drew hybrids from the reference "
+    "panels' own frequencies, so the tools were given exactly the frequencies the hybrids came from "
+    "and panel size had no effect. The small-panel and sampled-panel designs draw panels and hybrids "
+    "from population frequencies instead; the first run is kept as Small panels, exact p.",
     "<b>gghybrid at low depth</b> takes genotypes only, so it was given genotypes called from the reads; "
     "its narrower intervals there reflect treating those calls as certain.",
     "<b>HyCline's hierarchical intervals</b> are normal approximations from the per-locus posterior mean "
@@ -331,14 +370,15 @@ bullets([
     "replicate variation.",
 ])
 
-h1("6. Files")
+h1("7. Files")
 p("Everything needed to rerun or rescore is in <i>benchmarking/tool_comparison/</i>: one folder per "
   "design with, for each data set, the simulation truth (<i>sim/</i>), the inputs and run scripts for "
   "HyCline, gghybrid, bgchm and bgc 1.03 (<i>inputs/</i>), the scored outputs and the timings. "
   "<i>python benchmarking/compare_tools.py --score-only --reps 3 --outdir "
   "benchmarking/tool_comparison/&lt;design&gt;</i> reproduces the scores; "
   "<i>benchmarking/italy_sparrow_tools.py</i> reruns the empirical comparison from a gghybrid "
-  "checkout.")
+  "checkout (its scores are in <i>tool_comparison/italy_sparrows/</i>; the sparrow genotypes "
+  "themselves are not copied into HyCline, which is MIT-licensed, from gghybrid's GPL-3 repository).")
 
 doc = SimpleDocTemplate(OUT, pagesize=A4, leftMargin=1.8 * cm, rightMargin=1.8 * cm,
                         topMargin=1.6 * cm, bottomMargin=1.6 * cm,

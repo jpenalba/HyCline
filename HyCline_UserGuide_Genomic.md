@@ -273,8 +273,9 @@ On simulated hybrid zones (100 loci, 100 hybrids; true genotypes and
 depth-3 reads) its hybrid indices were as accurate as gghybrid's and
 bgchm's (mean absolute error 0.038-0.043 for all three), with 95%
 intervals covering the truth for 92-94% of hybrids.
-`benchmarking/tool_comparison_example/` has matched inputs for HyCline,
-gghybrid, bgchm and bgc and the full comparison, clines included.
+`benchmarking/HyCline_Tool_Comparison.pdf` summarizes the comparison
+across designs (clines included), and `benchmarking/tool_comparison/` has
+the matched inputs for HyCline, gghybrid, bgchm and bgc.
 
 A simpler average of each individual's allele dosage across loci treats
 every locus as diagnostic, so partially differentiated loci and low
@@ -572,7 +573,10 @@ rather than each locus being fit fully independently the way
 `fit-genomic` does. Same auto-detection between hard counts and
 genotype likelihoods as `fit-genomic`, and the same use of each locus's
 `.p0`/`.p1` parental frequencies, which are recorded in the locus
-summary. Every locus must have data for the same individuals.
+summary. Loci may be missing at different individuals (as
+`generate-genomic-input` writes them, `n` = 0); with `--individual-col`
+given, loci are lined up by individual and missing genotypes are left out
+of the likelihood.
 
 ```bash
 hycline fit-hierarchical-genomic --input converted.csv --individual-col individual \
@@ -605,10 +609,6 @@ themselves estimated from the spread across loci, so a handful of loci
 (fewer than ~5) commonly gives poor convergence (high R-hat, many
 divergences) rather than a useful fit. If you see that, either add more
 loci or use `fit-genomic` (independent fitting) instead.
-
-Requires every locus to have data for exactly the same individuals -- no
-per-locus missing data. If your loci don't share individuals exactly, use
-`fit-genomic` instead.
 
 Model-specific flags: `--mu-u-scale`/`--sigma-u-scale` (bias
 hyperpriors), `--mu-log-v-loc`/`--mu-log-v-scale`/`--sigma-log-v-scale`

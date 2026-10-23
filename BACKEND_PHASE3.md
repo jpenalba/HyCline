@@ -729,8 +729,7 @@ accurate (0.215/0.235), with low v power (0.58) and, at depth 3 on called
 genotypes, the highest centre false-positive rate (0.114). Run times
 (whole pipeline): HyCline 91 s (genotypes) / 136 s (depth 3), bgchm 279 /
 862 s, gghybrid 552 / 534 s; the depth-3 runs shared the machine with a
-test-suite run, so their times are rough. Full tables:
-`benchmarking/tool_comparison_example/README.md`.
+test-suite run, so their times are rough.
 
 A wrong first result, corrected: the first bgchm run script estimated
 genotype-likelihood parental frequencies with `est_p(..., HMC = FALSE)`,
@@ -746,3 +745,53 @@ bgchm and gghybrid intervals are posterior quantiles. Parental panels of 20
 and 100 loci of moderate-to-strong differentiation is one design; weaker
 differentiation, smaller panels, missing data and non-uniform hybrid-index
 distributions are not covered yet.
+
+### 9.6 Further designs, the Italian sparrows, and the summary PDF
+
+`benchmarking/HyCline_Tool_Comparison.pdf` (built by
+`benchmarking/make_comparison_report_pdf.py` from the archived scores)
+summarizes every comparison. Each design varies one thing from section
+9.5's baseline (true genotypes, 3 seeds): weak differentiation (parental
+frequencies differing by >= 0.3), small panels (5 + 5), 20% missing
+genotypes, bimodal hybrid indices (Beta(0.5, 0.5)) and skewed ones
+(Beta(1.5, 6)). `benchmarking/tool_comparison/<design>/` holds each data
+set's truth, inputs and run scripts for all four tools, the scored outputs
+and timings (`benchmarking/archive_comparison.py`);
+`compare_tools.py --score-only` reproduces every score from them.
+
+Hybrid index: the three tools stay within 0.004 of each other in every
+design. Clines: HyCline's hierarchical model and bgchm lead throughout;
+with weak differentiation both shrink rate outliers toward neutral (power
+0.15-0.18); with skewed hybrid indices gghybrid's centre estimates break
+down (median |logit c| error 1.37) and HyCline's MLE degrades (0.36), the
+hierarchical models do not (0.155-0.159).
+
+Two wrong first runs, corrected. (1) The first small-panel run used the
+simulator's default `--hybrid-freqs panel`, which draws hybrids from the
+panels' realized frequencies, so the tools saw exactly the frequencies
+the hybrids came from and 5 + 5 panels cost nothing. `compare_tools.py`
+gained `--hybrid-freqs`; the small-panel design and a matching 20 + 20
+reference ("sampled panels") use `population`. That run is kept as
+`small_panels_exact_freqs`. (2) Section 9.5's bgchm HMC setting.
+
+The finding that matters most: with panels sampled from the parental
+populations, every tool's cline false-positive rate rises -- 6-14% of
+neutral loci flagged with 20 + 20 references, 13-35% with 5 + 5, against
+0-6% with exact panel frequencies -- and hybrid-index coverage falls with
+5 + 5 (HyCline 0.82, gghybrid 0.80, bgchm 0.90). All three tools treat
+the panel frequencies as exact; this is the parental-frequency
+uncertainty listed in the README backlog.
+
+The 20%-missing design found a HyCline limitation: `fit-hierarchical-genomic`
+refused hard-count loci missing at different individuals. It now lines
+loci up by individual and enters a missing genotype with 0 sampled
+alleles, which leaves it out of the likelihood exactly (regression test
+`test_cli_fit_hierarchical_genomic_handles_missing_genotypes`).
+
+Italian sparrows with all three tools (`benchmarking/italy_sparrow_tools.py`;
+scores in `benchmarking/tool_comparison/italy_sparrows/`): hybrid indices
+agree at r >= 0.9998 (HyCline vs bgchm mean |difference| 0.0017), each at
+r = 0.992 with BGC; clines from HyCline's hierarchical model and bgchm
+agree at r = 0.989 (log v) and 0.990 (logit c), and rank-correlate with
+BGC's beta and alpha at 0.855 and -0.952 (bgchm 0.824 and -0.956,
+gghybrid 0.775 and -0.927).

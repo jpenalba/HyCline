@@ -668,8 +668,9 @@ command:**
   hierarchical clines?" above and BACKEND_PHASE4.md section 8 for why
   that's the biologically meaningful reference point.
 - `hycline fit-hierarchical-genomic` -- the CLI command, same wide-format
-  multi-locus CSV as `fit-genomic`, with the same dense-data
-  requirement and error handling as `fit-hierarchical-geographic`. Verified on the
+  multi-locus CSV as `fit-genomic`. Hard-count loci missing at different
+  individuals are lined up by individual (with `--individual-col`), a
+  missing genotype entering with 0 sampled alleles. Verified on the
   Phase 3 synthetic multi-locus dataset to correctly recover known true
   parameters (barrier/permeable/biased loci all correctly identified)
   with clean convergence.
@@ -1461,6 +1462,21 @@ inferred from reading the reader code:
   monitoring long benchmarking runs -- kept here rather than fixed
   immediately only because it surfaced while scoping other work, not
   because it's expected to be difficult.
+
+- **Carry reference-panel uncertainty in the parental allele
+  frequencies into hybrid index and genomic clines.** HyCline -- like
+  gghybrid and bgchm as run here -- uses each panel's frequency estimate as
+  if exact. The tool comparison (`benchmarking/HyCline_Tool_Comparison.pdf`,
+  BACKEND_PHASE3.md section 9.6) measured the cost when the panels are
+  samples of the parental populations, as in real data: 6-14% of neutral
+  loci flagged as cline outliers with 20 + 20 reference individuals and
+  13-35% with 5 + 5, against 0-6% with exact frequencies, and hybrid-index
+  interval coverage of 0.82 with 5 + 5. A contained route: genotype
+  probabilities are quadratic in the allele frequency, so averaging them
+  over a Beta posterior for each parental frequency (from the panel's
+  allele counts, or the beagle EM estimate's effective count) is closed
+  form -- no MCMC -- and fits into `estimate_hybrid_index_ml` and the
+  genomic-cline likelihoods alike.
 
 ### Tier 2 -- real, moderate-effort improvements, mostly about scale and speed
 
