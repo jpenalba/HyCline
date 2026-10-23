@@ -38,8 +38,8 @@ import numpyro.distributions as dist
 from numpyro.infer import MCMC, NUTS
 
 from hycline.inference.mcmc_genomic_hierarchical import (
-    HierarchicalGenomicFitResult, _genomic_cline_core_jax, _parental_allele_freq_jax,
-    _parental_freq_arrays,
+    HierarchicalGenomicFitResult, _genomic_cline_core_jax, _model_parental_freqs,
+    _parental_allele_freq_jax, _parental_beta_arrays, _parental_freq_arrays,
 )
 from hycline.inference.mcmc_hierarchical_gl import _marginal_log_likelihood_jax
 
@@ -48,7 +48,8 @@ _EPS = 1e-6
 
 def _hierarchical_genomic_gl_batch_model(hybrid_index, log_gl0, log_gl1, log_gl2, n_loci,
                                           p0, p1, mu_u_scale, sigma_u_scale,
-                                          mu_log_v_loc, mu_log_v_scale, sigma_log_v_scale):
+                                          mu_log_v_loc, mu_log_v_scale, sigma_log_v_scale,
+                                          p_beta=None):
     # population-level (hyper) parameters, centered at the neutral null
     # (mu_u=0, mu_log_v=0 i.e. mu_v=1) -- see BACKEND_PHASE4.md section 8
     # for why that's the biologically meaningful reference point, same
@@ -63,6 +64,7 @@ def _hierarchical_genomic_gl_batch_model(hybrid_index, log_gl0, log_gl1, log_gl2
         log_v = numpyro.sample("log_v", dist.Normal(mu_log_v, sigma_log_v))
 
     v = jnp.exp(log_v)
+    p0, p1 = _model_parental_freqs(p0, p1, p_beta)
     phi = _genomic_cline_core_jax(hybrid_index[None, :], u[:, None], v[:, None])
     p = jnp.clip(_parental_allele_freq_jax(phi, p0, p1), _EPS, 1.0 - _EPS)
 
@@ -77,6 +79,8 @@ def fit_hierarchical_genomic_batch_gl(hybrid_index, log_gl0, log_gl1, log_gl2,
                                        sigma_log_v_scale: float = 1.0,
                                        parental_freq_pop0: Optional[np.ndarray] = None,
                                        parental_freq_pop1: Optional[np.ndarray] = None,
+                                       parental_beta_pop0: Optional[tuple] = None,
+                                       parental_beta_pop1: Optional[tuple] = None,
                                        num_warmup: int = 1500, num_samples: int = 1500,
                                        num_chains: int = 4, seed: int = 0
                                        ) -> HierarchicalGenomicFitResult:
@@ -121,6 +125,9 @@ def fit_hierarchical_genomic_batch_gl(hybrid_index, log_gl0, log_gl1, log_gl2,
     parental_freq_pop0, parental_freq_pop1 : optional (n_loci,) parental
         frequencies of the counted allele, as in
         `fit_hierarchical_genomic_batch`. Default 0 and 1 for every locus.
+    parental_beta_pop0, parental_beta_pop1 : optional parental-frequency
+        posteriors, as in `fit_hierarchical_genomic_batch` (latent p0/p1
+        when given).
     num_warmup, num_samples, num_chains, seed : standard NUTS/MCMC controls
 
     Returns
@@ -129,6 +136,7 @@ def fit_hierarchical_genomic_batch_gl(hybrid_index, log_gl0, log_gl1, log_gl2,
     """
     n_loci = log_gl0.shape[0]
     p0, p1 = _parental_freq_arrays(n_loci, parental_freq_pop0, parental_freq_pop1)
+    p_beta = _parental_beta_arrays(n_loci, parental_beta_pop0, parental_beta_pop1)
     if locus_names is None:
         locus_names = [f"locus_{i}" for i in range(n_loci)]
 
@@ -141,8 +149,10 @@ def fit_hierarchical_genomic_batch_gl(hybrid_index, log_gl0, log_gl1, log_gl2,
               log_gl1=jnp.asarray(log_gl1), log_gl2=jnp.asarray(log_gl2), n_loci=n_loci,
               p0=p0, p1=p1, mu_u_scale=mu_u_scale, sigma_u_scale=sigma_u_scale,
               mu_log_v_loc=mu_log_v_loc, mu_log_v_scale=mu_log_v_scale,
-              sigma_log_v_scale=sigma_log_v_scale)
+              sigma_log_v_scale=sigma_log_v_scale, p_beta=p_beta)
 
-    idata = az.from_numpyro(mcmc, coords={"locus": locus_names},
-                             dims={"u": ["locus"], "log_v": ["locus"]})
+    dims = {"u": ["locus"], "log_v": ["locus"]}
+    if p_beta is not None:
+        dims.update({"p0": ["locus"], "p1": ["locus"]})
+    idata = az.from_numpyro(mcmc, coords={"locus": locus_names}, dims=dims)
     return HierarchicalGenomicFitResult(idata=idata, locus_names=locus_names)

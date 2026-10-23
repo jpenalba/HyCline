@@ -142,3 +142,23 @@ def test_extreme_depth_contrast_gl_aware_achieves_better_coverage():
 
     assert gl_covers
     assert not hard_covers
+
+
+def test_hierarchical_genomic_gl_integrates_parental_freqs_given_their_posteriors():
+    from hycline.diagnostics.convergence import check
+
+    hybrid_index, log_gl0, log_gl1, log_gl2, *_ = _simulate_multi_locus_genomic_gl(seed=4)
+    n_loci = log_gl0.shape[0]
+    # 10-copy panels that happened to see the counted allele 0 and 10 times
+    fit = fit_hierarchical_genomic_batch_gl(
+        hybrid_index, log_gl0, log_gl1, log_gl2,
+        parental_freq_pop0=np.zeros(n_loci), parental_freq_pop1=np.ones(n_loci),
+        parental_beta_pop0=(np.full(n_loci, 0.5), np.full(n_loci, 10.5)),
+        parental_beta_pop1=(np.full(n_loci, 10.5), np.full(n_loci, 0.5)),
+        num_warmup=500, num_samples=500, num_chains=2, seed=0)
+    assert check(fit.idata).rhat_max < 1.05
+    loc = fit.locus_summary()
+    # Beta(0.5, 10.5) and Beta(10.5, 0.5) panel posteriors, updated by the
+    # hybrids (which here come from fully diagnostic parents)
+    assert ((loc["p0_mean"] > 0) & (loc["p0_mean"] < 0.1)).all()
+    assert ((loc["p1_mean"] > 0.9) & (loc["p1_mean"] < 1)).all()

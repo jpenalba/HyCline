@@ -12,9 +12,12 @@ index h is (1 - h) p0 + h p1 from the parental frequencies, genotypes are
 Hardy-Weinberg given that frequency, and h maximizes the likelihood of the
 individual's genotypes (hard calls as one-hot likelihoods, or beagle
 genotype likelihoods), with a 95% likelihood-profile interval. The same
-likelihood gghybrid uses (Bailey 2023), without its Beta prior. The Genomic
-user guide (Step 2, "How the estimate is made") walks through it step by
-step with a worked example.
+likelihood gghybrid uses (Bailey 2023), without its Beta prior. Given the
+reference panels' sizes, the parental frequencies' sampling error is
+averaged over in closed form (each panel frequency's Beta posterior;
+genotype probabilities are quadratic in the frequency), so the intervals
+include it. The Genomic user guide (Step 2, "How the estimate is made")
+walks through it step by step with a worked example.
 
 WHAT'S NOT IMPLEMENTED: propagating uncertainty in h into the downstream
 genomic cline fit, as the Bayesian models in `gghybrid` and `bgchm` do.
@@ -33,6 +36,8 @@ def estimate_hybrid_index_ml(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray,
                               parental_freq_pop0: np.ndarray,
                               parental_freq_pop1: np.ndarray,
                               include: np.ndarray | None = None,
+                              parental_beta_pop0: tuple | None = None,
+                              parental_beta_pop1: tuple | None = None,
                               freq_floor: float = 1e-3,
                               interval_drop: float | None = 1.920729) -> dict:
     """Maximum-likelihood hybrid index from per-genotype likelihoods.
@@ -63,6 +68,16 @@ def estimate_hybrid_index_ml(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray,
         reference panel doesn't make a locus impossible (log 0).
     include : optional (n_individuals, n_loci) bool; False marks missing
         genotypes, which are left out. Default: every non-NaN entry.
+    parental_beta_pop0, parental_beta_pop1 : optional (a, b) pairs of
+        (n_loci,) arrays: Beta posteriors for the parental frequencies from
+        the reference panels (`hycline.data.filter_aims.panel_beta_posteriors`),
+        which then replace `parental_freq_pop0/1`. The likelihood averages
+        over them. Because each locus's term is quadratic in the allele
+        frequency this is exact in closed form: the frequencies become the
+        Beta means and the term gains gamma Var[p], with
+        Var[p] = (1-h)^2 V0 + h^2 V1 (gamma below). The interval then
+        reflects the panels' sampling error as well as the hybrid's own
+        genotypes.
     interval_drop : log-likelihood drop defining the profile interval
         (1.92 = chi-square(1) 95% / 2); None skips the interval.
 
@@ -76,10 +91,21 @@ def estimate_hybrid_index_ml(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray,
         raise ValueError("gl0, gl1, gl2 must be 2D arrays of the same shape "
                          "(n_individuals, n_loci)")
     n_ind, n_loci = gl0.shape
-    p0 = np.clip(np.asarray(parental_freq_pop0, dtype=float), freq_floor, 1 - freq_floor)
-    p1 = np.clip(np.asarray(parental_freq_pop1, dtype=float), freq_floor, 1 - freq_floor)
+    p0 = np.asarray(parental_freq_pop0, dtype=float)
+    p1 = np.asarray(parental_freq_pop1, dtype=float)
     if p0.shape != (n_loci,) or p1.shape != (n_loci,):
         raise ValueError("parental frequency arrays must have one entry per locus")
+    if (parental_beta_pop0 is None) != (parental_beta_pop1 is None):
+        raise ValueError("parental_beta_pop0 and parental_beta_pop1 must be given together")
+    var0 = var1 = None
+    if parental_beta_pop0 is not None:
+        from hycline.models.genomic_cline import beta_moments
+        if any(np.shape(x) != (n_loci,) for x in (*parental_beta_pop0, *parental_beta_pop1)):
+            raise ValueError("parental Beta posterior arrays must have one entry per locus")
+        p0, var0 = beta_moments(*parental_beta_pop0)
+        p1, var1 = beta_moments(*parental_beta_pop1)
+    p0 = np.clip(p0, freq_floor, 1 - freq_floor)
+    p1 = np.clip(p1, freq_floor, 1 - freq_floor)
 
     total = gl0 + gl1 + gl2
     usable = np.isfinite(total) & (total > 0)
@@ -107,6 +133,12 @@ def estimate_hybrid_index_ml(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray,
     A = alpha + beta * p0[None, :] + gamma * p0[None, :] ** 2
     B = (beta + 2 * gamma * p0[None, :]) * dp
     C = gamma * dp ** 2
+    if var0 is not None:
+        # E[p^2] = E[p]^2 + (1-h)^2 V0 + h^2 V1 over the panel posteriors.
+        v0, v1 = np.nan_to_num(var0)[None, :], np.nan_to_num(var1)[None, :]
+        A = A + gamma * v0
+        B = B - 2 * gamma * v0
+        C = C + gamma * (v0 + v1)
     del alpha, beta, gamma
     chunk = max(1, 4_000_000 // max(n_ind, 1))
 

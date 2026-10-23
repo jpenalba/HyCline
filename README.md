@@ -440,7 +440,8 @@ full investigation.
   commands, converting a VCF + tab-delimited metadata file directly into any of this
   project's CSV formats. `generate-genomic-input` also writes each locus's
   parental frequencies (`<locus>.p0`/`.p1`, from the reference
-  individuals labelled `--pop1-label`/`--pop2-label`) and by default leaves the
+  individuals labelled `--pop1-label`/`--pop2-label`) and the number of
+  allele copies behind each (`.p0_n`/`.p1_n`), and by default leaves the
   reference individuals out of the cline input, as gghybrid's `ggcline`
   does. Validated end to end against known ground truth,
   not just unit tests on hand-crafted fixtures: a synthetic geographic
@@ -1462,21 +1463,6 @@ inferred from reading the reader code:
   monitoring long benchmarking runs -- kept here rather than fixed
   immediately only because it surfaced while scoping other work, not
   because it's expected to be difficult.
-
-- **Carry reference-panel uncertainty in the parental allele
-  frequencies into hybrid index and genomic clines.** HyCline -- like
-  gghybrid and bgchm as run here -- uses each panel's frequency estimate as
-  if exact. The tool comparison (`benchmarking/HyCline_Tool_Comparison.pdf`,
-  BACKEND_PHASE3.md section 9.6) measured the cost when the panels are
-  samples of the parental populations, as in real data: 6-14% of neutral
-  loci flagged as cline outliers with 20 + 20 reference individuals and
-  13-35% with 5 + 5, against 0-6% with exact frequencies, and hybrid-index
-  interval coverage of 0.82 with 5 + 5. A contained route: genotype
-  probabilities are quadratic in the allele frequency, so averaging them
-  over a Beta posterior for each parental frequency (from the panel's
-  allele counts, or the beagle EM estimate's effective count) is closed
-  form -- no MCMC -- and fits into `estimate_hybrid_index_ml` and the
-  genomic-cline likelihoods alike.
 
 ### Tier 2 -- real, moderate-effort improvements, mostly about scale and speed
 

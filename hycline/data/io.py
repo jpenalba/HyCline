@@ -490,6 +490,34 @@ def _locus_parental_freqs(df: pd.DataFrame, path: str, locus: str) -> tuple[floa
     return values[0], values[1]
 
 
+PARENTAL_BETA_SUFFIXES = (".p0_a", ".p0_b", ".p1_a", ".p1_b")
+
+
+def _locus_parental_betas(df: pd.DataFrame, path: str, locus: str) -> tuple:
+    """A locus's parental-frequency posteriors from its '{locus}.p0_a'/
+    '.p0_b'/'.p1_a'/'.p1_b' columns: Beta(a, b) parameters for '.p0' and
+    '.p1', constant down the column. (None, None) without them -- the
+    parental frequencies are then taken as exact."""
+    cols = [f"{locus}{s}" for s in PARENTAL_BETA_SUFFIXES]
+    present = [c in df.columns for c in cols]
+    if not any(present):
+        return None, None
+    if not all(present):
+        raise TransectCSVError(
+            f"Locus '{locus}' in '{path}' has only some of "
+            f"{', '.join(repr(c) for c in cols)}; the parental-frequency "
+            f"posteriors need all four columns.")
+    values = []
+    for c in cols:
+        v = pd.to_numeric(df[c], errors="coerce").dropna().unique()
+        if len(v) != 1:
+            raise TransectCSVError(
+                f"Column '{c}' in '{path}' must hold one value for the whole locus "
+                f"(found {len(v)} distinct values).")
+        values.append(float(v[0]))
+    return (values[0], values[1]), (values[2], values[3])
+
+
 def read_genomic_cline_multi_locus_wide_csv(
         path: str,
         hybrid_index_col: str = "hybrid_index",
@@ -584,10 +612,12 @@ def read_genomic_cline_multi_locus_wide_csv(
 
         try:
             p0, p1 = _locus_parental_freqs(df, path, locus)
+            beta0, beta1 = _locus_parental_betas(df, path, locus)
             results[locus] = HybridIndexLocusData(
                 hybrid_index=hybrid_index[mask], n_alleles=n_alleles[mask],
                 n_focal=n_focal[mask], individual_names=individual_names,
                 parental_freq_pop0=p0, parental_freq_pop1=p1,
+                parental_beta_pop0=beta0, parental_beta_pop1=beta1,
             )
         except ValueError as e:
             raise TransectCSVError(f"Problem with locus '{locus}' data in '{path}': {e}")
@@ -876,10 +906,12 @@ def read_genomic_gl_multi_locus_wide_csv(
 
         try:
             p0, p1 = _locus_parental_freqs(df, path, locus)
+            beta0, beta1 = _locus_parental_betas(df, path, locus)
             results[locus] = GenotypeLikelihoodLocusData(
                 hybrid_index=hybrid_index[mask], log_gl0=gl0[mask], log_gl1=gl1[mask],
                 log_gl2=gl2[mask], individual_names=individual_names,
                 parental_freq_pop0=p0, parental_freq_pop1=p1,
+                parental_beta_pop0=beta0, parental_beta_pop1=beta1,
             )
         except ValueError as e:
             raise TransectCSVError(f"Problem with locus '{locus}' data in '{path}': {e}")

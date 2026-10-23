@@ -292,3 +292,52 @@ def test_pool_center_jax_and_numpy_reparameterization_are_exact():
 
     np.testing.assert_allclose(phi_direct, phi_derived, atol=1e-12)
     assert u_derived == pytest.approx(u_true)
+
+
+# ---------------------------------------------------------------------------
+# Parental frequencies integrated out (their panel posteriors given)
+# ---------------------------------------------------------------------------
+
+def _simulate_sampled_panels(seed=7, n_loci=6, n_ind=100, n_panel=10):
+    """Neutral loci (u = 0, v = 1) between populations at 0.3 / 0.7; the
+    data carry the frequencies seen in panels of n_panel allele copies and
+    their Beta posteriors (Jeffreys prior)."""
+    from hycline.models.genomic_cline import genomic_cline_allele_freq
+    rng = np.random.default_rng(seed)
+    h = rng.uniform(0.02, 0.98, n_ind)
+    freq = genomic_cline_allele_freq(h, GenomicClineParams(u=0.0, v=1.0), 0.3, 0.7)
+    n_focal = rng.binomial(2, np.broadcast_to(freq, (n_loci, n_ind))).astype(float)
+    p0 = rng.binomial(n_panel, 0.3, n_loci) / n_panel
+    p1 = rng.binomial(n_panel, 0.7, n_loci) / n_panel
+    return (h, np.full((n_loci, n_ind), 2.0), n_focal, p0, p1,
+            (p0 * n_panel + 0.5, (1 - p0) * n_panel + 0.5),
+            (p1 * n_panel + 0.5, (1 - p1) * n_panel + 0.5))
+
+
+def test_integrated_parental_freqs_are_summarized_and_widen_the_rate_posterior():
+    h, n_alleles, n_focal, p0, p1, beta0, beta1 = _simulate_sampled_panels()
+    kw = dict(parental_freq_pop0=p0, parental_freq_pop1=p1,
+              num_warmup=500, num_samples=500, num_chains=2, seed=3)
+    fixed = fit_hierarchical_genomic_batch(h, n_alleles, n_focal, **kw)
+    integrated = fit_hierarchical_genomic_batch(h, n_alleles, n_focal,
+                                                parental_beta_pop0=beta0,
+                                                parental_beta_pop1=beta1, **kw)
+    assert "p0" not in fixed.idata.posterior
+    loc = integrated.locus_summary()
+    for col in ("p0_mean", "p0_sd", "p1_mean", "p1_sd"):
+        assert col in loc
+    assert ((loc["p0_mean"] > 0) & (loc["p0_mean"] < 1)).all()
+    assert (loc["p0_sd"] > 0.03).all()  # a 10-copy panel leaves p0 uncertain
+    log_v_sd = lambda r: r.idata.posterior["log_v"].std(dim=("chain", "draw")).values
+    assert log_v_sd(integrated).mean() > log_v_sd(fixed).mean()
+    # posterior means sit between the panel estimates and the population
+    # frequencies the hybrids came from (0.3 / 0.7)
+    assert np.abs(loc["p0_mean"] - 0.3).mean() < np.abs(p0 - 0.3).mean() + 0.02
+
+
+def test_parental_freq_posteriors_must_be_given_together():
+    h, n_alleles, n_focal, p0, p1, beta0, _ = _simulate_sampled_panels()
+    with pytest.raises(ValueError, match="together"):
+        fit_hierarchical_genomic_batch(h, n_alleles, n_focal, parental_freq_pop0=p0,
+                                       parental_freq_pop1=p1, parental_beta_pop0=beta0,
+                                       num_warmup=10, num_samples=10, num_chains=1)

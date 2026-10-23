@@ -287,6 +287,48 @@ def filter_aims_beagle(input_path: str, metadata_path: str, output_path: str,
     }
 
 
+def panel_allele_copies(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray,
+                        include: np.ndarray, grid_size: int = 400) -> np.ndarray:
+    """Per-locus effective number of allele copies behind a reference
+    panel's allele-frequency estimate, from genotype likelihoods.
+
+    The panel frequency's posterior (Jeffreys Beta(1/2, 1/2) prior, Hardy-
+    Weinberg genotypes, the included individuals' likelihoods) is evaluated
+    on a grid; n is the count for which Beta(p n + 1/2, (1 - p) n + 1/2)
+    has the same mean and variance: n = m (1 - m) / var - 2. With hard
+    calls (one-hot likelihoods) this is the number of called allele
+    copies; at low depth it is smaller. Arrays are (n_loci, n_samples);
+    returns (n_loci,), 0 where no individual is included.
+    """
+    L = np.stack([gl0, gl1, gl2], axis=-1).astype(float)
+    total = L.sum(axis=-1, keepdims=True)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        L = np.where(total > 0, L / total, 1.0 / 3.0)
+    L = np.where(np.asarray(include, dtype=bool)[..., None], L, 1.0 / 3.0)
+    # p = sin^2(theta) with theta uniform: the Jeffreys prior times the
+    # Jacobian is constant in theta, and the points crowd toward 0 and 1,
+    # where fixed and near-fixed loci put their posterior mass.
+    theta = (np.arange(grid_size) + 0.5) / grid_size * (np.pi / 2)
+    grid = np.sin(theta) ** 2
+    hwe = np.stack([(1 - grid) ** 2, 2 * grid * (1 - grid), grid ** 2], axis=0)  # (3, G)
+    log_prior = np.zeros(grid_size)
+    n_loci = L.shape[0]
+    out = np.zeros(n_loci)
+    chunk = max(1, 2_000_000 // max(L.shape[1] * grid_size, 1))
+    for a in range(0, n_loci, chunk):
+        b = min(a + chunk, n_loci)
+        logpost = np.log(L[a:b] @ hwe).sum(axis=1) + log_prior  # (chunk, G)
+        logpost -= logpost.max(axis=1, keepdims=True)
+        w = np.exp(logpost)
+        w /= w.sum(axis=1, keepdims=True)
+        m = w @ grid
+        var = w @ grid ** 2 - m ** 2
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out[a:b] = np.maximum(m * (1 - m) / var - 2, 0.0)
+    out[~np.asarray(include, dtype=bool).any(axis=1)] = 0.0
+    return out
+
+
 def beagle_missing_mask(gl0: np.ndarray, gl1: np.ndarray, gl2: np.ndarray) -> np.ndarray:
     """(n_loci, n_samples) boolean mask of missing beagle genotypes: NaN or
     all-zero likelihoods, or three equal likelihoods -- ANGSD writes
@@ -648,3 +690,42 @@ def build_filter_summary(result: dict, *, input_path: str, output_path: str, fmt
     lines += ["", "Warnings", "--------"]
     lines += [f"WARNING: {w}" for w in issues] or ["None."]
     return "\n".join(lines) + "\n", issues
+
+
+def panel_beta_posteriors(freq: np.ndarray, n: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per-locus Beta(a, b) posteriors for one reference panel's allele
+    frequencies, from the panel estimates `freq` and the (effective)
+    numbers of allele copies behind them `n` (`panel_allele_copies`, or
+    twice the called individuals): a = freq n + alpha, b = (1 - freq) n +
+    beta.
+
+    The prior Beta(alpha, beta) is the panel's distribution of allele
+    frequencies across loci, fitted by maximum likelihood to all the
+    loci's counts (beta-binomial; empirical Bayes). A fixed prior would
+    pull every frequency toward its own mean -- Jeffreys' Beta(1/2, 1/2)
+    toward 0.5 -- by the same amount at every locus, which systematically
+    narrows the parental difference of near-fixed markers and stretches
+    hybrid indices away from 0.5. Fitted, the prior is U-shaped for an
+    ancestry-informative panel (alpha, beta ~ 0.15 for near-fixed
+    markers) and pulls a 0/n panel count only as far from 0 as such loci
+    actually are. With fewer than 10 usable loci there is too little to
+    fit and Jeffreys' prior is used. Returns (a, b) arrays, NaN where
+    `freq` is unknown.
+    """
+    from scipy.optimize import minimize
+    from scipy.special import betaln
+    freq, n = np.asarray(freq, dtype=float), np.asarray(n, dtype=float)
+    ok = np.isfinite(freq) & np.isfinite(n) & (n > 0)
+    alpha = beta = 0.5
+    if ok.sum() >= 10:
+        k, m = freq[ok] * n[ok], n[ok]
+
+        def nll(x):
+            a, b = np.exp(x)
+            return -np.sum(betaln(k + a, m - k + b) - betaln(a, b))
+
+        fit = minimize(nll, [np.log(0.5), np.log(0.5)], method="L-BFGS-B",
+                       bounds=[(np.log(0.01), np.log(100.0))] * 2)
+        alpha, beta = np.exp(fit.x)
+    return freq * n + alpha, (1.0 - freq) * n + beta
+

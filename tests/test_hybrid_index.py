@@ -76,3 +76,84 @@ def test_ml_individual_without_usable_loci_raises():
     include[1] = False
     with pytest.raises(ValueError, match="no usable genotype"):
         estimate_hybrid_index_ml(*_one_hot(g), p0, p1, include=include)
+
+
+# ---------------------------------------------------------------------------
+# reference-panel uncertainty (parental_beta_pop0 / parental_beta_pop1)
+# ---------------------------------------------------------------------------
+
+def _panel_beta(freq, n):
+    """Beta posteriors for panel frequencies from n allele copies (Jeffreys
+    prior), as (a, b) arrays."""
+    freq, n = np.asarray(freq, dtype=float), np.asarray(n, dtype=float)
+    return freq * n + 0.5, (1 - freq) * n + 0.5
+
+
+def _beta_averaged_loglik(g_row, beta0, beta1, grid):
+    """log L(h) averaged over the Beta panel posteriors by Gauss-Jacobi
+    quadrature (exact for the genotype probabilities, which are
+    polynomials in the frequencies), one locus at a time."""
+    from scipy.special import roots_jacobi
+
+    def nodes(a, b):
+        # Beta(a, b) on [0, 1] is the Jacobi weight (1-x)^(b-1) (1+x)^(a-1)
+        x, w = roots_jacobi(8, b - 1, a - 1)
+        return (x + 1) / 2, w / w.sum()
+
+    out = np.zeros(grid.size)
+    for l in range(len(beta0[0])):
+        q0, w0 = nodes(beta0[0][l], beta0[1][l])
+        q1, w1 = nodes(beta1[0][l], beta1[1][l])
+        pp = (1 - grid)[:, None, None] * q0[None, :, None] + grid[:, None, None] * q1[None, None, :]
+        geno = [(1 - pp) ** 2, 2 * pp * (1 - pp), pp ** 2][g_row[l]]
+        out += np.log((geno * w0[None, :, None] * w1[None, None, :]).sum(axis=(1, 2)))
+    return out
+
+
+def test_ml_with_panel_sizes_matches_numerical_beta_average():
+    # The closed form (Beta means plus gamma * Var[p]) against averaging the
+    # genotype probabilities over the two Beta posteriors numerically.
+    _, g, p0, p1 = _simulate_genotypes(seed=5, n_ind=6, n_loci=12)
+    p0, p1 = np.round(p0 * 10) / 10, np.round(p1 * 10) / 10  # 5 + 5 diploid panels
+    n0 = np.full(12, 10.0)
+    n1 = np.full(12, 10.0)
+    beta0, beta1 = _panel_beta(p0, n0), _panel_beta(p1, n1)
+    r = estimate_hybrid_index_ml(*_one_hot(g), p0, p1, parental_beta_pop0=beta0,
+                                 parental_beta_pop1=beta1)
+    grid = np.linspace(0, 1, 20001)
+    for i in range(6):
+        ll = _beta_averaged_loglik(g[i], beta0, beta1, grid)
+        inside = grid[ll >= ll.max() - 1.920729]
+        assert r["hybrid_index"][i] == pytest.approx(grid[np.argmax(ll)], abs=1e-4)
+        assert r["lower"][i] == pytest.approx(inside.min(), abs=1e-4)
+        assert r["upper"][i] == pytest.approx(inside.max(), abs=1e-4)
+
+
+def test_ml_with_large_panels_matches_fixed_frequencies():
+    _, g, p0, p1 = _simulate_genotypes()
+    fixed = estimate_hybrid_index_ml(*_one_hot(g), p0, p1)
+    big = np.full(g.shape[1], 1e7)
+    panels = estimate_hybrid_index_ml(*_one_hot(g), p0, p1,
+                                      parental_beta_pop0=_panel_beta(p0, big),
+                                      parental_beta_pop1=_panel_beta(p1, big))
+    np.testing.assert_allclose(panels["hybrid_index"], fixed["hybrid_index"], atol=1e-4)
+
+
+def test_ml_small_panels_widen_the_interval():
+    _, g, p0, p1 = _simulate_genotypes()
+    p0, p1 = np.round(p0 * 10) / 10, np.round(p1 * 10) / 10
+    small = np.full(g.shape[1], 10.0)
+    fixed = estimate_hybrid_index_ml(*_one_hot(g), p0, p1)
+    panels = estimate_hybrid_index_ml(*_one_hot(g), p0, p1,
+                                      parental_beta_pop0=_panel_beta(p0, small),
+                                      parental_beta_pop1=_panel_beta(p1, small))
+    hybrids = slice(10, None)  # the first 10 individuals are parentals (h = 0 or 1)
+    width = lambda r: (r["upper"] - r["lower"])[hybrids]
+    assert width(panels).mean() > 1.05 * width(fixed).mean()
+
+
+def test_ml_panel_sizes_must_be_given_together():
+    _, g, p0, p1 = _simulate_genotypes(n_ind=3, n_loci=10)
+    with pytest.raises(ValueError, match="together"):
+        estimate_hybrid_index_ml(*_one_hot(g), p0, p1,
+                                 parental_beta_pop0=_panel_beta(p0, np.full(10, 10.0)))

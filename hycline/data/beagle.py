@@ -328,6 +328,10 @@ def write_beagle_genomic_gl_csv(beagle_data: BeagleData, metadata_df, sample_col
         if parental_freqs is not None:
             new_columns[f"{marker}.p0"] = np.full(len(common_samples), parental_freqs[0][j])
             new_columns[f"{marker}.p1"] = np.full(len(common_samples), parental_freqs[1][j])
+            if len(parental_freqs) == 6:  # Beta(a, b) posteriors of p0 and p1
+                for k, suffix in enumerate((".p0_a", ".p0_b", ".p1_a", ".p1_b")):
+                    new_columns[f"{marker}{suffix}"] = np.full(len(common_samples),
+                                                              parental_freqs[2 + k][j])
         n_written += 1
 
     out = pd.concat([pd.DataFrame(base), pd.DataFrame(new_columns)], axis=1)

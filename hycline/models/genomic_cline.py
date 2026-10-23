@@ -101,3 +101,62 @@ def genomic_cline_allele_freq(h, params: GenomicClineParams,
 
 def param_names() -> list[str]:
     return ["u", "v"]
+
+
+def beta_quadrature(a: float, b: float, k: int):
+    """Nodes, weights (summing to 1) and the density's log at the nodes,
+    for averaging a smooth function over Beta(a, b). Gauss-Jacobi, exact
+    for polynomials of degree up to 2k - 1 and unaffected by the density's
+    singularity at 0 or 1 when a or b < 1; for a + b > 1000, where
+    Gauss-Jacobi overflows (scipy's rule computes 2^(a + b - 1)) and the
+    Beta is close to normal, Gauss-Hermite on that normal (whose log
+    density is then the one returned)."""
+    from scipy.special import roots_hermitenorm, roots_jacobi
+    from scipy.stats import beta as beta_dist, norm
+    a, b = float(a), float(b)
+    if a + b <= 1000:
+        x, w = roots_jacobi(k, b - 1.0, a - 1.0)  # weight (1-x)^(b-1) (1+x)^(a-1)
+        nodes = np.clip((x + 1.0) / 2.0, 1e-12, 1.0 - 1e-12)
+        log_density = beta_dist.logpdf(nodes, a, b)
+    else:
+        x, w = roots_hermitenorm(k)
+        mean = a / (a + b)
+        sd = np.sqrt(mean * (1.0 - mean) / (a + b + 1.0))
+        nodes = np.clip(mean + sd * x, 1e-12, 1.0 - 1e-12)
+        log_density = norm.logpdf(nodes, mean, sd)
+    return nodes, w / w.sum(), log_density
+
+
+def parental_nodes(panel_betas, node_betas, k: int):
+    """Quadrature over two independent parental frequencies with Beta
+    posteriors `panel_betas` = [(a0, b0), (a1, b1)]: a k x k grid of
+    (p0, p1) nodes and log weights, so that sum(exp(log_w) * f(p0, p1))
+    approximates E[f]. Nodes come from Gauss-Jacobi rules for `node_betas`
+    (the panel posteriors themselves, or Betas nearer where f is large),
+    each weighted by panel density / node density. Returns flat
+    (k * k,) arrays p0_nodes, p1_nodes, log_w."""
+    from scipy.stats import beta as beta_dist
+    nodes, log_w = [], []
+    for (a, b), (pa, pb) in zip(node_betas, panel_betas):
+        q, w, log_density = beta_quadrature(a, b, k)
+        nodes.append(q)
+        log_w.append(np.log(w) + beta_dist.logpdf(q, pa, pb) - log_density)
+    p0_nodes, p1_nodes = (g.ravel() for g in np.meshgrid(*nodes, indexing="ij"))
+    return p0_nodes, p1_nodes, np.add.outer(*log_w).ravel()
+
+
+def widened_beta(mean, var, factor: float):
+    """Beta with the given mean and `factor` times the given variance, for
+    placing quadrature nodes around a posterior; a and b are kept >= 1/2,
+    since Gauss-Jacobi rules degrade as either approaches 0 (a posterior
+    pinned near 0 or 1 then gets nodes from a slightly wider Beta)."""
+    mean, var = np.asarray(mean, dtype=float), np.asarray(var, dtype=float)
+    tot = np.maximum(mean * (1 - mean) / (factor * np.maximum(var, 1e-14)) - 1.0, 1.0)
+    return np.maximum(mean * tot, 0.5), np.maximum((1 - mean) * tot, 0.5)
+
+
+def beta_moments(a, b):
+    """Mean and variance of Beta(a, b) (scalars or arrays)."""
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    mean = a / (a + b)
+    return mean, mean * (1.0 - mean) / (a + b + 1.0)

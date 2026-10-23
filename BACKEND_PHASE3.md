@@ -778,9 +778,9 @@ The finding that matters most: with panels sampled from the parental
 populations, every tool's cline false-positive rate rises -- 6-14% of
 neutral loci flagged with 20 + 20 references, 13-35% with 5 + 5, against
 0-6% with exact panel frequencies -- and hybrid-index coverage falls with
-5 + 5 (HyCline 0.82, gghybrid 0.80, bgchm 0.90). All three tools treat
-the panel frequencies as exact; this is the parental-frequency
-uncertainty listed in the README backlog.
+5 + 5 (HyCline 0.82, gghybrid 0.80, bgchm 0.90). All three tools treated
+the panel frequencies as exact; section 9.7 carries their uncertainty
+through HyCline.
 
 The 20%-missing design found a HyCline limitation: `fit-hierarchical-genomic`
 refused hard-count loci missing at different individuals. It now lines
@@ -795,3 +795,119 @@ r = 0.992 with BGC; clines from HyCline's hierarchical model and bgchm
 agree at r = 0.989 (log v) and 0.990 (logit c), and rank-correlate with
 BGC's beta and alpha at 0.855 and -0.952 (bgchm 0.824 and -0.956,
 gghybrid 0.775 and -0.927).
+
+### 9.7 Reference-panel uncertainty in the parental frequencies
+
+The tool comparison (9.6) found every tool's cline false-positive rate
+rising when reference panels are samples of the parental populations. The
+fix carries each panel frequency's sampling error into the hybrid index
+and the clines.
+
+**What was built.** `generate-genomic-input` writes, per locus, the Beta
+posterior of each parental frequency: `<locus>.p0_a/.p0_b/.p1_a/.p1_b`,
+`a = p n + alpha`, `b = (1 - p) n + beta`, with n the allele copies
+behind the estimate (twice the called references for VCF; for beagle,
+`filter_aims.panel_allele_copies`, the copy count whose Beta matches the
+mean and variance of the references' genotype-likelihood posterior -- exact
+for hard calls and fixed loci). The prior Beta(alpha, beta) is fitted per
+panel across loci by beta-binomial maximum likelihood
+(`filter_aims.panel_beta_posteriors`; Jeffreys below 10 usable loci).
+
+- `estimate_hybrid_index_ml(parental_beta_pop0/1=...)`: genotype
+  probabilities are quadratic in the allele frequency, so averaging over
+  both Betas is exact in closed form -- frequencies become the Beta means
+  and each locus's quadratic gains gamma Var[p], Var[p] = (1-h)^2 V0 +
+  h^2 V1. Matches Gauss-Jacobi quadrature to 1e-4 (estimate and interval
+  ends).
+- `fit-genomic` (`mle_genomic.fit_with_parental_panels`, both hard counts
+  and GLs): maximizes the hybrids' likelihood averaged over p0/p1 --
+  an integrated likelihood -- by adaptive Gauss-Jacobi quadrature (16
+  nodes per frequency, re-centred on p0/p1's posterior until its moments
+  settle). k = 2; p0/p1 reported as posterior means with posterior SDs.
+- `fit-hierarchical-genomic`: p0/p1 latent per locus with the Betas as
+  priors; `locus_summary` adds `p0_mean/p0_sd/p1_mean/p1_sd`.
+
+**Wrong turns, in order.**
+
+1. *Profile likelihood.* The first `fit-genomic` version maximized
+   jointly over (u, v, p0, p1). On neutral simulated loci (150 per
+   design, 30-copy panels, 50 hybrids, true log v = 0) it moved mean log v
+   from +0.16 (fixed frequencies) to +0.40 with exact panels and from
+   +0.09 to +0.26 with sampled ones: pulling p0 and p1 together while
+   steepening the cline fits a few dozen hybrids almost as well, and every
+   locus has its own two nuisance frequencies. Integrating them out
+   instead gave +0.22 and +0.10.
+   Its own bugs on the way: L-BFGS-B stalled with a 1e8-copy panel (an
+   objective of ~1e7 swamps finite differences -- panel terms are now
+   measured from their mode) and started from a degenerate (u = 15)
+   cline when p0/p1 were held at the panel estimates (two starts now).
+2. *Non-adaptive quadrature.* 20 nodes spread over the panel posteriors
+   were within 0.0005 SE of 80 nodes at 100 hybrids but off by up to 0.17
+   SE in log v at 1000 hybrids, where the hybrids pin p0/p1 down more
+   tightly than the panel. Re-centring the nodes on p0/p1's posterior fixed
+   it (16 nodes: <= 0.07 SE in every case tried). Two quadrature bugs
+   surfaced there: scipy's Gauss-Jacobi rule overflows above a + b ~ 1020
+   (the switch to Gauss-Hermite was at 2e4), and a node Beta with a or b
+   near 0 degenerates (now >= 1/2).
+3. *Jeffreys prior.* With a fixed Beta(1/2, 1/2) prior the posterior means
+   pull every frequency toward 0.5 by (0.5 - p)/(n + 1), narrowing the
+   parental difference of near-fixed markers at every locus at once. On
+   depth-1 beagle data of 100% AIMs this stretched hybrid indices away
+   from 0.5 (slope 1.05; 95% coverage 0.60 over 5 seeds, against 0.91
+   with exact-taken frequencies). The fitted (empirical-Bayes) prior is
+   strongly U-shaped there (alpha, beta ~ 0.15) and gave 0.965.
+4. *Integrating p0/p1 out of the hierarchical model.* Latent p0/p1 mixed
+   poorly on the weak-differentiation design (R-hat up to 1.08, 10
+   divergences). Marginalizing them by quadrature inside the NUTS model
+   was ~8x slower and worse (R-hat 1.20, 401 divergences on the same
+   data): the difficulty is the posterior, not the sampler. As v -> 0 the
+   cline goes flat, and with p0/p1 uncertain u is then unidentified (only
+   p0 + (p1 - p0) invlogit(u) is), a funnel either way. The latent version
+   was kept.
+
+**Which simulated panels.** The simulator's default `--hybrid-freqs
+panel` draws hybrids from the panels' realized frequencies, so the panel
+estimates are exactly right and averaging over their error can only
+blur. With panels and hybrids sampled from population frequencies, as in
+real data, it is the other way round. Hybrid index, 5 seeds each (15 + 15
+references, 40 hybrids, 2000 SNPs; coverage of the 95% interval):
+
+| Design | fixed | EB |
+|---|---|---|
+| sampled, 100% AIMs, depth 1 / genotypes | 0.91 / 0.86 | 0.965 / 0.895 |
+| sampled, 30% AIMs, depth 2 / genotypes | 0.735 / 0.79 | 0.875 / 0.93 |
+| sampled, 5% AIMs, depth 5 / genotypes | 0.395 / 0.385 | 0.81 / 0.805 |
+| exact panels, 30% AIMs, depth 5 / genotypes | 0.915 / 0.95 | 0.795 / 0.795 |
+
+With fixed frequencies the sampled designs compress hybrid indices toward
+0.5 (slope 0.70-0.99): a reference panel seldom sees a rare allele, so
+panel frequencies are more extreme than the populations'. A sampled
+100,000-SNP beagle file (30 + 30 references, depth 4, 5% AIMs): every
+locus, coverage 0.06 fixed / 0.20 EB (mean error 0.040 / 0.020); the 5000
+AIMs, 0.84 / 0.90 (0.0050 / 0.0045) -- AIMs remain the advice. The
+Italian sparrows are unchanged (r = 0.9998 with gghybrid, 0.992 with BGC,
+99.8% of intervals overlapping BGC's).
+
+**Tool comparison, HyCline re-run on the archived data sets** (other
+tools unchanged; per design, mean over seeds; v / centre):
+
+| Design | HyCline MLE false pos. | MLE power | hierarchical false pos. | hierarchical power |
+|---|---|---|---|---|
+| sampled 20 + 20 | 0.13/0.12 -> 0.05/0.03 | 0.72/0.97 -> 0.70/0.80 | 0.09/0.12 -> 0.03/0.005 | 0.70/1.00 -> 0.58/0.80 |
+| sampled 5 + 5 | 0.22/0.33 -> 0.08/0.04 | 0.65/0.77 -> 0.57/0.40 | 0.17/0.33 -> 0.00/0.01 | 0.65/0.87 -> 0.32/0.30 |
+| exact 5 + 5 | 0.05/0.04 -> 0.03/0.02 | 0.75/0.87 -> 0.53/0.47 | 0.03/0.03 -> 0.00/0.00 | 0.82/1.00 -> 0.32/0.23 |
+| baseline (exact 20 + 20) | 0.05/0.03 -> 0.02/0.01 | 0.80/0.97 -> 0.75/0.63 | 0.02/0.02 -> 0.01/0.00 | 0.78/0.97 -> 0.47/0.63 |
+
+Hybrid-index coverage with 5 + 5 sampled panels: 0.82 -> 0.95 (bgchm
+0.90, gghybrid 0.80). The false positives are fixed; the price is power,
+most for centre outliers (a shifted centre and shifted parental
+frequencies are partly interchangeable) and for the hierarchical model,
+and in the exact-panel designs it is all price. HyCline's run time per
+data set rose about 2-3x. Hierarchical convergence on the
+weak-differentiation design fell short of the R-hat < 1.01 rule (1.015-
+1.08) and on two exact 5 + 5 seeds (1.010, 1.016).
+
+Regression test: `test_cli_genomic_pipeline_carries_reference_panel_uncertainty`
+(the archived `small_panels/genotypes_s1` data: centre false positives
+33% -> 1%, hybrid-index coverage 0.82 -> 0.95, and the old behaviour kept
+visible by dropping the Beta columns).

@@ -16,6 +16,7 @@ code path with a relabeled x-axis.
 from __future__ import annotations
 
 import numpy as np
+from scipy.special import gammaln
 from scipy.stats import binom
 
 from hycline.data.schema import HybridIndexLocusData
@@ -44,3 +45,20 @@ def negative_log_likelihood(param_vec: np.ndarray, data: HybridIndexLocusData) -
     if params.v <= 0:
         return np.inf
     return -log_likelihood(data, params)
+
+
+def log_likelihood_at(data: HybridIndexLocusData, params: GenomicClineParams,
+                      p0, p1) -> np.ndarray:
+    """`log_likelihood` with the parental frequencies p0/p1 given explicitly,
+    as scalars or as equal-shaped arrays of candidate values (for fits that
+    average over uncertain parental frequencies); returns one total per
+    candidate pair."""
+    p0, p1 = np.asarray(p0, dtype=float)[..., None], np.asarray(p1, dtype=float)[..., None]
+    p = np.clip(genomic_cline_allele_freq(data.hybrid_index, params, p0, p1),
+                _EPS, 1.0 - _EPS)
+    # binom.logpmf written out: the same values, much faster over many
+    # candidate pairs
+    k, n = data.n_focal, data.n_alleles
+    log_choose = np.sum(gammaln(n + 1) - gammaln(k + 1) - gammaln(n - k + 1))
+    return log_choose + (k * np.log(p) + (n - k) * np.log1p(-p)).sum(axis=-1)
+

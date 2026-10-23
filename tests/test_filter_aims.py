@@ -5,7 +5,7 @@ import pytest
 from hycline.data.filter_aims import (
     compute_aim_mask, match_samples_to_populations,
     filter_aims_beagle, filter_aims_csv, filter_aims_vcf,
-    beagle_missing_mask, build_filter_summary, em_allele_freq,
+    beagle_missing_mask, build_filter_summary, em_allele_freq, panel_allele_copies,
 )
 
 
@@ -684,3 +684,61 @@ def test_filter_aims_vcf_population_all_missing_is_quiet(tmp_path):
                                  str(tmp_path / "out.vcf"))
     assert np.isnan(result["freq_pop2"][1])
     assert result["mask"].tolist() == [True, False]
+
+
+# ---------------------------------------------------------------------------
+# panel_allele_copies
+# ---------------------------------------------------------------------------
+
+def test_panel_allele_copies_hard_calls_count_the_called_alleles():
+    rng = np.random.default_rng(0)
+    g = rng.integers(0, 3, size=(30, 8))  # (n_loci, n_samples)
+    gl = [(g == k).astype(float) for k in range(3)]
+    include = rng.uniform(size=g.shape) < 0.8
+    include[0] = False
+    n = panel_allele_copies(*gl, include)
+    expected = 2.0 * include.sum(axis=1)
+    np.testing.assert_allclose(n[1:], expected[1:], rtol=1e-6)
+    assert n[0] == 0.0
+
+
+def test_panel_allele_copies_fixed_locus_is_exact():
+    gl = [np.zeros((1, 10)), np.zeros((1, 10)), np.ones((1, 10))]
+    n = panel_allele_copies(*gl, np.ones((1, 10), bool))
+    assert n[0] == pytest.approx(20.0, rel=1e-6)
+
+
+def test_panel_allele_copies_uncertain_genotypes_count_less():
+    # Equal likelihoods carry no information about the panel frequency.
+    sure = [np.array([[1.0, 0, 0, 0]]), np.array([[0, 1.0, 0, 0]]), np.array([[0, 0, 1.0, 1.0]])]
+    vague = [x.copy() for x in sure]
+    for x in vague:
+        x[0, 3] = 1.0
+    inc = np.ones((1, 4), bool)
+    n_sure, n_vague = panel_allele_copies(*sure, inc)[0], panel_allele_copies(*vague, inc)[0]
+    assert n_sure == pytest.approx(8.0, rel=1e-6)
+    assert 5.0 < n_vague < 7.5
+
+
+def test_panel_beta_posteriors_fit_the_across_locus_prior():
+    # Panel counts at 4000 loci whose frequencies follow Beta(0.2, 0.3): the
+    # fitted prior recovers that distribution, and a = freq n + alpha.
+    from hycline.data.filter_aims import panel_beta_posteriors
+    rng = np.random.default_rng(1)
+    p = rng.beta(0.2, 0.3, 4000)
+    n = np.full(4000, 20.0)
+    freq = rng.binomial(20, p) / 20
+    a, b = panel_beta_posteriors(freq, n)
+    alpha, beta = a - freq * n, b - (1 - freq) * n
+    assert np.allclose(alpha, alpha[0]) and np.allclose(beta, beta[0])
+    assert alpha[0] == pytest.approx(0.2, abs=0.03)
+    assert beta[0] == pytest.approx(0.3, abs=0.04)
+
+
+def test_panel_beta_posteriors_fall_back_to_jeffreys_with_few_loci():
+    from hycline.data.filter_aims import panel_beta_posteriors
+    freq = np.array([0.0, 0.5, 1.0, np.nan])
+    a, b = panel_beta_posteriors(freq, np.array([10.0, 10.0, 10.0, 0.0]))
+    np.testing.assert_allclose(a[:3], freq[:3] * 10 + 0.5)
+    np.testing.assert_allclose(b[:3], (1 - freq[:3]) * 10 + 0.5)
+    assert np.isnan(a[3])

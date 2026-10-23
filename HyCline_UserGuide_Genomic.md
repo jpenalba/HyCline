@@ -186,15 +186,25 @@ ALT allele:
    labelled reference individuals: their sample frequency for VCF input,
    and for beagle input the pooled maximum-likelihood frequency from their
    genotype likelihoods (the estimator `filter-aims` uses), so low depth
-   doesn't pull it toward 0.5. They are clipped to [0.001, 0.999] so that an
-   allele absent from a finite reference panel can't make a locus
-   impossible -- locus A is used as 0.001/0.999. Loci without parental
-   frequencies are skipped.
-3. **Express genotypes as likelihoods.** A VCF call becomes 1 for the
+   doesn't pull it toward 0.5. Loci without parental frequencies are
+   skipped.
+3. **Say how certain each parental frequency is.** A panel of 15
+   individuals estimates a frequency only to within several percent, and
+   an allele it never saw may still be present in the population. Each
+   frequency gets a Beta posterior, Beta(p n + alpha, (1 - p) n + beta),
+   from the n allele copies behind it (twice the called references for
+   VCF input; for beagle input, the number of hard calls that would pin
+   the frequency down as well as the references' genotype likelihoods
+   do). The prior Beta(alpha, beta) is fitted to the panel's frequencies
+   across all loci (empirical Bayes): for a panel of near-fixed markers it
+   is strongly U-shaped (alpha, beta ~ 0.15), so an allele unseen in 30
+   copies is taken to be rare, not absent, without pulling every
+   frequency toward 0.5.
+4. **Express genotypes as likelihoods.** A VCF call becomes 1 for the
    called genotype and 0 for the other two; beagle likelihoods are
    normalized to sum to 1. Missing genotypes get 1/3 each, which adds the
    same constant at every h and so has no effect.
-4. **Write down the likelihood of h.** In an individual with hybrid
+5. **Write down the likelihood of h.** In an individual with hybrid
    index h, each allele copy comes from parental population 1 with
    probability h, so the counted allele's frequency at a locus is
    p(h) = (1 - h) p0 + h p1, and under Hardy-Weinberg proportions the
@@ -215,30 +225,42 @@ ALT allele:
    flipping -- its ALT frequency simply falls as h rises. Locus C's term
    barely changes with h (0.25 to 0.36), so it barely moves the estimate;
    weakly differentiated loci down-weight themselves.
-5. **Find the maximum.** Each locus's term is a quadratic in h, so its
+
+   The table takes p0 and p1 as known, for clarity (kept inside
+   [0.001, 0.999], as the estimator keeps any frequency it is given, so
+   locus A is used as 0.001/0.999). With their Beta
+   posteriors each probability is averaged over both frequencies, and
+   because it is a quadratic in p this is exact in closed form: p0 and p1
+   become their posterior means and each locus's term gains
+   (L0 - 2 L1 + L2) Var[p], with Var[p] = (1-h)^2 Var[p0] + h^2 Var[p1].
+   The likelihood flattens a little, so the interval includes the panels'
+   sampling error.
+6. **Find the maximum.** Each locus's term is a quadratic in h, so its
    coefficients are computed once. The log-likelihood is evaluated on a
    grid of 21 values (0, 0.05, ..., 1), because it can have more than one
    peak; then, around the best grid point, bisection on the sign of the
    slope narrows h down to about 1e-10. A maximum at 0 or 1 is reached as
    that boundary, which is why parental reference individuals often come
    out at exactly 0 or 1. Example: **h = 0.576**.
-6. **Compute the 95% interval**: every h whose log-likelihood is within
+7. **Compute the 95% interval**: every h whose log-likelihood is within
    1.92 of the maximum (the chi-square likelihood-profile rule). Each end
    is found by walking the grid outward to the first point below that
    level and bisecting; if no grid point on one side is below it, the
    interval reaches 0 or 1. Example: **[0.089, 0.964]** -- wide, because
    three loci say little; with hundreds of AIMs intervals are typically a
    few hundredths wide.
-7. **Write one row per individual**, reference individuals included:
+8. **Write one row per individual**, reference individuals included:
    `hybrid_index`, `hybrid_index_lower`, `hybrid_index_upper`, and
    `n_loci` (loci with a usable genotype; 3 in the example). Step 3 then
    leaves the reference individuals out of the cline-fitting input by
    default, so their exact 0 or 1 values don't enter the cline fit.
 
-Assumptions: the parental frequencies are treated as exact (with many
-weakly differentiated loci their errors accumulate -- see "Which loci to
-use"); each individual's alleles are treated as independent draws given
-h, so F1s, heterozygous at every fixed AIM, aren't modelled specially;
+Assumptions: the reference individuals are a random sample of their
+parental populations, so their frequencies are estimates of the
+populations' (if the hybrids descend from exactly these individuals, the
+panel frequencies are exact and averaging over their error only blurs
+the estimate); each individual's alleles are treated as independent
+draws given h, so F1s, heterozygous at every fixed AIM, aren't modelled specially;
 and h is passed on as a point estimate. This is the hybrid-index
 likelihood gghybrid uses (Bailey 2023, section 2.1.1), which places a
 Beta prior on h and reports the posterior mode; with a uniform prior
@@ -415,7 +437,9 @@ Each locus gets its counted allele's frequency (VCF ALT, beagle allele2)
 in the two parental populations, written as `<locus>.p0` (the
 `--pop1-label` population, hybrid index 0) and `<locus>.p1` (the
 `--pop2-label` population, hybrid index 1) columns alongside the
-genotype data:
+genotype data, and the Beta posterior of each frequency given its
+reference panel (`<locus>.p0_a`/`.p0_b` and `.p1_a`/`.p1_b`, built as
+in Step 2's "How the estimate is made", step 3):
 
 ```
    individual  hybrid_index  snp9.n  snp9.freq  snp9.p0  snp9.p1
@@ -426,7 +450,9 @@ Step 4 uses them to model each locus's allele frequency as
 `p0 + (p1 - p0) * phi(h)` -- the form gghybrid uses (Bailey 2023,
 section 2.1.1) -- so loci needn't be fixed between the parental
 populations, and it doesn't matter which population's allele is the
-VCF's ALT.
+VCF's ALT. The `_a`/`_b` columns let it average over the panels'
+sampling error rather than take the frequencies as exact; a file without
+them (one you write yourself, say) is fitted with `.p0`/`.p1` as exact.
 
 | Flag | Meaning |
 |---|---|
@@ -469,7 +495,8 @@ counts or genotype likelihoods, one locus or thousands -- and figures out
 which it's looking at from the column names alone: `.n`/`.freq` suffix
 pairs mean hard counts; `.gl0`/`.gl1`/`.gl2` triples mean genotype
 likelihoods. `.p0`/`.p1` columns, when present, give each locus's
-parental frequencies.
+parental frequencies, and `.p0_a`/`.p0_b`/`.p1_a`/`.p1_b` their Beta
+posteriors.
 
 ```bash
 hycline fit-genomic --input genomic_input.csv --individual-col individual \
@@ -573,7 +600,10 @@ rather than each locus being fit fully independently the way
 `fit-genomic` does. Same auto-detection between hard counts and
 genotype likelihoods as `fit-genomic`, and the same use of each locus's
 `.p0`/`.p1` parental frequencies, which are recorded in the locus
-summary. Loci may be missing at different individuals (as
+summary. With the Beta-posterior columns, each locus's p0 and p1 are
+sampled alongside its cline (those posteriors as their priors), and the
+locus summary adds their posterior means and SDs (`p0_mean`, `p0_sd`,
+`p1_mean`, `p1_sd`). Loci may be missing at different individuals (as
 `generate-genomic-input` writes them, `n` = 0); with `--individual-col`
 given, loci are lined up by individual and missing genotypes are left out
 of the likelihood.
