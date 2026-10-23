@@ -317,6 +317,21 @@ above:
 The interval width is the practical guide: if it's wide for most
 individuals, loosen the filter to bring in more loci.
 
+**Run time and memory** grow with the number of genotypes (loci x
+individuals). The whole `estimate-hybrid-index` command on simulated
+beagle files with 160 individuals:
+
+| Loci | Time | Peak memory |
+|---|---|---|
+| 5,000 (AIMs) | 4.5 s | 0.37 GB |
+| 100,000 | 60 s | 1.5 GB |
+
+That is roughly 4 seconds per million genotypes and 0.3 GB plus about 75
+bytes per genotype, since the whole input is held in memory. An AIM set
+of tens of thousands of loci runs in seconds to minutes; every SNP of a
+large study does not (by the same rate, a million SNPs in 500
+individuals would need about 40 GB) -- one more reason to run it on AIMs.
+
 ### How large the reference panels should be
 
 The parental frequencies are estimated from the reference individuals
