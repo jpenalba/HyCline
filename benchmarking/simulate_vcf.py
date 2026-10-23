@@ -80,7 +80,12 @@ for every non-missing genotype: a depth d (Poisson, or negative binomial with
 --depth-dispersion, scaled per individual by --individual-depth-sd, and
 redrawn if 0 so the missing-data settings stay exact), then d reads each
 showing the ALT allele with probability (g/2)(1-e) + (1-g/2)e for true
-dosage g and per-read error e (--seq-error). The three genotype likelihoods
+dosage g and per-read error e (--seq-error); with --ref-bias b,
+heterozygotes' reads show ALT with probability 0.5 - b while the
+likelihoods still assume 0.5. --allele-dropout gives a fraction of SNPs a
+null allele whose reads never appear (heterozygotes look homozygous for
+the other allele; homozygotes for the null allele are missing), in the
+VCF and the reads alike. The three genotype likelihoods
 are computed from the read counts and normalized to sum to 1; missing
 genotypes are written as 0.333333/0.333333/0.333333, ANGSD's no-data
 encoding. Beagle markers are named <chrom>_<pos>; allele1/allele2 are the
@@ -227,12 +232,25 @@ def parse_args(argv=None):
                          "samples. 0 = every individual has --mean-depth.")
     gl.add_argument("--seq-error", type=float, default=0.01,
                     help="Per-read probability of reading the wrong allele.")
+    gl.add_argument("--ref-bias", type=float, default=0.0,
+                    help="Reference bias: at heterozygotes a read shows the ALT "
+                         "allele with probability 0.5 - REF_BIAS (e.g. 0.05 -> 45%% "
+                         "ALT reads). The genotype likelihoods still assume 0.5, as "
+                         "ANGSD's do.")
     gl.add_argument("--vcf-genotypes", choices=["true", "called"], default="true",
                     help="VCF GT values: the true simulated genotypes, or the "
                          "most likely genotype given the simulated reads (hard "
                          "calls with realistic low-depth errors). With "
                          "'called', the VCF also gets a DP field. AIM "
                          "frequency guarantees apply to the true genotypes.")
+    p.add_argument("--allele-dropout", type=float, default=0.0,
+                   help="Fraction of SNPs with a null allele (e.g. a mutation in a "
+                        "RAD restriction site): at each such SNP one allele, REF or "
+                        "ALT at random, never yields reads, so heterozygotes look "
+                        "homozygous for the other allele and homozygotes for the "
+                        "null allele are missing. Applies to the VCF (true or "
+                        "called genotypes) and the reads; recorded in the truth "
+                        "table's allele_dropout column.")
     p.add_argument("--output", "-o", required=True,
                    help="Output VCF path (.vcf or .vcf.gz).")
     p.add_argument("--metadata", default=None,
@@ -295,6 +313,10 @@ def parse_args(argv=None):
         p.error("--individual-depth-sd must be >= 0")
     if not 0.0 <= args.seq_error < 0.5:
         p.error("--seq-error must be in [0, 0.5)")
+    if not 0.0 <= args.ref_bias < 0.5:
+        p.error("--ref-bias must be in [0, 0.5)")
+    if not 0.0 <= args.allele_dropout <= 1.0:
+        p.error("--allele-dropout must be in [0, 1]")
     if args.beagle_output and not args.format_beagle:
         p.error("--beagle-output requires --format-beagle")
     pct = (args.barrier_percent, args.permeable_percent, args.biased_percent)
@@ -506,12 +528,15 @@ def draw_depths(rng, lam: np.ndarray, dispersion: float) -> np.ndarray:
     return depth
 
 
-def genotype_likelihoods(rng, geno: np.ndarray, depth: np.ndarray, err: float):
+def genotype_likelihoods(rng, geno: np.ndarray, depth: np.ndarray, err: float,
+                         ref_bias: float = 0.0):
     """Simulate ALT read counts for true dosages `geno` at depths `depth` and
     return ((n_samples, 3) normalized likelihoods for dosage 0/1/2, ALT read
-    counts)."""
+    counts). With `ref_bias`, heterozygotes' reads show ALT with probability
+    0.5 - ref_bias, while the likelihoods assume 0.5."""
     q = np.array([err, 0.5, 1.0 - err])  # P(read shows ALT | dosage 0/1/2)
-    alt_reads = rng.binomial(depth, q[geno])
+    q_reads = np.array([err, 0.5 - ref_bias, 1.0 - err])
+    alt_reads = rng.binomial(depth, q_reads[geno])
     with np.errstate(divide="ignore", invalid="ignore"):
         log_q, log_1mq = np.log(q), np.log1p(-q)
         loglik = (alt_reads[:, None] * log_q[None, :]
@@ -589,6 +614,8 @@ def main(argv=None) -> int:
     # Reads get their own stream, so turning beagle output or called
     # genotypes on/off never changes the simulated genotypes for a given seed.
     read_rng = np.random.default_rng(np.random.SeedSequence(args.seed).spawn(1)[0])
+    # Allele dropout too (child 1 is the cline stream, below).
+    dropout_rng = np.random.default_rng(np.random.SeedSequence(args.seed).spawn(3)[2])
 
     pops = (["pop1"] * args.n_pop1 + ["pop2"] * args.n_pop2
             + ["popH"] * args.n_popH)
@@ -677,7 +704,8 @@ def main(argv=None) -> int:
 
         truth.write("\t".join(["chrom", "pos", "id", "marker", "is_aim", "freq_pop1",
                                "freq_pop2", "low_pop", "source_freq_pop1",
-                               "source_freq_pop2", "cline_class", "u", "v"]) + "\n")
+                               "source_freq_pop2", "cline_class", "u", "v",
+                               "allele_dropout"]) + "\n")
 
         for s in range(args.n_snps):
             chrom = f"chr{s // snps_per_chrom + 1}"
@@ -715,6 +743,16 @@ def main(argv=None) -> int:
                 p_h = src1 + (src2 - src1) * phi
                 geno[pop_arr == "popH"] = rng.binomial(2, p_h).astype(np.int8)
 
+            # Allele dropout: the genotypes as sequencing sees them.
+            dropout = ""
+            if args.allele_dropout and dropout_rng.random() < args.allele_dropout:
+                dropout = "ALT" if dropout_rng.random() < 0.5 else "REF"
+                lost = (geno == 2) if dropout == "ALT" else (geno == 0)
+                new_missing = lost & ~missing
+                missing = missing | lost
+                missing_per_sample += new_missing
+                geno = np.where(geno == 1, 0 if dropout == "ALT" else 2, geno).astype(np.int8)
+
             ref, alt = rng.choice(bases, size=2, replace=False)
             marker = f"{chrom}_{pos}"
 
@@ -727,7 +765,7 @@ def main(argv=None) -> int:
                 lik = np.full((n_samples, 3), 1.0 / 3.0)
                 alt_reads = np.zeros(n_samples, dtype=np.int64)
                 lik[called], alt_reads[called] = genotype_likelihoods(
-                    read_rng, geno[called], depth[called], args.seq_error)
+                    read_rng, geno[called], depth[called], args.seq_error, args.ref_bias)
                 if beagle:
                     cells = [missing_gl if m else
                              f"{l0:.6f}\t{l1:.6f}\t{l2:.6f}"
@@ -755,7 +793,7 @@ def main(argv=None) -> int:
             truth.write("\t".join([
                 chrom, str(pos), snp_id, marker, str(int(aim)), f"{f1:.6f}", f"{f2:.6f}",
                 low_pop, f"{src1:.6f}", f"{src2:.6f}", cline_class[s],
-                f"{cline_u[s]:.6f}", f"{cline_v[s]:.6f}"]) + "\n")
+                f"{cline_u[s]:.6f}", f"{cline_v[s]:.6f}", dropout]) + "\n")
 
     if beagle:
         beagle.close()

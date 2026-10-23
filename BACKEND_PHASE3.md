@@ -991,3 +991,43 @@ AIMs stay slightly below nominal (0.92-0.93) at 10-40 per population.
 The Genomic guide's Step 2 ("How large the reference panels should be")
 gives the table to users.
 
+### 9.9 Small-panel warning and sequencing realism
+
+**Warning.** `estimate-hybrid-index` now warns (stderr; the run
+completes) when the smaller reference panel's median called individuals
+per locus falls below the 9.8 thresholds: 10 when the loci are near-fixed
+(median |p1 - p0| >= 0.9), 40 otherwise. The message gives the panel
+sizes, the median difference and the simulated coverage for that kind of
+locus. Thresholds are the constants `_MIN_PANEL_NEAR_FIXED`,
+`_MIN_PANEL` and `_NEAR_FIXED_DIFF` in `cli.py`. Test:
+`test_cli_estimate_hybrid_index_warns_about_small_reference_panels`. The
+Genomic guide's Step 2 example (15 + 15 references, median difference
+0.61) now shows it.
+
+**Simulator.** `simulate_vcf.py` gained `--ref-bias` (heterozygotes'
+reads show ALT with probability 0.5 - b; the likelihoods still assume
+0.5) and `--allele-dropout` (a fraction of SNPs with a null allele, REF or
+ALT at random, applied to the VCF and the reads; recorded in the truth
+table's new `allele_dropout` column). Dropout draws from its own random
+stream, so with both options off the output for a given seed is
+byte-identical to before. Test:
+`test_simulator_reference_bias_and_allele_dropout`.
+
+**Benchmark** (`benchmarking/hybrid_index_sequencing.py`; results in
+`benchmarking/hybrid_index_sequencing/`). 40 + 40 sampled references,
+AIMs >= 0.5, 100 hybrids, 2000 SNPs, 5 replicates per scenario; loci by
+filter-aims on the same data; each scenario scored from beagle genotype
+likelihoods and from called genotypes of the same reads. True genotypes:
+error 0.018, coverage 0.91. With genotype likelihoods every scenario --
+depth 5, 2 and 1, uneven depth across sites (negative-binomial size 1)
+and individuals (log-SD 1), 3% sequencing error, reference bias 0.05,
+dropout at 10% of loci, and all of them together at depth 3 -- gave error
+0.020-0.023 and coverage 0.91-0.92, with intervals widening from 0.081 to
+0.108 at depth 1. Called genotypes gave similar error (0.021-0.024) but
+intervals that don't widen: coverage 0.82 at depth 1-2, 0.85 combined,
+and 0.79 for the lowest-depth quarter of individuals with uneven depth.
+Reference bias, sequencing error and random-allele dropout had no
+measurable effect at these levels; dropout biased toward one
+population's allele, or GLs computed with a misspecified error rate, were
+not simulated. The Genomic guide recommends beagle input at low depth.
+

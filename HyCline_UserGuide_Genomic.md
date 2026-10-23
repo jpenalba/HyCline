@@ -126,6 +126,8 @@ Parsing 'hi_aims.vcf' ...
   --pop1-label 'parent0' (hybrid index 0): 15 reference individuals
   --pop2-label 'parent1' (hybrid index 1): 15 reference individuals
 
+WARNING: the smaller reference panel has 14 called individuals per locus (median; 14 and 14 for --pop1-label and --pop2-label), and the median parental frequency difference is 0.61. The parental frequencies are taken as exact, so a small panel's sampling error pulls hybrid indices toward 0.5 and makes their intervals too narrow: in simulations with loci this differentiated, 95% intervals contained the true hybrid index for about 50% of hybrids with 5 references per population, 75% with 10, 85% with 20 and 90% with 40. At least 40 per population is recommended for these loci; see the Genomic guide, 'How large the reference panels should be'.
+
 Hybrid index estimated for 90 individuals.
   Range: [0.000, 1.000]  (parental reference individuals should land near 0 or 1 -- a useful sanity check on the result)
 
@@ -144,7 +146,10 @@ sample33_popH	0.18347595310769976	0.13992310611065473	0.23034432947169986	374
 
 `hybrid_index_lower`/`hybrid_index_upper` are a 95% likelihood-profile
 interval and `n_loci` is the number of loci with a genotype for that
-individual. The file works directly as Step 3's `--metadata`.
+individual. The warning (printed to stderr; the run still completes) says
+the 15-individual reference panels are small for these moderately
+differentiated loci -- see "How large the reference panels should be"
+below. The file works directly as Step 3's `--metadata`.
 
 Parental reference individuals usually come out at exactly 0 or 1 --
 under this estimator that is their most likely value. Step 3 leaves
@@ -344,6 +349,46 @@ somewhat worse (with the simulator's true AIMs instead, coverage at 5 per
 population was 0.61 rather than 0.49), because loci that look
 differentiated in a small panel partly look that way by chance.
 `benchmarking/hybrid_index_panel_size.py` reproduces the table.
+
+`estimate-hybrid-index` prints a warning when the smaller panel falls
+below these sizes: fewer than 10 called individuals per locus (median
+over loci) when the loci are near-fixed (median parental frequency
+difference 0.9 or more), fewer than 40 otherwise.
+
+### Sequencing data: use genotype likelihoods at low depth
+
+Sequencing problems matter much less than panel size, as long as the
+input is genotype likelihoods (beagle). The same kind of simulated zone
+as above with 40 references per population and AIMs differing by >= 0.5,
+sequenced several ways (5 replicates; loci chosen by `filter-aims` on the
+same data; error / 95% coverage, and coverage for the quarter of hybrids
+with the lowest depth):
+
+| Sequencing | Genotype likelihoods | Called genotypes |
+|---|---|---|
+| none (true genotypes) | 0.018 / 0.91 | -- |
+| depth 5 | 0.020 / 0.91 (0.90) | 0.022 / 0.88 (0.90) |
+| depth 2 | 0.023 / 0.92 (0.92) | 0.024 / 0.82 (0.86) |
+| depth 1 | 0.023 / 0.92 (0.91) | 0.024 / 0.82 (0.81) |
+| depth 5, uneven across sites | 0.020 / 0.91 (0.93) | 0.021 / 0.88 (0.91) |
+| depth 5, uneven across individuals | 0.021 / 0.92 (0.90) | 0.023 / 0.87 (0.79) |
+| depth 5, 3% sequencing error | 0.021 / 0.91 (0.90) | 0.023 / 0.88 (0.88) |
+| depth 5, reference bias 0.05 | 0.020 / 0.92 (0.92) | 0.021 / 0.89 (0.90) |
+| depth 5, allele dropout at 10% of loci | 0.021 / 0.91 (0.90) | 0.022 / 0.90 (0.91) |
+| all of these, depth 3 | 0.022 / 0.92 (0.90) | 0.023 / 0.85 (0.82) |
+
+With genotype likelihoods the estimates barely lose accuracy and the
+intervals widen to match (0.081 with true genotypes, 0.108 at depth 1).
+Called genotypes are about as accurate but their intervals stay narrow,
+because each call is taken as certain: at depth 1-2, and for the
+lowest-depth individuals when depth is uneven, they cover the truth only
+79-86% of the time. So from low-coverage sequencing, give
+`estimate-hybrid-index` the ANGSD beagle file rather than a VCF of called
+genotypes. Reference bias of 0.05, 3% sequencing error and allele dropout
+at 10% of loci made no measurable difference here; dropout was simulated
+with the null allele chosen at random, and since the reference panels see
+the same dropout, their frequencies absorb most of it.
+`benchmarking/hybrid_index_sequencing.py` reproduces the table.
 
 ### Using one AIM set for hybrid index and another for cline fitting
 

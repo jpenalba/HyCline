@@ -619,7 +619,11 @@ catching a real problem on real data.
   and the number of loci used. Validated against the simulator's true hybrid indices across
   depths, AIM fractions and missing data -- see BACKEND_PHASE3.md
   section 5 and the Genomic guide's Step 2, which also documents why it
-  should be run on AIMs rather than every SNP.
+  should be run on AIMs rather than every SNP, how large the reference
+  panels should be (it warns below 10 references per population for
+  near-fixed loci and 40 otherwise; BACKEND_PHASE3.md section 9.8), and
+  why low-depth data should be given as genotype likelihoods (section
+  9.9).
 - `hycline.inference.mle_genomic` -- MLE fitting via `scipy.optimize`,
   same approach as Phase 1's geographic MLE. `GenomicFitResult.summary()`
   includes a plain-language interpretation of the fitted rate parameter

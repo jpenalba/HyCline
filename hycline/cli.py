@@ -3042,6 +3042,45 @@ def _fit_genomic_gl(args, out_dir, prefix) -> int:
     return 0
 
 
+# Reference individuals per population (called, median over loci) below which
+# estimate-hybrid-index warns: the parental frequencies are taken as exact,
+# and smaller panels made the 95% intervals too narrow in simulations with
+# panels sampled from their populations (BACKEND_PHASE3.md section 9.8).
+_MIN_PANEL_NEAR_FIXED = 10
+_MIN_PANEL = 40
+_NEAR_FIXED_DIFF = 0.9
+
+
+def _warn_small_reference_panels(include, pop1_mask, pop2_mask, freq_pop1, freq_pop2):
+    """Warn (stderr) when the smaller reference panel is too small for the
+    loci used. `include` is (n_samples, n_loci), True where a genotype was
+    called."""
+    called = [int(np.median(include[mask].sum(axis=0))) for mask in (pop1_mask, pop2_mask)]
+    diff = np.abs(np.asarray(freq_pop2) - np.asarray(freq_pop1))
+    diff = float(np.median(diff[np.isfinite(diff)])) if np.isfinite(diff).any() else 0.0
+    n_small = min(called)
+    near_fixed = diff >= _NEAR_FIXED_DIFF
+    needed = _MIN_PANEL_NEAR_FIXED if near_fixed else _MIN_PANEL
+    if n_small >= needed:
+        return
+    if near_fixed:
+        expected = ("with near-fixed loci like these, 95% intervals contained the true "
+                    "hybrid index for about 80% of hybrids with 5 references per "
+                    "population and 92% with 10")
+    else:
+        expected = ("with loci this differentiated, 95% intervals contained the true "
+                    "hybrid index for about 50% of hybrids with 5 references per "
+                    "population, 75% with 10, 85% with 20 and 90% with 40")
+    print(f"\nWARNING: the smaller reference panel has {n_small} called individuals "
+          f"per locus (median; {called[0]} and {called[1]} for --pop1-label and "
+          f"--pop2-label), and the median parental frequency difference is "
+          f"{diff:.2f}. The parental frequencies are taken as exact, so a small panel's "
+          f"sampling error pulls hybrid indices toward 0.5 and makes their intervals "
+          f"too narrow: in simulations {expected}. At least {needed} per population "
+          f"is recommended for these loci; see the Genomic guide, 'How large the "
+          f"reference panels should be'.", file=sys.stderr)
+
+
 def cmd_estimate_hybrid_index(args) -> int:
     import pandas as pd
     from hycline.data.filter_aims import match_samples_to_populations
@@ -3116,6 +3155,7 @@ def cmd_estimate_hybrid_index(args) -> int:
     else:
         gl = [g.T for g in (data.gl0, data.gl1, data.gl2)]
         include = ~missing.T
+    _warn_small_reference_panels(include, pop1_mask, pop2_mask, freq_pop1, freq_pop2)
     try:
         ml = estimate_hybrid_index_ml(*gl, freq_pop1, freq_pop2, include=include)
     except ValueError as e:

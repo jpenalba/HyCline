@@ -3170,3 +3170,63 @@ def test_stack_genomic_by_individual_aligns_loci_and_zeroes_missing():
     assert names == ["A", "B"] and list(h) == [0.1, 0.5, 0.9] and n_missing == 1
     np.testing.assert_array_equal(n, [[2, 2, 2], [2, 0, 2]])
     np.testing.assert_array_equal(k, [[0, 1, 2], [1, 0, 2]])
+
+
+def test_cli_estimate_hybrid_index_warns_about_small_reference_panels(tmp_path):
+    # Thresholds from benchmarking/hybrid_index_panel_size.py: 40 references
+    # per population for moderately differentiated loci, 10 for near-fixed ones.
+    labels = ["--pop1-label", "pop1", "--pop2-label", "pop2"]
+
+    def run(n_parental, *sim_args):
+        d = tmp_path / f"p{n_parental}{'_'.join(sim_args)}"
+        d.mkdir()
+        prefix = _simulated_zone(d, "--n-pop1", str(n_parental), "--n-pop2", str(n_parental),
+                                 "--n-popH", "10", "--n-snps", "200", "--aim-percent", "100",
+                                 "--hybrid-freqs", "population", "--seed", "4", *sim_args)
+        result = _run_cli(["estimate-hybrid-index", "--input", f"{prefix}.vcf",
+                           "--metadata", f"{prefix}_metadata.tsv", *labels,
+                           "--output", str(d / "hi.tsv")])
+        assert result.returncode == 0, result.stderr
+        return result.stderr
+
+    moderate = ("--aim-freq-diff", "0.5")
+    warning = run(20, *moderate)
+    assert "smaller reference panel has 20 called individuals" in warning
+    assert "At least 40 per population" in warning
+    assert "WARNING" not in run(40, *moderate)
+    # near-fixed AIMs (the simulator's default): 10 per population is enough
+    assert "WARNING" not in run(10)
+    assert "At least 10 per population" in run(6)
+
+
+def test_simulator_reference_bias_and_allele_dropout(tmp_path):
+    common = ["--n-pop1", "10", "--n-pop2", "10", "--n-popH", "20", "--n-snps", "300",
+              "--aim-percent", "30", "--format-beagle", "--mean-depth", "8", "--seed", "3"]
+    (tmp_path / "plain").mkdir()
+    (tmp_path / "bias").mkdir()
+    (tmp_path / "drop").mkdir()
+    plain = _simulated_zone(tmp_path / "plain", *common)
+    bias = _simulated_zone(tmp_path / "bias", *common, "--ref-bias", "0.1",
+                           "--vcf-genotypes", "called")
+    drop = _simulated_zone(tmp_path / "drop", *common, "--allele-dropout", "1")
+
+    def genotypes(prefix):
+        return [line.rstrip("\n").split("\t")[9:] for line in open(f"{prefix}.vcf")
+                if not line.startswith("#")]
+
+    true = genotypes(plain)
+    ref = alt = 0
+    for t_row, b_row in zip(true, genotypes(bias)):
+        for t, b in zip(t_row, b_row):
+            if t == "0/1":
+                r, a = map(int, b.split(":")[2].split(","))
+                ref, alt = ref + r, alt + a
+    assert 0.38 < alt / (ref + alt) < 0.42  # 0.5 - 0.1
+
+    # every SNP has a null allele: heterozygotes look homozygous for the
+    # other allele and homozygotes for the null allele are missing
+    truth = pd.read_csv(f"{drop}_truth.tsv", sep="\t")
+    expect = {"ALT": {"0/0": "0/0", "0/1": "0/0", "1/1": "./.", "./.": "./."},
+              "REF": {"0/0": "./.", "0/1": "1/1", "1/1": "1/1", "./.": "./."}}
+    for null, t_row, d_row in zip(truth["allele_dropout"], true, genotypes(drop)):
+        assert [expect[null][t] for t in t_row] == d_row
