@@ -86,39 +86,13 @@ def _parental_freq_arrays(n_loci, parental_freq_pop0, parental_freq_pop1):
     return jnp.asarray(p0), jnp.asarray(p1)
 
 
-def _parental_beta_arrays(n_loci, parental_beta_pop0, parental_beta_pop1):
-    """Per-locus Beta(a, b) posteriors (a0, b0, a1, b1) for the parental
-    frequencies, or None when none are given (the frequencies are then
-    fixed)."""
-    if parental_beta_pop0 is None and parental_beta_pop1 is None:
-        return None
-    if parental_beta_pop0 is None or parental_beta_pop1 is None:
-        raise ValueError("parental_beta_pop0 and parental_beta_pop1 must be given together")
-    arrays = [np.asarray(x, dtype=float) for x in (*parental_beta_pop0, *parental_beta_pop1)]
-    if any(x.shape != (n_loci,) for x in arrays):
-        raise ValueError("parental Beta posterior arrays must have one entry per locus")
-    return tuple(jnp.asarray(x) for x in arrays)
-
-
-def _model_parental_freqs(p0, p1, p_beta):
-    """Inside a model: the fixed parental frequencies, or -- with their panel
-    posteriors -- per-locus latent p0 ~ Beta(a0, b0), p1 ~ Beta(a1, b1),
-    estimated jointly with the clines."""
-    if p_beta is None:
-        return p0, p1
-    a0, b0, a1, b1 = p_beta
-    return (numpyro.sample("p0", dist.Beta(a0, b0).to_event(1)),
-            numpyro.sample("p1", dist.Beta(a1, b1).to_event(1)))
-
-
 def _hierarchical_genomic_batch_model(hybrid_index, n_alleles, n_focal, n_loci,
                                        p0, p1,
                                        mu_u_scale, sigma_u_scale,
                                        mu_log_v_loc, mu_log_v_scale, sigma_log_v_scale,
                                        pool_center: bool = False,
                                        mu_center_scale: float = 2.0,
-                                       sigma_center_scale: float = 2.0,
-                                       p_beta=None):
+                                       sigma_center_scale: float = 2.0):
     # log_v's hierarchical prior is shared by both parameterizations below
     # -- pooling choice only affects how the *other* cline parameter is
     # modeled (raw u vs. logit(center) = u/v).
@@ -150,7 +124,6 @@ def _hierarchical_genomic_batch_model(hybrid_index, n_alleles, n_focal, n_loci,
             log_v = numpyro.sample("log_v", dist.Normal(mu_log_v, sigma_log_v))
         v = jnp.exp(log_v)
 
-    p0, p1 = _model_parental_freqs(p0, p1, p_beta)
     phi = _genomic_cline_core_jax(hybrid_index[None, :], u[:, None], v[:, None])
     p = jnp.clip(_parental_allele_freq_jax(phi, p0, p1), _EPS, 1.0 - _EPS)
     numpyro.sample("obs", dist.Binomial(total_count=n_alleles, probs=p), obs=n_focal)
@@ -223,11 +196,6 @@ class HierarchicalGenomicFitResult:
                     "u_mean": float(np.mean(u_i)), "u_sd": float(np.std(u_i)),
                     "v_mean": float(np.mean(v_i)), "v_sd": float(np.std(v_i)),
                 }
-            if "p0" in post:
-                for k in ("p0", "p1"):
-                    draws = post[k].isel(locus=i).values
-                    row[f"{k}_mean"] = float(np.mean(draws))
-                    row[f"{k}_sd"] = float(np.std(draws))
             rows.append(row)
         return pd.DataFrame(rows)
 
@@ -249,8 +217,6 @@ def fit_hierarchical_genomic_batch(hybrid_index: np.ndarray, n_alleles: np.ndarr
                                     mu_center_scale: float = 2.0, sigma_center_scale: float = 2.0,
                                     parental_freq_pop0: Optional[np.ndarray] = None,
                                     parental_freq_pop1: Optional[np.ndarray] = None,
-                                    parental_beta_pop0: Optional[tuple] = None,
-                                    parental_beta_pop1: Optional[tuple] = None,
                                     num_warmup: int = 1500, num_samples: int = 1500,
                                     num_chains: int = 4, seed: int = 0
                                     ) -> HierarchicalGenomicFitResult:
@@ -318,16 +284,6 @@ def fit_hierarchical_genomic_batch(hybrid_index: np.ndarray, n_alleles: np.ndarr
         the expected frequency is p0 + (p1 - p0) * phi(h) (see
         `hycline.models.genomic_cline.genomic_cline_allele_freq`). Default
         0 and 1 for every locus.
-    parental_beta_pop0, parental_beta_pop1 : optional (a, b) pairs of
-        (n_loci,) arrays: Beta posteriors for the parental frequencies from
-        the reference panels (`hycline.data.filter_aims.panel_beta_posteriors`).
-        When given, each locus's p0 and p1 are latent, with these as
-        priors, and are estimated jointly with the clines (`locus_summary`
-        reports their posterior means and SDs); otherwise they are fixed at
-        `parental_freq_pop0/1`. Where loci are weakly differentiated,
-        uncertain parental frequencies leave u nearly unidentified as v
-        approaches 0, and convergence can suffer (BACKEND_PHASE3.md
-        section 9.7): check the diagnostics.
     num_warmup, num_samples, num_chains, seed : standard NUTS/MCMC controls
 
     Returns
@@ -336,7 +292,6 @@ def fit_hierarchical_genomic_batch(hybrid_index: np.ndarray, n_alleles: np.ndarr
     """
     n_loci = n_alleles.shape[0]
     p0, p1 = _parental_freq_arrays(n_loci, parental_freq_pop0, parental_freq_pop1)
-    p_beta = _parental_beta_arrays(n_loci, parental_beta_pop0, parental_beta_pop1)
     if locus_names is None:
         locus_names = [f"locus_{i}" for i in range(n_loci)]
 
@@ -350,14 +305,11 @@ def fit_hierarchical_genomic_batch(hybrid_index: np.ndarray, n_alleles: np.ndarr
               mu_u_scale=mu_u_scale, sigma_u_scale=sigma_u_scale,
               mu_log_v_loc=mu_log_v_loc, mu_log_v_scale=mu_log_v_scale,
               sigma_log_v_scale=sigma_log_v_scale, pool_center=pool_center,
-              mu_center_scale=mu_center_scale, sigma_center_scale=sigma_center_scale,
-              p_beta=p_beta)
+              mu_center_scale=mu_center_scale, sigma_center_scale=sigma_center_scale)
 
     if pool_center:
         dims = {"logit_center": ["locus"], "log_v": ["locus"]}
     else:
         dims = {"u": ["locus"], "log_v": ["locus"]}
-    if p_beta is not None:
-        dims.update({"p0": ["locus"], "p1": ["locus"]})
     idata = az.from_numpyro(mcmc, coords={"locus": locus_names}, dims=dims)
     return HierarchicalGenomicFitResult(idata=idata, locus_names=locus_names)

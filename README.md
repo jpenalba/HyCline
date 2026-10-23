@@ -440,8 +440,7 @@ full investigation.
   commands, converting a VCF + tab-delimited metadata file directly into any of this
   project's CSV formats. `generate-genomic-input` also writes each locus's
   parental frequencies (`<locus>.p0`/`.p1`, from the reference
-  individuals labelled `--pop1-label`/`--pop2-label`) and the number of
-  allele copies behind each (`.p0_n`/`.p1_n`), and by default leaves the
+  individuals labelled `--pop1-label`/`--pop2-label`) and by default leaves the
   reference individuals out of the cline input, as gghybrid's `ggcline`
   does. Validated end to end against known ground truth,
   not just unit tests on hand-crafted fixtures: a synthetic geographic
@@ -1463,6 +1462,24 @@ inferred from reading the reader code:
   monitoring long benchmarking runs -- kept here rather than fixed
   immediately only because it surfaced while scoping other work, not
   because it's expected to be difficult.
+
+- **Carry reference-panel uncertainty in the parental allele
+  frequencies into hybrid index and genomic clines.** HyCline -- like
+  gghybrid and bgchm as run here -- uses each panel's frequency estimate as
+  if exact. The tool comparison (`benchmarking/HyCline_Tool_Comparison.pdf`,
+  BACKEND_PHASE3.md section 9.6) measured the cost when the panels are
+  samples of the parental populations, as in real data: 6-14% of neutral
+  loci flagged as cline outliers with 20 + 20 reference individuals and
+  13-35% with 5 + 5, against 0-6% with exact frequencies, and hybrid-index
+  interval coverage of 0.82 with 5 + 5. A full implementation was built
+  and benchmarked, then reverted (BACKEND_PHASE3.md section 9.7): it
+  brought false positives back to <= 5% at 20 + 20 and 5 + 5 and coverage
+  to 0.95, and ranked loci as well or better at matched false-positive
+  rates, but ran 2-3x slower, lost power when panel frequencies are near
+  exact, and left the hierarchical model over-conservative and poorly
+  mixing on weakly differentiated loci. Section 9.7 lists what worked
+  (closed-form hybrid index, integrated likelihood, empirical-Bayes panel
+  priors) and what didn't, for picking it up again.
 
 ### Tier 2 -- real, moderate-effort improvements, mostly about scale and speed
 

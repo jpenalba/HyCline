@@ -121,16 +121,6 @@ def _check_parental_freqs(data) -> None:
         value = getattr(data, name)
         if not 0.0 <= value <= 1.0:
             raise ValueError(f"{name} must be in [0, 1], got {value}")
-    for name in ("parental_beta_pop0", "parental_beta_pop1"):
-        value = getattr(data, name)
-        if value is not None:
-            value = tuple(float(x) for x in value)
-            if len(value) != 2 or not all(np.isfinite(x) and x > 0 for x in value):
-                raise ValueError(f"{name} must be a pair of positive numbers (a, b), "
-                                 f"got {value}")
-            setattr(data, name, value)
-    if (data.parental_beta_pop0 is None) != (data.parental_beta_pop1 is None):
-        raise ValueError("parental_beta_pop0 and parental_beta_pop1 must be given together")
     if data.parental_freq_pop0 == data.parental_freq_pop1:
         raise ValueError(
             "parental_freq_pop0 and parental_freq_pop1 are equal "
@@ -165,11 +155,6 @@ class HybridIndexLocusData:
         (`hycline.models.genomic_cline.genomic_cline_allele_freq`). The
         defaults 0 and 1 treat the counted allele as fully diagnostic of
         parental population 1.
-    parental_beta_pop0, parental_beta_pop1 : optional (a, b) parameters of
-        Beta posteriors for those frequencies, from reference panels
-        (`hycline.data.filter_aims.panel_beta_posteriors`). When given, the
-        cline fits integrate over them; when None the frequencies are
-        taken as exact.
     """
 
     hybrid_index: np.ndarray
@@ -178,8 +163,6 @@ class HybridIndexLocusData:
     individual_names: list[str] | None = None
     parental_freq_pop0: float = 0.0
     parental_freq_pop1: float = 1.0
-    parental_beta_pop0: tuple | None = None
-    parental_beta_pop1: tuple | None = None
 
     def __post_init__(self):
         self.hybrid_index = np.asarray(self.hybrid_index, dtype=float)
@@ -274,8 +257,9 @@ class GenotypeLikelihoodLocusData:
         P(reads | genotype = 0, 1, 2 copies of the counted allele) for a
         diploid locus, one entry per individual.
     individual_names : optional sample labels.
-    parental_freq_pop0, parental_freq_pop1, parental_beta_pop0,
-    parental_beta_pop1 : as in `HybridIndexLocusData`.
+    parental_freq_pop0, parental_freq_pop1 : the counted allele's
+        frequency in parental populations 0 and 1 (see
+        `HybridIndexLocusData`).
     """
 
     hybrid_index: np.ndarray
@@ -285,8 +269,6 @@ class GenotypeLikelihoodLocusData:
     individual_names: list[str] | None = None
     parental_freq_pop0: float = 0.0
     parental_freq_pop1: float = 1.0
-    parental_beta_pop0: tuple | None = None
-    parental_beta_pop1: tuple | None = None
 
     def __post_init__(self):
         self.hybrid_index = np.asarray(self.hybrid_index, dtype=float)

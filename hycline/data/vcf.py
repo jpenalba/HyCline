@@ -365,10 +365,8 @@ def write_genomic_hard_count_csv(vcf_data: VCFData, metadata_df, sample_col: str
     `parental_freqs`, if given, is a pair of (n_loci,) arrays: each
     locus's ALT-allele frequency in parental populations 0 and 1, written
     as constant '{locus}.p0'/'{locus}.p1' columns; loci where either is NaN
-    are left out. Four further arrays, if given, are the (a, b) parameters
-    of those frequencies' Beta posteriors (a0, b0, a1, b1), written as
-    '{locus}.p0_a'/'.p0_b'/'.p1_a'/'.p1_b'. `exclude_samples` names
-    individuals to leave out (e.g. the parental reference individuals)."""
+    are left out. `exclude_samples` names individuals to leave out (e.g.
+    the parental reference individuals)."""
     common_samples, vcf_idx, meta, n_dropped = _join_metadata(
         vcf_data, metadata_df, sample_col, [hybrid_index_col])
     common_samples, vcf_idx, meta = _drop_samples(common_samples, vcf_idx, meta,
@@ -392,10 +390,6 @@ def write_genomic_hard_count_csv(vcf_data: VCFData, metadata_df, sample_col: str
         if parental_freqs is not None:
             new_columns[f"{locus}.p0"] = np.full(len(common_samples), parental_freqs[0][j])
             new_columns[f"{locus}.p1"] = np.full(len(common_samples), parental_freqs[1][j])
-            if len(parental_freqs) == 6:  # Beta(a, b) posteriors of p0 and p1
-                for k, suffix in enumerate((".p0_a", ".p0_b", ".p1_a", ".p1_b")):
-                    new_columns[f"{locus}{suffix}"] = np.full(len(common_samples),
-                                                              parental_freqs[2 + k][j])
         n_written += 1
 
     out = pd.concat([pd.DataFrame(base), pd.DataFrame(new_columns)], axis=1)

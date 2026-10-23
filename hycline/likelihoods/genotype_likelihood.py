@@ -93,15 +93,3 @@ def negative_log_likelihood_genomic(param_vec: np.ndarray,
     if params.v <= 0:
         return np.inf
     return -log_likelihood_genomic(data, params)
-
-
-def log_likelihood_genomic_at(data: GenotypeLikelihoodLocusData, params: GenomicClineParams,
-                              p0, p1) -> np.ndarray:
-    """`log_likelihood_genomic` with the parental frequencies p0/p1 given
-    explicitly, as scalars or as equal-shaped arrays of candidate values
-    (for fits that average over uncertain parental frequencies); returns
-    one total per candidate pair."""
-    p0, p1 = np.asarray(p0, dtype=float)[..., None], np.asarray(p1, dtype=float)[..., None]
-    p = genomic_cline_allele_freq(data.hybrid_index, params, p0, p1)
-    return _marginal_log_likelihood(data.log_gl0, data.log_gl1, data.log_gl2, p).sum(axis=-1)
-

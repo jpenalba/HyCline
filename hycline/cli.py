@@ -2440,7 +2440,7 @@ def _fit_genomic_hard_count(args, out_dir, prefix) -> int:
         elapsed = time.time() - t0
         print(f"  Done in {elapsed:.1f}s. {fit.summary()}")
 
-        p0, p1 = fit.parental_freqs
+        p0, p1 = data.parental_freq_pop0, data.parental_freq_pop1
         curve_rows.extend(_genomic_curve_rows(locus_name, fit.params, p0, p1, h_smooth))
 
         row = {
@@ -2448,7 +2448,6 @@ def _fit_genomic_hard_count(args, out_dir, prefix) -> int:
             "log_likelihood": fit.log_likelihood, "aicc": fit.aicc,
             "u": fit.params.u, "v": fit.params.v,
             "parental_freq_pop0": p0, "parental_freq_pop1": p1,
-            "parental_freqs_estimated": fit.parental_freqs_estimated,
         }
         if fit.std_errors is not None:
             for i, name in enumerate(["u", "v"]):
@@ -2619,17 +2618,6 @@ def cmd_fit_hierarchical_genomic(args) -> int:
     return _fit_hierarchical_genomic_hard_count(args, out_dir, prefix)
 
 
-def _hierarchical_panel_betas(all_data, locus_names):
-    """Per-locus Beta posteriors (a, b) arrays of the parental frequencies for
-    the hierarchical genomic fits, or (None, None) unless every locus has
-    them (the parental frequencies are then fixed at the input values)."""
-    b0 = [all_data[name].parental_beta_pop0 for name in locus_names]
-    b1 = [all_data[name].parental_beta_pop1 for name in locus_names]
-    if any(x is None for x in b0 + b1):
-        return None, None
-    return tuple(np.array(x) for x in zip(*b0)), tuple(np.array(x) for x in zip(*b1))
-
-
 def _fit_hierarchical_genomic_hard_count(args, out_dir, prefix) -> int:
     from hycline.inference.mcmc_genomic_hierarchical import fit_hierarchical_genomic_batch
     from hycline.diagnostics.convergence import check
@@ -2659,11 +2647,9 @@ def _fit_hierarchical_genomic_hard_count(args, out_dir, prefix) -> int:
     t0 = time.time()
     p0 = np.array([all_data[name].parental_freq_pop0 for name in locus_names])
     p1 = np.array([all_data[name].parental_freq_pop1 for name in locus_names])
-    beta0, beta1 = _hierarchical_panel_betas(all_data, locus_names)
     result = fit_hierarchical_genomic_batch(
         hybrid_index, n_alleles, n_focal, locus_names=locus_names,
         parental_freq_pop0=p0, parental_freq_pop1=p1,
-        parental_beta_pop0=beta0, parental_beta_pop1=beta1,
         mu_u_scale=args.mu_u_scale, sigma_u_scale=args.sigma_u_scale,
         mu_log_v_loc=args.mu_log_v_loc, mu_log_v_scale=args.mu_log_v_scale,
         sigma_log_v_scale=args.sigma_log_v_scale,
@@ -2687,9 +2673,6 @@ def _fit_hierarchical_genomic_hard_count(args, out_dir, prefix) -> int:
     locus_df = result.locus_summary()
     locus_df["parental_freq_pop0"] = p0
     locus_df["parental_freq_pop1"] = p1
-    if beta0 is not None:
-        # The curves use the posterior-mean parental frequencies.
-        p0, p1 = locus_df["p0_mean"].to_numpy(), locus_df["p1_mean"].to_numpy()
     locus_df.to_csv(out_dir / f"{prefix}_hierarchical_locus_summary.csv", index=False)
 
     (out_dir / f"{prefix}_hierarchical_summary.txt").write_text(
@@ -2856,11 +2839,9 @@ def _fit_hierarchical_genomic_gl(args, out_dir, prefix) -> int:
     t0 = time.time()
     p0 = np.array([all_data[name].parental_freq_pop0 for name in locus_names])
     p1 = np.array([all_data[name].parental_freq_pop1 for name in locus_names])
-    beta0, beta1 = _hierarchical_panel_betas(all_data, locus_names)
     result = fit_hierarchical_genomic_batch_gl(
         hybrid_index, log_gl0, log_gl1, log_gl2, locus_names=locus_names,
         parental_freq_pop0=p0, parental_freq_pop1=p1,
-        parental_beta_pop0=beta0, parental_beta_pop1=beta1,
         mu_u_scale=args.mu_u_scale, sigma_u_scale=args.sigma_u_scale,
         mu_log_v_loc=args.mu_log_v_loc, mu_log_v_scale=args.mu_log_v_scale,
         sigma_log_v_scale=args.sigma_log_v_scale,
@@ -2881,9 +2862,6 @@ def _fit_hierarchical_genomic_gl(args, out_dir, prefix) -> int:
     locus_df = result.locus_summary()
     locus_df["parental_freq_pop0"] = p0
     locus_df["parental_freq_pop1"] = p1
-    if beta0 is not None:
-        # The curves use the posterior-mean parental frequencies.
-        p0, p1 = locus_df["p0_mean"].to_numpy(), locus_df["p1_mean"].to_numpy()
     locus_df.to_csv(out_dir / f"{prefix}_hierarchical_locus_summary.csv", index=False)
 
     (out_dir / f"{prefix}_hierarchical_summary.txt").write_text(
@@ -3019,7 +2997,7 @@ def _fit_genomic_gl(args, out_dir, prefix) -> int:
         elapsed = time.time() - t0
         print(f"  Done in {elapsed:.1f}s. {fit.summary()}")
 
-        p0, p1 = fit.parental_freqs
+        p0, p1 = data.parental_freq_pop0, data.parental_freq_pop1
         curve_rows.extend(_genomic_curve_rows(locus_name, fit.params, p0, p1, h_smooth))
 
         row = {
@@ -3027,7 +3005,6 @@ def _fit_genomic_gl(args, out_dir, prefix) -> int:
             "log_likelihood": fit.log_likelihood, "aicc": fit.aicc,
             "u": fit.params.u, "v": fit.params.v,
             "parental_freq_pop0": p0, "parental_freq_pop1": p1,
-            "parental_freqs_estimated": fit.parental_freqs_estimated,
         }
         if fit.std_errors is not None:
             for i, name in enumerate(["u", "v"]):
@@ -3125,18 +3102,12 @@ def cmd_estimate_hybrid_index(args) -> int:
         from hycline.data.filter_aims import nanmean_quiet
         freq_pop1 = nanmean_quiet(genotypes[pop1_mask], axis=0) / 2
         freq_pop2 = nanmean_quiet(genotypes[pop2_mask], axis=0) / 2
-        n_pop1 = 2.0 * np.isfinite(genotypes[pop1_mask]).sum(axis=0)
-        n_pop2 = 2.0 * np.isfinite(genotypes[pop2_mask]).sum(axis=0)
     else:
         # Pooled maximum-likelihood frequencies from the reference
-        # individuals' genotype likelihoods, as filter-aims uses, and the
-        # effective number of allele copies behind each.
-        from hycline.data.filter_aims import em_allele_freq, panel_allele_copies
-        inc1, inc2 = ~missing & pop1_mask[None, :], ~missing & pop2_mask[None, :]
-        freq_pop1 = em_allele_freq(data.gl0, data.gl1, data.gl2, inc1)
-        freq_pop2 = em_allele_freq(data.gl0, data.gl1, data.gl2, inc2)
-        n_pop1 = panel_allele_copies(data.gl0, data.gl1, data.gl2, inc1)
-        n_pop2 = panel_allele_copies(data.gl0, data.gl1, data.gl2, inc2)
+        # individuals' genotype likelihoods, as filter-aims uses.
+        from hycline.data.filter_aims import em_allele_freq
+        freq_pop1 = em_allele_freq(data.gl0, data.gl1, data.gl2, ~missing & pop1_mask[None, :])
+        freq_pop2 = em_allele_freq(data.gl0, data.gl1, data.gl2, ~missing & pop2_mask[None, :])
 
     if fmt == "vcf":
         # Hard calls as one-hot likelihoods; NaN (./.) is left out.
@@ -3146,12 +3117,7 @@ def cmd_estimate_hybrid_index(args) -> int:
         gl = [g.T for g in (data.gl0, data.gl1, data.gl2)]
         include = ~missing.T
     try:
-        # The reference panels' sampling error in the parental frequencies
-        # is averaged over, so the intervals account for it.
-        from hycline.data.filter_aims import panel_beta_posteriors
-        ml = estimate_hybrid_index_ml(*gl, freq_pop1, freq_pop2, include=include,
-                                      parental_beta_pop0=panel_beta_posteriors(freq_pop1, n_pop1),
-                                      parental_beta_pop1=panel_beta_posteriors(freq_pop2, n_pop2))
+        ml = estimate_hybrid_index_ml(*gl, freq_pop1, freq_pop2, include=include)
     except ValueError as e:
         print(f"\nERROR: {e}\n", file=sys.stderr)
         return 2
@@ -3362,27 +3328,15 @@ def _genomic_parental_freqs(args, fmt, data, metadata_df):
     print(f"  Parental frequencies from {pop1_mask.sum()} '{args.pop1_label}' "
           f"(hybrid index 0) and {pop2_mask.sum()} '{args.pop2_label}' (hybrid index 1) "
           f"reference individuals.")
-    # Each panel's frequency, and its Beta posterior from the (effective)
-    # number of allele copies behind it: the cline fits average over the
-    # frequencies' sampling error rather than taking them as exact.
     if fmt == "vcf":
         from hycline.data.filter_aims import nanmean_quiet
         p0 = nanmean_quiet(data.dosage[:, pop1_mask], axis=1) / 2
         p1 = nanmean_quiet(data.dosage[:, pop2_mask], axis=1) / 2
-        n0 = 2.0 * np.isfinite(data.dosage[:, pop1_mask]).sum(axis=1)
-        n1 = 2.0 * np.isfinite(data.dosage[:, pop2_mask]).sum(axis=1)
     else:
-        from hycline.data.filter_aims import (beagle_missing_mask, em_allele_freq,
-                                              panel_allele_copies)
+        from hycline.data.filter_aims import beagle_missing_mask, em_allele_freq
         called = ~beagle_missing_mask(data.gl0, data.gl1, data.gl2)
-        inc0, inc1 = called & pop1_mask[None, :], called & pop2_mask[None, :]
-        p0 = em_allele_freq(data.gl0, data.gl1, data.gl2, inc0)
-        p1 = em_allele_freq(data.gl0, data.gl1, data.gl2, inc1)
-        n0 = panel_allele_copies(data.gl0, data.gl1, data.gl2, inc0)
-        n1 = panel_allele_copies(data.gl0, data.gl1, data.gl2, inc1)
-    from hycline.data.filter_aims import panel_beta_posteriors
-    a0, b0 = panel_beta_posteriors(p0, n0)
-    a1, b1 = panel_beta_posteriors(p1, n1)
+        p0 = em_allele_freq(data.gl0, data.gl1, data.gl2, called & pop1_mask[None, :])
+        p1 = em_allele_freq(data.gl0, data.gl1, data.gl2, called & pop2_mask[None, :])
     refs = [] if args.include_parentals else [
         s for s, r in zip(data.sample_names, pop1_mask | pop2_mask) if r]
 
@@ -3394,7 +3348,7 @@ def _genomic_parental_freqs(args, fmt, data, metadata_df):
         print(f"  Leaving out {int(unknown.sum())} locus(-i) with unknown and "
               f"{int(equal.sum())} with equal parental frequencies.")
     p0 = np.where(equal, np.nan, p0)
-    return (p0, p1, *(np.round(x, 4) for x in (a0, b0, a1, b1))), refs, None
+    return (p0, p1), refs, None
 
 
 def cmd_generate_genomic_input(args) -> int:

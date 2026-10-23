@@ -197,11 +197,6 @@ def fit_mle_genomic_gl(data: GenotypeLikelihoodLocusData,
     """
     x0 = _initial_guess_genomic(data).as_array()
     bounds = [(-15.0, 15.0), (1e-3, 20.0)]
-    if data.parental_beta_pop0 is not None:
-        from hycline.inference.mle_genomic import fit_with_parental_panels
-        from hycline.likelihoods.genotype_likelihood import log_likelihood_genomic_at
-        return fit_with_parental_panels(data, log_likelihood_genomic_at, x0, bounds,
-                                        compute_std_errors)
 
     result = minimize(negative_log_likelihood_genomic, x0, args=(data,),
                        method="L-BFGS-B", bounds=bounds)
@@ -226,5 +221,4 @@ def fit_mle_genomic_gl(data: GenotypeLikelihoodLocusData,
     return GenomicFitResult(
         params=params, log_likelihood=ll, aicc=aicc, n_params=k, n_obs=n,
         success=bool(result.success), std_errors=std_errors, param_vec=result.x,
-        parental_freqs=(data.parental_freq_pop0, data.parental_freq_pop1),
     )

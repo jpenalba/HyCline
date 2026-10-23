@@ -778,9 +778,9 @@ The finding that matters most: with panels sampled from the parental
 populations, every tool's cline false-positive rate rises -- 6-14% of
 neutral loci flagged with 20 + 20 references, 13-35% with 5 + 5, against
 0-6% with exact panel frequencies -- and hybrid-index coverage falls with
-5 + 5 (HyCline 0.82, gghybrid 0.80, bgchm 0.90). All three tools treated
-the panel frequencies as exact; section 9.7 carries their uncertainty
-through HyCline.
+5 + 5 (HyCline 0.82, gghybrid 0.80, bgchm 0.90). All three tools treat
+the panel frequencies as exact; this is the parental-frequency
+uncertainty listed in the README backlog, investigated in 9.7.
 
 The 20%-missing design found a HyCline limitation: `fit-hierarchical-genomic`
 refused hard-count loci missing at different individuals. It now lines
@@ -796,14 +796,18 @@ agree at r = 0.989 (log v) and 0.990 (logit c), and rank-correlate with
 BGC's beta and alpha at 0.855 and -0.952 (bgchm 0.824 and -0.956,
 gghybrid 0.775 and -0.927).
 
-### 9.7 Reference-panel uncertainty in the parental frequencies
+### 9.7 Reference-panel uncertainty: investigated, not adopted
 
 The tool comparison (9.6) found every tool's cline false-positive rate
-rising when reference panels are samples of the parental populations. The
-fix carries each panel frequency's sampling error into the hybrid index
-and the clines.
+rising when reference panels are samples of the parental populations. A
+fix carrying each panel frequency's sampling error into the hybrid index
+and the clines was built, validated and benchmarked, then reverted on the
+user's decision (end of this section). HyCline still takes panel
+frequencies as exact. This records what was learned, so the work can be
+picked up again; the implementation is commit 57ecea9 on branch
+`claude/loving-brown-lkhyol`, reverted by the commit after it.
 
-**What was built.** `generate-genomic-input` writes, per locus, the Beta
+**What was built.** `generate-genomic-input` wrote, per locus, the Beta
 posterior of each parental frequency: `<locus>.p0_a/.p0_b/.p1_a/.p1_b`,
 `a = p n + alpha`, `b = (1 - p) n + beta`, with n the allele copies
 behind the estimate (twice the called references for VCF; for beagle,
@@ -812,6 +816,7 @@ mean and variance of the references' genotype-likelihood posterior -- exact
 for hard calls and fixed loci). The prior Beta(alpha, beta) is fitted per
 panel across loci by beta-binomial maximum likelihood
 (`filter_aims.panel_beta_posteriors`; Jeffreys below 10 usable loci).
+Each piece below is reusable as is:
 
 - `estimate_hybrid_index_ml(parental_beta_pop0/1=...)`: genotype
   probabilities are quadratic in the allele frequency, so averaging over
@@ -825,7 +830,7 @@ panel across loci by beta-binomial maximum likelihood
   nodes per frequency, re-centred on p0/p1's posterior until its moments
   settle). k = 2; p0/p1 reported as posterior means with posterior SDs.
 - `fit-hierarchical-genomic`: p0/p1 latent per locus with the Betas as
-  priors; `locus_summary` adds `p0_mean/p0_sd/p1_mean/p1_sd`.
+  priors; `locus_summary` added `p0_mean/p0_sd/p1_mean/p1_sd`.
 
 **Wrong turns, in order.**
 
@@ -907,7 +912,41 @@ data set rose about 2-3x. Hierarchical convergence on the
 weak-differentiation design fell short of the R-hat < 1.01 rule (1.015-
 1.08) and on two exact 5 + 5 seeds (1.010, 1.016).
 
-Regression test: `test_cli_genomic_pipeline_carries_reference_panel_uncertainty`
-(the archived `small_panels/genotypes_s1` data: centre false positives
-33% -> 1%, hybrid-index coverage 0.82 -> 0.95, and the old behaviour kept
-visible by dropping the Beta columns).
+The power drop is mostly calibration, not lost information. With each
+method's cutoff set so that exactly 5% of neutral loci are flagged
+(cutoffs chosen using the truth, so only a comparison of how well the
+methods rank loci), power for v / centre was:
+
+| | before | after |
+|---|---|---|
+| 20 + 20, MLE | 0.58 / 0.87 | 0.72 / 0.87 |
+| 20 + 20, hierarchical | 0.70 / 0.97 | 0.60 / 0.97 |
+| 5 + 5, MLE | 0.42 / 0.43 | 0.57 / 0.50 |
+| 5 + 5, hierarchical | 0.47 / 0.63 | 0.43 / 0.70 |
+
+(3 seeds per design: differences under ~0.08 are noise.) The old
+method's higher nominal power came largely from too-liberal intervals.
+
+**Decision: reverted.** Weighed against the 2-3x run time, the
+hierarchical model's over-conservatism (0-3% false positives against 5%
+nominal) and convergence trouble, and the losses whenever panel
+frequencies are close to exact, the user chose to keep frequencies exact.
+Things to know if this comes up again:
+
+- The excess false positives are not a small-panel problem only: with
+  20 + 20 sampled references they were 2.5x nominal for every tool.
+  Larger panels shrink it; a "use larger panels" warning alone does not
+  remove it.
+- Integrate the parental frequencies out; never maximize over them.
+- Fit the frequency prior across loci (empirical Bayes); a fixed
+  Jeffreys prior biases hybrid indices on near-fixed markers.
+- Quadrature over p0/p1 must be adaptive, and scipy's Gauss-Jacobi rule
+  needs a + b <= ~1000 and node Betas with a, b >= 1/2.
+- Benchmark with `--hybrid-freqs population`: the simulator's default
+  (hybrids from the panels' own frequencies) makes the panel estimates
+  exact and hides both the problem and the benefit of any fix.
+- The hierarchical model is the open problem: as v -> 0 with uncertain
+  p0/p1, u is unidentified, and neither latent nor marginalized p0/p1
+  sampled well on weakly differentiated loci. A reparameterization
+  around the flat-cline limit, or the fix applied to `fit-genomic` and
+  `estimate-hybrid-index` only, are the obvious next steps.
