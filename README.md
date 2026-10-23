@@ -1479,7 +1479,11 @@ inferred from reading the reader code:
   exact, and left the hierarchical model over-conservative and poorly
   mixing on weakly differentiated loci. Section 9.7 lists what worked
   (closed-form hybrid index, integrated likelihood, empirical-Bayes panel
-  priors) and what didn't, for picking it up again.
+  priors) and what didn't, for picking it up again. How the hybrid index
+  depends on panel size without that correction is measured in
+  BACKEND_PHASE3.md section 9.8 (coverage 0.95 needs about 40 references
+  per population for moderately differentiated AIMs, 10 for near-fixed
+  ones).
 
 ### Tier 2 -- real, moderate-effort improvements, mostly about scale and speed
 

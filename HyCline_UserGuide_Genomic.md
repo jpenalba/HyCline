@@ -312,6 +312,39 @@ above:
 The interval width is the practical guide: if it's wide for most
 individuals, loosen the filter to bring in more loci.
 
+### How large the reference panels should be
+
+The parental frequencies are estimated from the reference individuals
+and then treated as exact, so a small panel's sampling error passes
+straight into every hybrid index: estimates are pulled toward 0.5 and
+the 95% intervals, which don't include that error, become too narrow.
+How much depends on how differentiated the loci are. Simulated hybrid
+zones with panels and hybrids sampled from the parental populations
+(100 hybrids, 2000 SNPs of which 30% AIMs, 5% missing, 5 replicates;
+AIMs chosen by `filter-aims --allele-freq-diff 0.5` on the same panels;
+true genotypes):
+
+| References per population | Near-fixed AIMs: error / coverage | AIMs differing by >= 0.5: error / coverage |
+|---|---|---|
+| 5 | 0.013 / 0.79 | 0.042 / 0.49 |
+| 10 | 0.010 / 0.92 | 0.025 / 0.76 |
+| 20 | 0.011 / 0.92 | 0.021 / 0.86 |
+| 40 | 0.011 / 0.93 | 0.018 / 0.91 |
+| 80 | 0.010 / 0.96 | 0.017 / 0.95 |
+| 5 and 40 | 0.011 / 0.90 | 0.037 / 0.62 |
+
+Depth-5 beagle input gave slightly lower coverage (by up to 0.035). With near-fixed
+markers, 10 references per population are enough. With moderately
+differentiated AIMs, aim for 40 or more; with 20, read the intervals as
+roughly 85% rather than 95% intervals, and with 10 or fewer, as a lower
+bound on the uncertainty. Unequal panels are limited by the smaller
+one, and bias every estimate toward the larger panel's population (by
+0.03 with 5 and 40). Choosing the AIMs on the same small panel makes this
+somewhat worse (with the simulator's true AIMs instead, coverage at 5 per
+population was 0.61 rather than 0.49), because loci that look
+differentiated in a small panel partly look that way by chance.
+`benchmarking/hybrid_index_panel_size.py` reproduces the table.
+
 ### Using one AIM set for hybrid index and another for cline fitting
 
 Hybrid index and the clines themselves don't have to use the same loci.

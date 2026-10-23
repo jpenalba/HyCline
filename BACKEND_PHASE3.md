@@ -950,3 +950,44 @@ Things to know if this comes up again:
   sampled well on weakly differentiated loci. A reparameterization
   around the flat-cline limit, or the fix applied to `fit-genomic` and
   `estimate-hybrid-index` only, are the obvious next steps.
+
+### 9.8 Hybrid index and reference-panel size
+
+`benchmarking/hybrid_index_panel_size.py` measures `estimate-hybrid-index`
+against panel size with panels and hybrids sampled from the parental
+populations (`--hybrid-freqs population`; frequencies taken as exact, as
+HyCline does). Per panel size, 5 replicates of 100 hybrids, 2000 SNPs
+(30% AIMs), 5% missing; true genotypes (VCF) and depth-5 reads (beagle);
+loci either chosen by `filter-aims --allele-freq-diff 0.5` on the same
+panels or the simulator's true AIMs. Two AIM types: the simulator's
+near-fixed ones (median parental difference 0.95) and ones differing by
+>= 0.5 (`--sim-aim-freq-diff 0.5`). Results in
+`benchmarking/hybrid_index_panel_size/{near_fixed_aims,moderate_aims}/`.
+
+Hybrids, true genotypes, filter-aims loci (error / slope of estimate on
+truth / 95% coverage):
+
+| Panel | near-fixed AIMs | AIMs >= 0.5 |
+|---|---|---|
+| 5 + 5 | 0.013 / 0.96 / 0.79 | 0.042 / 0.84 / 0.49 |
+| 10 + 10 | 0.010 / 0.98 / 0.92 | 0.025 / 0.92 / 0.76 |
+| 20 + 20 | 0.011 / 0.99 / 0.92 | 0.021 / 0.96 / 0.86 |
+| 40 + 40 | 0.011 / 1.00 / 0.93 | 0.018 / 0.98 / 0.91 |
+| 80 + 80 | 0.010 / 1.00 / 0.96 | 0.017 / 0.99 / 0.95 |
+| 5 + 40 | 0.011 / 0.98 / 0.90 | 0.037 / 0.91 / 0.62 |
+| 10 + 40 | 0.011 / 0.99 / 0.90 | 0.022 / 0.95 / 0.81 |
+
+Beagle depth 5 coverage is up to 0.035 lower. Findings:
+the interval width barely changes with panel size (it reflects only the
+hybrid's own genotypes), so the panels' sampling error shows up as
+compression toward 0.5 and lost coverage; it matters little for
+near-fixed markers (a panel of 10 suffices) and a great deal for
+moderately differentiated ones (40+ per population for ~0.9 coverage);
+unequal panels bias estimates toward the larger panel's population
+(+0.03 to +0.04 with 5 + 40); and selecting AIMs on the same panel adds
+to the loss at small sizes (true AIMs at 5 + 5: coverage 0.61 vs 0.49,
+error 0.031 vs 0.042), converging by 40 per population. Even near-fixed
+AIMs stay slightly below nominal (0.92-0.93) at 10-40 per population.
+The Genomic guide's Step 2 ("How large the reference panels should be")
+gives the table to users.
+
